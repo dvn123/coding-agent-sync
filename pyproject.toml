@@ -1,0 +1,58 @@
+[project]
+name = "coding-agents-sync"
+version = "0.1.0"
+description = "Deterministic compiler for portable coding-agent configuration"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+  "pydantic>=2.13.4",
+  "python-frontmatter>=1.1.0",
+  "PyYAML>=6.0.2",
+  "tomlkit>=0.15.0",
+  "typer>=0.27.0",
+]
+
+[dependency-groups]
+dev = [
+  "basedpyright>=1.35.0",
+  "pytest>=9.0.0",
+  "pytest-httpserver>=1.1.5",
+  "ruff>=0.14.0",
+  "types-PyYAML>=6.0.12.20250915",
+]
+
+[project.scripts]
+coding-agents-check = "coding_agents_sync.cli:check"
+coding-agents-cursor-desktop-probe = "coding_agents_sync.cursor_desktop_probe:main"
+coding-agents-sync = "coding_agents_sync.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+exclude-newer = "1 week"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coding_agents_sync"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "capability_case(id): installed coding-agent capability covered by a live test",
+  "capability_live: launches installed coding agents through isolated local services",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+include = ["src/coding_agents_sync/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.basedpyright]
+include = ["src/coding_agents_sync", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"

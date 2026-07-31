@@ -1,0 +1,3 @@
+schema: coding-agents/patch/v1
+set:
+  /fixture/claude_mcp: true

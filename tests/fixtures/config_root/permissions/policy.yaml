@@ -1,0 +1,22 @@
+schema: coding-agents/v3
+kind: permission-policy
+id: fixture-policy
+name: Fixture policy
+description: Neutral fixture permission policy.
+wrappers:
+  - env
+tools:
+  read: allow
+  edit: ask
+  write: deny
+  webfetch: allow
+  websearch: ask
+workspace:
+  allow:
+    - ~/fixture-shared
+  ask:
+    - /tmp/fixture-review
+secret_paths:
+  - "**/.env"
+secret_names:
+  - FIXTURE_TOKEN
