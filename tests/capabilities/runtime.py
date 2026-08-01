@@ -27,12 +27,12 @@ class CommandResult:
 def _terminate_group(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
-    with suppress(ProcessLookupError):
+    with suppress(PermissionError, ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(1)
     except subprocess.TimeoutExpired:
-        with suppress(ProcessLookupError):
+        with suppress(PermissionError, ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
         process.wait()
 

@@ -1,61 +1,66 @@
 from __future__ import annotations
 
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from .artifacts import CodexConfigArtifact, NativeConfigArtifact, OpenCodeConfigArtifact
 from .models import SyncContext
+from .plan import Plan, merge_plans
 from .runtime_config import (
-    GeneratedRuntimeConfig,
-    apply_native_plan,
-    prepare_native_plan,
+    NativePlan,
+    apply_native_candidates,
+    prepare_plan_native,
+    publish_native_manifest,
 )
 from .sources import load_sources
-from .translators import (
-    ClaudeTranslator,
-    CodexTranslator,
-    CursorTranslator,
-    OpenCodeTranslator,
-)
+from .targets import compile_claude, compile_codex, compile_cursor, compile_opencode
 from .writer import (
-    artifact_drift,
-    preflight_artifacts,
-    publish_manifests,
-    write_artifacts,
+    plan_drift,
+    preflight_plan,
+    publish_plan_manifests,
+    write_plan,
 )
+
+
+@dataclass(frozen=True)
+class Transaction:
+    plan: Plan
+    native_plan: NativePlan
+    drift: tuple[Path, ...]
+
+
+def reconcile(*, config_root: Path, plan: Plan) -> Transaction:
+    preflight_plan(plan)
+    native_plan = prepare_plan_native(
+        config_root=config_root,
+        native_values=plan.native_values,
+        native_patches=plan.native_patches,
+    )
+    return Transaction(plan, native_plan, (*plan_drift(plan), *native_plan.drift))
+
+
+def apply_transaction(transaction: Transaction) -> None:
+    write_plan(transaction.plan)
+    apply_native_candidates(transaction.native_plan)
+    publish_plan_manifests(transaction.plan)
+    publish_native_manifest(transaction.native_plan)
 
 
 def run_sync(*, config_root: Path, home: Path, check: bool = False) -> tuple[Path, ...]:
     ctx = SyncContext(config_root=config_root, home=home)
     sources = load_sources(ctx.config_root)
-    artifacts = [
-        *ClaudeTranslator(ctx).translate(sources),
-        *CursorTranslator(ctx).translate(sources),
-        *OpenCodeTranslator(ctx).translate(sources),
-        *CodexTranslator(ctx).translate(sources),
-    ]
-    opencode = next(
-        item for item in artifacts if isinstance(item, OpenCodeConfigArtifact)
+    plan = merge_plans(
+        compile_claude(ctx, sources),
+        compile_cursor(ctx, sources),
+        compile_opencode(ctx, sources),
+        compile_codex(ctx, sources),
     )
-    codex = next(item for item in artifacts if isinstance(item, CodexConfigArtifact))
-    native = tuple(item for item in artifacts if isinstance(item, NativeConfigArtifact))
-    portable = [
-        item
-        for item in artifacts
-        if not isinstance(
-            item,
-            (OpenCodeConfigArtifact, CodexConfigArtifact, NativeConfigArtifact),
-        )
-    ]
-    generated = GeneratedRuntimeConfig(
-        tuple(opencode.instructions), codex.skill_paths, codex.agents, native
-    )
-    native_plan = prepare_native_plan(
-        config_root=config_root, home=home, generated=generated
-    )
-    preflight_artifacts(portable)
+    for diagnostic in plan.diagnostics:
+        if diagnostic.level == "warning":
+            source = f": {diagnostic.source}" if diagnostic.source else ""
+            print(f"Warning: {diagnostic.message}{source}", file=sys.stderr)
+    transaction = reconcile(config_root=config_root, plan=plan)
     if check:
-        return (*artifact_drift(portable), *native_plan.drift)
-    write_artifacts(portable)
-    apply_native_plan(native_plan)
-    publish_manifests(portable)
+        return transaction.drift
+    apply_transaction(transaction)
     return ()

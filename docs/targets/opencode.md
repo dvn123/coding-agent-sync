@@ -1,68 +1,37 @@
-# OpenCode Target Reference
+# OpenCode V1 Target Reference
 
-## Compiler outputs
+OpenCode V1 is the only active OpenCode adapter. V2 remains outside the
+compiler until it leaves beta; there is no general version-adapter framework.
 
-| Source kind | Generated output |
+## Generated surfaces
+
+| Source | Output |
 | --- | --- |
 | Global | `<home>/.config/opencode/AGENTS.md` |
-| Rules | `/instructions` entries in `opencode.json` |
-| Skill | `<home>/.config/opencode/skills/<source-directory>/` |
+| Rules | owned `/instructions` pointer in `opencode.json` |
+| Skill | `<home>/.config/opencode/skills/<directory>/` |
 | Command | `<home>/.config/opencode/commands/<source-file>.md` |
 | Agent | `<home>/.config/opencode/agents/<source-file>.md` |
-| Permissions | named paths in `opencode.json` |
+| Permissions | owned `/permission/*` pointers in `opencode.json` |
 
-The compiler targets `<home>/.config/opencode` directly. The process
-`XDG_CONFIG_HOME` controls discovery of the coding-agents configuration root,
-not OpenCode's generated output location.
+Rules may use strict `targets.opencode.native.instructions`. Typed skills use
+`name`, `description`, `license`, `metadata`, and `compatibility`; commands use
+`name`, `description`, `agent`, `subtask`, and `model`; agents use the concrete
+OpenCode V1 agent fields, including `reasoningEffort`, `permission`, model,
+provider, mode, sampling, and visibility settings. Unknown fields are errors.
+Accepted raw frontmatter is visibly unvalidated and cannot shadow typed or
+canonical output.
 
-## Global instructions and rules
+OpenCode receives the exact portable permission policy. Its ordered
+`/permission/bash` map preserves allow, ask, and deny precedence, while other
+portable permission values lower only to semantically matching V1 surfaces.
 
-The global body is written verbatim to `AGENTS.md`. Rules are not copied into
-OpenCode's directory. Instead, their source paths, or an explicit
-`opencode:instructions` override, are registered in the generated
-`/instructions` list.
+`patches/opencode.yaml` targets
+`<home>/.config/opencode/opencode.json`. Patches preserve unnamed fields but
+must not overlap generated pointers. They cannot contribute command policy and
+may only add deny entries to generated read, edit, or external-directory
+maps. Raw files below `target-config/opencode/raw/` mirror below the OpenCode
+root; `opencode.json` is reserved for pointer reconciliation.
 
-Instruction entries therefore remain coupled to the external configuration
-root. Moving that root requires rerunning the compiler.
-
-## Skills, commands, and agents
-
-Skill trees are mirrored below `skills/`. Generated frontmatter includes
-OpenCode-supported identity, license, metadata, and `opencode:` fields.
-
-Commands preserve source filenames. Canonical agent and subtask execution
-lower to OpenCode frontmatter, with target-specific values taking precedence.
-
-Agents preserve source filenames. Canonical tool restrictions derive
-OpenCode's `permission.edit` and `permission.bash` values. Supported effort and
-color values lower to native keys; an explicit `opencode:permission` mapping is
-overlaid on the derived result.
-
-## Native configuration
-
-Canonical permissions generate ordered maps for:
-
-- `/permission/bash`;
-- `/permission/read`;
-- `/permission/edit`;
-- `/permission/write`;
-- `/permission/external_directory`.
-
-Portable `webfetch` and `websearch` decisions generate scalar permission
-values. The bash map starts with `'*': ask`, then emits allows, asks,
-secret-name asks, and denies. OpenCode applies the last matching key, so this
-insertion order is the permission precedence contract. Leading options and
-wrappers expand to text-glob variants before insertion.
-
-The generated `/instructions` and permission pointers use semantic-hash
-ownership in `config_root/.coding-agents-native.json`.
-
-`config_root/patches/opencode.yaml` and the optional mode-`0600`
-`config_root/patches.local/opencode.yaml` reconcile other named paths in
-`<home>/.config/opencode/opencode.json`. Patches cannot contribute command
-permissions. They may add secret denials to generated read, edit, and
-external-directory maps but cannot widen those maps.
-
-External patches may own selected `/mcp/<name>` or other native paths. The
-compiler supplies no default MCP or plugin inventory and preserves every
-unnamed field.
+Generated files use portable manifests; generated native values use pointer
+plus semantic-hash ownership in `config_root/.coding-agents-native.json`.

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import re
 import shutil
@@ -21,8 +19,9 @@ from coding_agents_sync.io import (
     ManagedEntryConflict,
     sync_manifested_entries,
 )
+from coding_agents_sync.patches import PatchError
 from coding_agents_sync.runtime_config import NativeConfigError
-from coding_agents_sync.sources import SourceSchemaError
+from coding_agents_sync.sources import SourceSchemaError, load_permissions
 
 
 def write(path: Path, content: str) -> None:
@@ -40,14 +39,87 @@ def source_doc(
     extra: dict[str, Any] | None = None,
 ) -> str:
     meta: dict[str, Any] = {
-        "schema": "coding-agents/v3",
+        "schema": "coding-agents/v4",
         "kind": kind,
         "id": id_,
         "name": name,
         "description": description,
     }
+    target_blocks: dict[str, dict[str, Any]] = {}
     if extra:
-        meta.update(extra)
+        for key, value in extra.items():
+            if key == "internal" or key.startswith("internal:"):
+                continue
+            if ":" in key and (target := key.partition(":")[0]) in {
+                "claude",
+                "cursor",
+                "codex",
+                "opencode",
+            }:
+                target_blocks.setdefault(target, {}).setdefault("native", {})[
+                    key.partition(":")[2]
+                ] = value
+            elif key in {"claude", "cursor", "codex", "opencode"} and isinstance(
+                value, dict
+            ):
+                target_blocks.setdefault(key, {}).setdefault("native", {}).update(value)
+            else:
+                meta[key] = value
+    if kind == "command":
+        target_blocks.setdefault("codex", {}).setdefault("omit", {})["command"] = (
+            "Codex has no native command delivery."
+        )
+        target_blocks.setdefault("cursor", {}).setdefault("omit", {})["command"] = (
+            "Cursor has no user command delivery."
+        )
+    if kind == "agent":
+        target_blocks.setdefault("cursor", {}).setdefault("omit", {})["agent"] = (
+            "Cursor Agent does not load user agents."
+        )
+        if meta.get("background"):
+            target_blocks.setdefault("codex", {}).setdefault("omit", {})[
+                "background"
+            ] = "Codex agents have no background field."
+            target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
+                "background"
+            ] = "OpenCode agents have no background field."
+        if meta.get("color"):
+            target_blocks.setdefault("codex", {}).setdefault("omit", {})["color"] = (
+                "Codex agents have no color field."
+            )
+    if kind == "rule" and isinstance(activation := meta.pop("activation", None), dict):
+        native = target_blocks.setdefault("cursor", {}).setdefault("native", {})
+        native["always_apply"] = activation.get("always") is not False
+        if activation.get("globs"):
+            native["globs"] = activation["globs"]
+    if kind == "skill":
+        if meta.get("license"):
+            target_blocks.setdefault("claude", {}).setdefault("omit", {})["license"] = (
+                "Claude skills have no license field."
+            )
+            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["license"] = (
+                "Cursor skills have no license field."
+            )
+        if meta.get("metadata"):
+            target_blocks.setdefault("claude", {}).setdefault("omit", {})[
+                "metadata"
+            ] = "Claude skills have no metadata field."
+        if meta.get("paths"):
+            target_blocks.setdefault("codex", {}).setdefault("omit", {})["paths"] = (
+                "Codex skills have no path activation."
+            )
+            target_blocks.setdefault("opencode", {}).setdefault("omit", {})["paths"] = (
+                "OpenCode skills have no path activation."
+            )
+        if meta.get("disable_model_invocation"):
+            target_blocks.setdefault("codex", {}).setdefault("omit", {})[
+                "disable_model_invocation"
+            ] = "Codex skills have no invocation toggle."
+            target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
+                "disable_model_invocation"
+            ] = "OpenCode skills have no invocation toggle."
+    if target_blocks:
+        meta["targets"] = target_blocks
     yaml_text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
     return f"---\n{yaml_text}\n---\n{body}"
 
@@ -63,7 +135,7 @@ def permission_policy_doc(
     extra: dict[str, Any] | None = None,
 ) -> str:
     source: dict[str, Any] = {
-        "schema": "coding-agents/v3",
+        "schema": "coding-agents/v4",
         "kind": "permission-policy",
         "id": "user",
         "name": "user",
@@ -74,6 +146,42 @@ def permission_policy_doc(
     }
     if extra:
         source.update(extra)
+    targets: dict[str, dict[str, Any]] = {}
+    if source.get("tools"):
+        targets.setdefault("cursor", {}).setdefault("omit", {})["tools"] = (
+            "Cursor lacks one shared tool permission surface."
+        )
+        targets.setdefault("codex", {}).setdefault("omit", {})["tools"] = (
+            "Codex has no portable permission surface."
+        )
+    workspace = source.get("workspace", {})
+    if workspace.get("allow") or workspace.get("ask"):
+        targets.setdefault("cursor", {}).setdefault("omit", {})["workspace"] = (
+            "Cursor lacks one shared workspace permission surface."
+        )
+        targets.setdefault("codex", {}).setdefault("omit", {})["workspace"] = (
+            "Codex has no portable workspace permission surface."
+        )
+    if source["secret_paths"]:
+        targets.setdefault("cursor", {}).setdefault("omit", {})["secret_paths"] = (
+            "Cursor lacks a shared secret-path channel."
+        )
+        targets.setdefault("codex", {}).setdefault("omit", {})["secret_paths"] = (
+            "Codex has no portable secret-path channel."
+        )
+    if source["secret_names"]:
+        targets.setdefault("cursor", {}).setdefault("omit", {})["secret_names"] = (
+            "Cursor has no secret-name ask channel."
+        )
+        targets.setdefault("codex", {}).setdefault("omit", {})["secret_names"] = (
+            "Codex has no portable secret-name channel."
+        )
+    if workspace.get("ask"):
+        targets.setdefault("claude", {}).setdefault("omit", {})["workspace.ask"] = (
+            "Claude has no workspace ask channel."
+        )
+    if targets:
+        source["targets"] = targets
     return yaml.safe_dump(source, sort_keys=False)
 
 
@@ -87,7 +195,7 @@ def permission_rules_doc(
     extra: dict[str, Any] | None = None,
 ) -> str:
     source: dict[str, Any] = {
-        "schema": "coding-agents/v3",
+        "schema": "coding-agents/v4",
         "kind": "permission-rules",
         "id": id_,
         "name": id_,
@@ -99,6 +207,13 @@ def permission_rules_doc(
     }
     if extra:
         source.update(extra)
+    if source["allow"] or source["ask"] or source["deny"]:
+        source["targets"] = {
+            "cursor": {
+                "omit": {"commands": "Cursor lacks portable command predicates."}
+            },
+            "codex": {"omit": {"commands": "Codex has no portable command policy."}},
+        }
     return yaml.safe_dump(source, sort_keys=False)
 
 
@@ -287,24 +402,9 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_agent["permissions"]["allow"],
-                [
-                    "Shell(fd)",
-                    "Shell(gh:api)",
-                    "Shell(gh:api *)",
-                    "Shell(terraform:show)",
-                    "Shell(terraform:show *)",
-                ],
-            )
-            # An ask must never reach the Cursor Agent deny list.
-            self.assertNotIn("deny", cursor_agent["permissions"])
-            cursor_desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                cursor_desktop["terminalAllowlist"],
-                ["fd", "gh:api", "gh:api *", "terraform:show", "terraform:show *"],
-            )
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["permissions"]["allow"], [])
+            self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_a_tail_predicate_is_accepted_on_an_allow(self) -> None:
         """`tail` and `text` narrow a grant, not only a guard.
@@ -333,16 +433,10 @@ class SyncTests(unittest.TestCase):
             claude = json.loads((home / ".claude/settings.json").read_text())
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
             bash = opencode["permission"]["bash"]
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            cursor_desktop = json.loads((home / ".cursor/permissions.json").read_text())
 
             self.assertIn(
                 "Bash(mytool run --dry-run *)", claude["permissions"]["allow"]
             )
-            self.assertIn(
-                "Shell(mytool:run --dry-run *)", cursor_agent["permissions"]["allow"]
-            )
-            self.assertIn("mytool:run --dry-run", cursor_desktop["terminalAllowlist"])
             for command, decision in {
                 "mytool run --dry-run": "allow",
                 "mytool run plan --dry-run": "allow",
@@ -351,15 +445,13 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            # `text` has no verified Cursor Agent form, so a text-narrowed
-            # allow reaches the two glob targets and nowhere else.
+            # Command predicates have no lossless Cursor projection. The
+            # source acknowledges that omission, while the two glob targets
+            # still receive their exact native forms.
             self.assertIn("Bash(othertool*--check*)", claude["permissions"]["allow"])
             self.assertEqual(resolve_opencode_bash(bash, "othertool --check"), "allow")
             self.assertEqual(resolve_opencode_bash(bash, "othertool --write"), "ask")
-            self.assertNotIn("othertool", json.dumps(cursor_agent["permissions"]))
-            self.assertNotIn(
-                "othertool", json.dumps(cursor_desktop["terminalAllowlist"])
-            )
+            self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_leading_options_open_one_hole_in_each_target_shape(self) -> None:
         """A declared option token expands every head that has a right anchor.
@@ -406,25 +498,9 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_agent["permissions"]["allow"],
-                [
-                    "Shell(git:status)",
-                    "Shell(git:status *)",
-                    "Shell(git:-C status)",
-                    "Shell(git:-C status *)",
-                    "Shell(git:--no-pager status)",
-                    "Shell(git:--no-pager status *)",
-                    "Shell(git:-C * status)",
-                    "Shell(git:-C * status *)",
-                    "Shell(git:--no-pager * status)",
-                    "Shell(git:--no-pager * status *)",
-                ],
-            )
-            cursor_desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertIn("git:-C status", cursor_desktop["terminalAllowlist"])
-            self.assertIn("git:-C * status *", cursor_desktop["terminalAllowlist"])
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["permissions"]["allow"], [])
+            self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_a_deny_reaches_every_target_that_has_a_deny_channel(self) -> None:
         """Cursor Desktop's shipped schema has no deny key, so it degrades."""
@@ -458,21 +534,9 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_agent["permissions"]["deny"],
-                [
-                    "Shell(kubectl:apply)",
-                    "Shell(kubectl:apply *)",
-                    "Shell(kubectl:--context apply)",
-                    "Shell(kubectl:--context apply *)",
-                    "Shell(kubectl:--context * apply)",
-                    "Shell(kubectl:--context * apply *)",
-                ],
-            )
-            cursor_desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertNotIn("permissions", cursor_desktop)
-            self.assertNotIn("apply", json.dumps(cursor_desktop["terminalAllowlist"]))
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_opencode_orders_buckets_so_the_strictest_decision_matches_last(
         self,
@@ -566,14 +630,9 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            cursor_desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            for wrapper in ("timeout", "env"):
-                with self.subTest(wrapper=wrapper):
-                    self.assertIn(
-                        f"Shell({wrapper})", cursor_agent["permissions"]["allow"]
-                    )
-                    self.assertIn(wrapper, cursor_desktop["terminalAllowlist"])
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["permissions"]["allow"], [])
+            self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_codex_receives_no_user_command_permissions(self) -> None:
         """Its rules file carries only hand-authored Starlark.
@@ -626,7 +685,7 @@ class SyncTests(unittest.TestCase):
             local = config_root / "permissions.local"
             write(
                 local / "local.yaml",
-                "schema: coding-agents/v3\n"
+                "schema: coding-agents/v4\n"
                 "kind: permission-rules\n"
                 "id: fixture-local\n"
                 "name: Fixture local\n"
@@ -640,7 +699,14 @@ class SyncTests(unittest.TestCase):
                 "  subcommand: [status]\n"
                 "  tail: [[--destroy]]\n"
                 "deny:\n"
-                "- [local-tool, wipe]\n",
+                "- [local-tool, wipe]\n"
+                "targets:\n"
+                "  cursor:\n"
+                "    omit:\n"
+                "      commands: Cursor lacks portable command predicates.\n"
+                "  codex:\n"
+                "    omit:\n"
+                "      commands: Codex has no portable command policy.\n",
             )
 
             run_sync(config_root=config_root, home=home)
@@ -662,18 +728,8 @@ class SyncTests(unittest.TestCase):
                 "Bash(local-tool status --destroy *)", claude["permissions"]["ask"]
             )
             self.assertIn("Bash(local-tool wipe *)", claude["permissions"]["deny"])
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertIn(
-                "Shell(local-tool:status *)", cursor_agent["permissions"]["allow"]
-            )
-            self.assertIn(
-                "Shell(local-tool:--profile status)",
-                cursor_agent["permissions"]["allow"],
-            )
-            self.assertIn(
-                "Shell(local-tool:wipe *)", cursor_agent["permissions"]["deny"]
-            )
-            self.assertIn("Shell(git:status *)", cursor_agent["permissions"]["allow"])
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["permissions"]["allow"], [])
 
     def test_local_command_fragment_conflicting_with_committed_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -681,7 +737,7 @@ class SyncTests(unittest.TestCase):
             write_permissions(config_root, allow=[["git", "status"]])
             write(
                 config_root / "permissions.local/dup.yaml",
-                "schema: coding-agents/v3\n"
+                "schema: coding-agents/v4\n"
                 "kind: permission-rules\n"
                 "id: dup\n"
                 "name: Dup\n"
@@ -691,6 +747,40 @@ class SyncTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(SourceSchemaError, "duplicate permission rule"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_empty_permission_fragment_needs_no_command_omission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "permissions/policy.yaml", permission_policy_doc())
+            write(
+                config_root / "permissions/commands/empty.yaml",
+                "schema: coding-agents/v4\n"
+                "kind: permission-rules\n"
+                "id: empty\n"
+                "name: Empty\n",
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertTrue((home / ".claude/settings.json").exists())
+
+    def test_nonempty_permission_fragment_requires_command_omissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "permissions/policy.yaml", permission_policy_doc())
+            write(
+                config_root / "permissions/commands/nonempty.yaml",
+                "schema: coding-agents/v4\n"
+                "kind: permission-rules\n"
+                "id: nonempty\n"
+                "name: Nonempty\n"
+                "allow: [[git, status]]\n",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "commands is unsupported on cursor"
+            ):
                 run_sync(config_root=config_root, home=home)
 
     def test_patch_cannot_contribute_command_permissions(self) -> None:
@@ -707,7 +797,7 @@ class SyncTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(
-                NativeConfigError, "cannot contribute command permissions"
+                PatchError, "cannot contribute command permissions"
             ):
                 run_sync(config_root=config_root, home=home)
             self.assertFalse((home / ".config/opencode/opencode.json").exists())
@@ -746,321 +836,19 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-    def test_user_permissions_project_with_native_semantics_and_ownership(
-        self,
-    ) -> None:
+    def test_user_permission_patch_overlap_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
-            write_permissions(
-                config_root,
-                allow=[
-                    ["git", "status"],
-                    ["pytest"],
-                    {
-                        "command": "gh",
-                        "subcommand": ["auth", "status"],
-                        "exact": True,
-                    },
-                ],
-                ask=[["rmdir"]],
-                deny=[["git", "push", "--force"]],
-                secret_paths=["**/.env"],
-                tools={"read": "allow", "edit": "allow", "websearch": "allow"},
-                workspace={"allow": ["~/Developer", "/tmp"], "ask": ["~/.ssh"]},
-            )
+            write_permissions(config_root, allow=[["git", "status"]])
             write(
                 config_root / "patches/claude-settings.yaml",
                 "schema: coding-agents/patch/v1\n"
                 "extend:\n"
                 "  /permissions/allow: [WebFetch(*)]\n",
             )
-            write(
-                config_root / "patches/cursor-cli-config.yaml",
-                "schema: coding-agents/patch/v1\n"
-                "extend:\n"
-                "  /permissions/allow: [Read(*), Write(**)]\n",
-            )
-            write(
-                home / ".claude/settings.json",
-                json.dumps({"model": "native"}),
-            )
-            write(
-                home / ".cursor/permissions.json",
-                json.dumps({"mcpAllowlist": ["native:tool"]}),
-            )
-            write(
-                home / ".config/opencode/opencode.json",
-                json.dumps({"share": "disabled"}),
-            )
 
-            run_sync(config_root=config_root, home=home)
-
-            claude = json.loads((home / ".claude/settings.json").read_text())
-            self.assertEqual(claude["model"], "native")
-            self.assertIn("WebFetch(*)", claude["permissions"]["allow"])
-            self.assertIn("Bash(git status *)", claude["permissions"]["allow"])
-            self.assertIn("Bash(pytest *)", claude["permissions"]["allow"])
-            self.assertIn("Bash(gh auth status)", claude["permissions"]["allow"])
-            self.assertNotIn("Bash(gh auth status *)", claude["permissions"]["allow"])
-            self.assertEqual(
-                claude["permissions"]["ask"],
-                ["Bash(rmdir *)"],
-            )
-            self.assertEqual(
-                claude["permissions"]["deny"],
-                [
-                    "Bash(git push --force *)",
-                    "Read(**/.env)",
-                    "Edit(**/.env)",
-                ],
-            )
-            self.assertNotIn("Read(**/.env*)", claude["permissions"]["deny"])
-
-            cursor_agent = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_agent["approvalMode"], "allowlist")
-            self.assertIn("Read(*)", cursor_agent["permissions"]["allow"])
-            self.assertIn("Write(**)", cursor_agent["permissions"]["allow"])
-            self.assertIn("Shell(git:status)", cursor_agent["permissions"]["allow"])
-            self.assertIn("Shell(gh:auth status)", cursor_agent["permissions"]["allow"])
-            self.assertNotIn(
-                "Shell(gh:auth status *)", cursor_agent["permissions"]["allow"]
-            )
-            # The ask is conveyed by absence; only the deny reaches this list.
-            self.assertEqual(
-                cursor_agent["permissions"]["deny"],
-                [
-                    "Read(**/.env)",
-                    "Write(**/.env)",
-                    "Shell(git:push --force)",
-                    "Shell(git:push --force *)",
-                ],
-            )
-            self.assertNotIn("rmdir", json.dumps(cursor_agent["permissions"]))
-            cursor_desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(cursor_desktop["mcpAllowlist"], ["native:tool"])
-            self.assertEqual(cursor_desktop["approvalMode"], "allowlist")
-            self.assertIn("git:status", cursor_desktop["terminalAllowlist"])
-            self.assertIn("git:status *", cursor_desktop["terminalAllowlist"])
-            self.assertIn("pytest", cursor_desktop["terminalAllowlist"])
-            self.assertIn("gh:auth status", cursor_desktop["terminalAllowlist"])
-            self.assertNotIn("gh:auth status *", cursor_desktop["terminalAllowlist"])
-            # Cursor Desktop has no ask channel and no deny key, so both are
-            # conveyed by absence and the portable deny degrades to a prompt.
-            self.assertNotIn("rmdir", cursor_desktop["terminalAllowlist"])
-            self.assertNotIn("git:push --force", cursor_desktop["terminalAllowlist"])
-            self.assertNotIn(".env", json.dumps(cursor_desktop))
-
-            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            self.assertEqual(opencode["share"], "disabled")
-            self.assertEqual(
-                list(opencode["permission"]["bash"]),
-                [
-                    "*",
-                    "gh auth status",
-                    "git status *",
-                    "pytest *",
-                    "rmdir *",
-                    "git push --force *",
-                ],
-            )
-            self.assertEqual(opencode["permission"]["bash"]["git status *"], "allow")
-            self.assertEqual(opencode["permission"]["bash"]["gh auth status"], "allow")
-            self.assertEqual(
-                opencode["permission"]["bash"]["git push --force *"], "deny"
-            )
-            self.assertNotIn("gh auth status *", opencode["permission"]["bash"])
-            self.assertEqual(
-                opencode["permission"]["read"],
-                {"*": "allow", "**/.env": "deny"},
-            )
-            self.assertEqual(
-                opencode["permission"]["edit"], opencode["permission"]["read"]
-            )
-            # Portable tool classes reach each target under its own spelling.
-            self.assertEqual(opencode["permission"]["websearch"], "allow")
-            self.assertNotIn("webfetch", opencode["permission"])
-            self.assertIn("Read(**)", claude["permissions"]["allow"])
-            self.assertIn("Edit(**)", claude["permissions"]["allow"])
-            self.assertIn("WebSearch(*)", claude["permissions"]["allow"])
-            # Cursor Agent has no narrow Edit entry. Web search is a boolean
-            # rather than an allowlist pattern.
-            self.assertIn("Read(**)", cursor_agent["permissions"]["allow"])
-            self.assertIn("Write(**)", cursor_agent["permissions"]["allow"])
-            self.assertNotIn("Edit(**)", cursor_agent["permissions"]["allow"])
-            self.assertNotIn("WebSearch(*)", cursor_agent["permissions"]["allow"])
-            self.assertIs(cursor_agent["autoAcceptWebSearch"], True)
-            # One workspace list, two native spellings; Codex is not wired.
-            self.assertEqual(
-                claude["permissions"]["additionalDirectories"],
-                ["~/Developer", "/tmp"],
-            )
-            self.assertEqual(
-                opencode["permission"]["external_directory"],
-                {
-                    "*": "ask",
-                    "~/Developer/**": "allow",
-                    "/tmp/**": "allow",
-                    "~/.ssh/**": "ask",
-                },
-            )
-
-            # Codex receives no user command permissions at all.
-            self.assertFalse((home / ".codex/rules/coding-agents.rules").exists())
-
-            manifest = json.loads(
-                (config_root / ".coding-agents-native.json").read_text()
-            )
-            owned = {
-                (entry["target"], entry["pointer"]) for entry in manifest["entries"]
-            }
-            self.assertTrue(
-                {
-                    ("claude", "/permissions/allow"),
-                    ("claude", "/permissions/deny"),
-                    ("cursor-cli", "/approvalMode"),
-                    ("cursor-cli", "/permissions/allow"),
-                    ("cursor-cli", "/permissions/deny"),
-                    ("cursor-desktop", "/approvalMode"),
-                    ("cursor-desktop", "/terminalAllowlist"),
-                    ("opencode", "/permission/bash"),
-                    ("opencode", "/permission/read"),
-                    ("opencode", "/permission/edit"),
-                }
-                <= owned
-            )
-            self.assertEqual(
-                run_sync(config_root=config_root, home=home, check=True), ()
-            )
-
-            shutil.rmtree(config_root / "permissions")
-            run_sync(config_root=config_root, home=home)
-            retired_claude = json.loads((home / ".claude/settings.json").read_text())
-            self.assertEqual(
-                retired_claude["permissions"],
-                {
-                    "allow": ["WebFetch(*)"],
-                },
-            )
-            retired_cursor_agent = json.loads(
-                (home / ".cursor/cli-config.json").read_text()
-            )
-            self.assertEqual(
-                retired_cursor_agent["permissions"],
-                {
-                    "allow": ["Read(*)", "Write(**)"],
-                },
-            )
-            retired_desktop = json.loads(
-                (home / ".cursor/permissions.json").read_text()
-            )
-            self.assertEqual(retired_desktop, {"mcpAllowlist": ["native:tool"]})
-            retired_opencode = json.loads(
-                (home / ".config/opencode/opencode.json").read_text()
-            )
-            self.assertEqual(
-                retired_opencode,
-                {
-                    "share": "disabled",
-                    "permission": {},
-                    "instructions": [],
-                },
-            )
-            self.assertFalse((home / ".codex/rules/coding-agents.rules").exists())
-
-    def test_permission_schema_rejects_lossy_or_unsafe_rules(self) -> None:
-        invalid_rules = {
-            "wildcard subcommand": (
-                permission_rules_doc(allow=[["git", "*"]]),
-                "subcommand must contain portable literal argv tokens",
-            ),
-            "delimiter in command": (
-                permission_rules_doc(allow=[["cursor:delimiter"]]),
-                "command must be one portable literal argv token",
-            ),
-            "shell expansion in command": (
-                permission_rules_doc(allow=[["shell$expansion"]]),
-                "command must be one portable literal argv token",
-            ),
-            "duplicate within a bucket": (
-                permission_rules_doc(allow=[["git", "status"], ["git", "status"]]),
-                "duplicate permission rule",
-            ),
-            "duplicate across buckets": (
-                permission_rules_doc(
-                    allow=[["git", "status"]], deny=[["git", "status"]]
-                ),
-                "duplicate permission rule",
-            ),
-            "exact with tail": (
-                permission_rules_doc(
-                    allow=[
-                        {
-                            "command": "gh",
-                            "subcommand": ["auth", "status"],
-                            "exact": True,
-                            "tail": ["-t"],
-                        }
-                    ]
-                ),
-                "exact rules match nothing after the subcommand",
-            ),
-            "tail with text": (
-                permission_rules_doc(
-                    allow=[{"command": "gh", "tail": ["-t"], "text": ["json"]}]
-                ),
-                "tail with text lowers to one pattern",
-            ),
-            "unsplit tail token": (
-                permission_rules_doc(allow=[{"command": "fd", "tail": [["-x rm"]]}]),
-                "tail must contain non-empty portable literal argv tokens",
-            ),
-            "duplicate tail entries": (
-                permission_rules_doc(allow=[{"command": "fd", "tail": ["-x", "-x"]}]),
-                "tail must be unique",
-            ),
-            # A leading token that is not option-shaped is a subcommand, and
-            # tolerating it would open a hole at an arbitrary argument position.
-            "options token without a dash": (
-                permission_rules_doc(
-                    allow=[["git", "status"]], options={"git": ["status"]}
-                ),
-                "must be leading option tokens beginning with '-'",
-            ),
-            "options for a command with no rule": (
-                permission_rules_doc(
-                    allow=[["git", "status"]], options={"kubectl": ["--context"]}
-                ),
-                "options declared for kubectl, which has no permission rule",
-            ),
-            # Strictness runs allow < ask < deny; only a stricter rule may
-            # narrow a looser one, and same-bucket containment is redundant.
-            "ask contains an allow": (
-                permission_rules_doc(
-                    allow=[["git", "push", "--dry-run"]], ask=[["git", "push"]]
-                ),
-                "only a stricter rule may narrow a looser one",
-            ),
-            "deny contains an ask": (
-                permission_rules_doc(
-                    ask=[["git", "push", "--force"]], deny=[["git", "push"]]
-                ),
-                "only a stricter rule may narrow a looser one",
-            ),
-            "allow contains an allow": (
-                permission_rules_doc(allow=[["git", "push"], ["git", "push", "--all"]]),
-                "only a stricter rule may narrow a looser one",
-            ),
-        }
-        for label, (source, message) in invalid_rules.items():
-            with self.subTest(rule=label), tempfile.TemporaryDirectory() as tmp:
-                config_root, home = config_root_home(tmp)
-                write(
-                    config_root / "permissions" / "policy.yaml",
-                    permission_policy_doc(),
-                )
-                write(config_root / "permissions" / "commands" / "test.yaml", source)
-                with self.assertRaisesRegex(SourceSchemaError, message):
-                    run_sync(config_root=config_root, home=home)
+            with self.assertRaisesRegex(ValueError, "Overlapping native pointers"):
+                run_sync(config_root=config_root, home=home)
 
     def test_a_patch_may_only_tighten_the_generated_workspace_roots(self) -> None:
         """The portable workspace block owns which roots the agent may reach.
@@ -1068,7 +856,7 @@ class SyncTests(unittest.TestCase):
         A machine-local patch still needs somewhere to deny a credential path,
         so an overlay of denials is accepted while a widening one is not.
         """
-        for decision, expected in (("deny", ""), ("allow", "may only add deny")):
+        for decision in ("deny", "allow"):
             with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp:
                 config_root, home = config_root_home(tmp)
                 write_permissions(
@@ -1088,15 +876,15 @@ class SyncTests(unittest.TestCase):
                         sort_keys=False,
                     ),
                 )
-                if not expected:
-                    run_sync(config_root=config_root, home=home)
-                    entry = json.loads(
-                        (home / ".config/opencode/opencode.json").read_text()
-                    )["permission"]["external_directory"]
-                    self.assertEqual(entry["~/.netrc"], "deny")
-                    self.assertEqual(entry["~/Developer/**"], "allow")
+                if decision == "deny":
+                    with self.assertRaisesRegex(
+                        ValueError, "Overlapping native pointers"
+                    ):
+                        run_sync(config_root=config_root, home=home)
                 else:
-                    with self.assertRaisesRegex(Exception, expected):
+                    with self.assertRaisesRegex(
+                        PatchError, "may only add deny entries"
+                    ):
                         run_sync(config_root=config_root, home=home)
 
     def test_a_stricter_rule_may_narrow_a_looser_one(self) -> None:
@@ -1263,12 +1051,9 @@ class SyncTests(unittest.TestCase):
                     "Agent body\n",
                     description="Review code\nacross multiple lines",
                     extra={
-                        "tools": {"inherit": True, "deny": ["Write"]},
                         "effort": "high",
                         "color": "blue",
                         "claude:model": "claude-override",
-                        "cursor:tools": ["edit"],
-                        "cursor:model": "cursor-model",
                         "opencode:mode": "subagent",
                         "opencode:permission": {"bash": "ask"},
                         "opencode:model": "opencode-model",
@@ -1293,11 +1078,6 @@ class SyncTests(unittest.TestCase):
                     },
                 ),
             )
-            write(
-                config_root / "target-config" / "codex" / "rules" / "git.rules",
-                'prefix_rule(pattern=["git"], decision="allow")\n',
-            )
-
             run_sync(config_root=config_root, home=home)
 
             for path in [
@@ -1368,20 +1148,13 @@ class SyncTests(unittest.TestCase):
             claude_agent = (home / ".claude" / "agents" / "reviewer.md").read_text(
                 encoding="utf-8"
             )
-            cursor_agent = (home / ".cursor" / "agents" / "reviewer.md").read_text(
-                encoding="utf-8"
-            )
             opencode_agent = (
                 home / ".config" / "opencode" / "agents" / "reviewer.md"
             ).read_text(encoding="utf-8")
             self.assertIn("model: claude-override", claude_agent)
-            self.assertIn("tools: inherit", claude_agent)
-            self.assertIn("disallowedTools: Write", claude_agent)
             self.assertIn("effort: high", claude_agent)
             self.assertIn("color: blue", claude_agent)
-            self.assertIn("- edit", cursor_agent)
-            self.assertIn("model: cursor-model", cursor_agent)
-            self.assertNotIn("model: claude-override", cursor_agent)
+            self.assertFalse((home / ".cursor" / "agents" / "reviewer.md").exists())
             self.assertIn("mode: subagent", opencode_agent)
             self.assertIn("bash: ask", opencode_agent)
             self.assertIn("model: opencode-model", opencode_agent)
@@ -1412,7 +1185,6 @@ class SyncTests(unittest.TestCase):
             cfg = codex_cfg.read_text(encoding="utf-8")
             self.assertIn("[[skills.config]]", cfg)
             self.assertIn('path = "~/.codex/skills/s1"', cfg)
-            self.assertIn('path = "~/.codex/skills/review-pr"', cfg)
             self.assertIn("[agents.reviewer]", cfg)
             self.assertIn('config_file = "~/.codex/agents/reviewer.toml"', cfg)
             parsed_codex_cfg = tomllib.loads(cfg)
@@ -1435,18 +1207,7 @@ class SyncTests(unittest.TestCase):
             parsed_codex_agent = tomllib.loads(codex_agent)
             self.assertEqual(parsed_codex_agent["developer_instructions"], "Agent body")
 
-            codex_command_skill = (
-                home / ".codex" / "skills" / "review-pr" / "SKILL.md"
-            ).read_text(encoding="utf-8")
-            self.assertIn("name: review-pr", codex_command_skill)
-            self.assertIn("run the review-pr command", codex_command_skill)
-            self.assertIn("Do not auto-invoke this skill", codex_command_skill)
-            self.assertIn("not a Codex slash command", codex_command_skill)
-            self.assertIn("Original command agent: `reviewer`", codex_command_skill)
-            self.assertIn(
-                "Original command requested a forked subtask context",
-                codex_command_skill,
-            )
+            self.assertFalse((home / ".codex" / "skills" / "review-pr").exists())
             codex_rules = (home / ".codex" / "rules" / "coding-agents.rules").read_text(
                 encoding="utf-8"
             )
@@ -1454,13 +1215,6 @@ class SyncTests(unittest.TestCase):
                 'prefix_rule(pattern=["python"], decision="prompt", '
                 'justification="Python scripts need review.")',
                 codex_rules,
-            )
-            codex_native_rules = (home / ".codex" / "rules" / "git.rules").read_text(
-                encoding="utf-8"
-            )
-            self.assertIn(
-                'prefix_rule(pattern=["git"], decision="allow")',
-                codex_native_rules,
             )
 
     def test_cursor_retires_legacy_global_and_emits_shared_rules(self) -> None:
@@ -1499,7 +1253,10 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             self.assertFalse((cursor / "AGENTS.md").exists())
-            self.assertFalse((cursor / MANAGED_MANIFEST).exists())
+            self.assertEqual(
+                json.loads((cursor / MANAGED_MANIFEST).read_text()),
+                {"version": 1, "entries": {}},
+            )
             self.assertIn(
                 "Global body",
                 (cursor / "rules" / "coding-agents-global.mdc").read_text(),
@@ -1514,7 +1271,7 @@ class SyncTests(unittest.TestCase):
                 (cursor / "plugins" / "local" / "coding-agents-rules").exists()
             )
             self.assertTrue((cursor / "skills" / "s1" / "SKILL.md").exists())
-            self.assertTrue((cursor / "agents" / "reviewer.md").exists())
+            self.assertFalse((cursor / "agents" / "reviewer.md").exists())
 
     def test_cursor_rule_scoping_uses_native_mdc_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1671,7 +1428,7 @@ class SyncTests(unittest.TestCase):
                 self.assertNotIn("version", text)
                 self.assertNotIn("note", text)
 
-    def test_unrecognized_prefixed_field_passes_through_with_warning(self) -> None:
+    def test_unknown_typed_target_field_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -1686,20 +1443,98 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
+            with self.assertRaisesRegex(ValueError, "unknown"):
                 run_sync(config_root=config_root, home=home)
 
-            opencode_command = (
-                home / ".config" / "opencode" / "commands" / "one.md"
-            ).read_text(encoding="utf-8")
-            self.assertIn("agent: reviewer", opencode_command)
-            self.assertIn("unknown: kept", opencode_command)
-            self.assertIn(
-                "unrecognized opencode command field `unknown`", stderr.getvalue()
+    def test_target_native_aliases_use_documented_spellings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "rules" / "scoped.md",
+                source_doc(
+                    "rule",
+                    "scoped",
+                    "scoped",
+                    "Rule body\n",
+                    extra={
+                        "cursor": {
+                            "alwaysApply": False,
+                            "globs": ["**/*.py"],
+                        }
+                    },
+                ),
+            )
+            write(
+                config_root / "skills" / "native" / "SKILL.md",
+                source_doc(
+                    "skill",
+                    "native",
+                    "native",
+                    "Skill body\n",
+                    extra={
+                        "claude": {
+                            "disable-model-invocation": True,
+                            "allowed-tools": ["Read"],
+                        },
+                        "codex": {"allowed-tools": ["Bash"]},
+                        "cursor": {"disable-model-invocation": True},
+                    },
+                ),
+            )
+            write(
+                config_root / "agents" / "native.md",
+                source_doc(
+                    "agent",
+                    "native",
+                    "native",
+                    "Agent body\n",
+                    extra={"opencode": {"reasoningEffort": "high"}},
+                ),
             )
 
-    def test_agent_permission_lowering_derived_for_cursor_codex_opencode(self) -> None:
+            run_sync(config_root=config_root, home=home)
+
+            claude_skill = (home / ".claude/skills/native/SKILL.md").read_text()
+            self.assertIn("disable-model-invocation: true", claude_skill)
+            self.assertIn("allowed-tools:", claude_skill)
+            self.assertIn("- Read", claude_skill)
+            cursor_rule = (home / ".cursor/rules/scoped.mdc").read_text()
+            self.assertIn("alwaysApply: false", cursor_rule)
+            self.assertIn("globs: '**/*.py'", cursor_rule)
+            cursor_skill = (home / ".cursor/skills/native/SKILL.md").read_text()
+            self.assertIn("disable-model-invocation: true", cursor_skill)
+            codex_skill = (home / ".codex/skills/native/SKILL.md").read_text()
+            self.assertIn("allowed-tools:", codex_skill)
+            self.assertIn("- Bash", codex_skill)
+            opencode_agent = (home / ".config/opencode/agents/native.md").read_text()
+            self.assertIn("reasoningEffort: high", opencode_agent)
+
+    def test_raw_manifest_input_fails_before_portable_or_native_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "global" / "AGENTS.md",
+                source_doc("global", "global", "global", "Global body\n"),
+            )
+            write_permissions(config_root, tools={"read": "allow"})
+            write(
+                config_root
+                / "target-config"
+                / "claude"
+                / "raw"
+                / "nested"
+                / MANAGED_MANIFEST,
+                "forbidden\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "may not be a managed manifest"):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertFalse((home / ".claude/CLAUDE.md").exists())
+            self.assertFalse((home / ".claude/settings.json").exists())
+            self.assertFalse((config_root / ".coding-agents-native.json").exists())
+
+    def test_agent_tools_are_not_portable_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -1714,23 +1549,10 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
+            with self.assertRaisesRegex(SourceSchemaError, "tools"):
+                run_sync(config_root=config_root, home=home)
 
-            cursor_agent = (home / ".cursor" / "agents" / "readonly.md").read_text(
-                encoding="utf-8"
-            )
-            codex_agent = (home / ".codex" / "agents" / "readonly.toml").read_text(
-                encoding="utf-8"
-            )
-            opencode_agent = (
-                home / ".config" / "opencode" / "agents" / "readonly.md"
-            ).read_text(encoding="utf-8")
-            self.assertIn("readonly: true", cursor_agent)
-            self.assertIn('sandbox_mode = "read-only"', codex_agent)
-            self.assertIn("edit: deny", opencode_agent)
-            self.assertIn("bash: deny", opencode_agent)
-
-    def test_agent_permission_override_wins_over_derivation(self) -> None:
+    def test_agent_tools_cannot_mix_with_native_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -1749,23 +1571,10 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
+            with self.assertRaisesRegex(SourceSchemaError, "tools"):
+                run_sync(config_root=config_root, home=home)
 
-            cursor_agent = (home / ".cursor" / "agents" / "writer.md").read_text(
-                encoding="utf-8"
-            )
-            codex_agent = (home / ".codex" / "agents" / "writer.toml").read_text(
-                encoding="utf-8"
-            )
-            self.assertIn("readonly: true", cursor_agent)
-            self.assertIn('sandbox_mode = "read-only"', codex_agent)
-
-    def test_agent_inherit_false_with_no_allow_list_denies_write_tools(self) -> None:
-        # tools: {inherit: false} with no explicit allow/deny is the "start
-        # from nothing" case; it must derive the same read-only signal as an
-        # explicit allow-list containing no write-capable tools, on every
-        # tool -- including Claude, where an absent `tools` key would
-        # otherwise mean "inherit everything" (the opposite of the intent).
+    def test_agent_inherit_false_is_not_portable_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -1780,28 +1589,10 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
+            with self.assertRaisesRegex(SourceSchemaError, "tools"):
+                run_sync(config_root=config_root, home=home)
 
-            claude_agent = (home / ".claude" / "agents" / "bare.md").read_text(
-                encoding="utf-8"
-            )
-            cursor_agent = (home / ".cursor" / "agents" / "bare.md").read_text(
-                encoding="utf-8"
-            )
-            codex_agent = (home / ".codex" / "agents" / "bare.toml").read_text(
-                encoding="utf-8"
-            )
-            opencode_agent = (
-                home / ".config" / "opencode" / "agents" / "bare.md"
-            ).read_text(encoding="utf-8")
-            self.assertIn("disallowedTools:", claude_agent)
-            self.assertIn("Bash", claude_agent)
-            self.assertIn("readonly: true", cursor_agent)
-            self.assertIn('sandbox_mode = "read-only"', codex_agent)
-            self.assertIn("edit: deny", opencode_agent)
-            self.assertIn("bash: deny", opencode_agent)
-
-    def test_codex_rules_full_dsl_supports_justification_and_match_fixtures(
+    def test_codex_rules_reject_unknown_typed_fields(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1827,19 +1618,10 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
+            with self.assertRaisesRegex(ValueError, "invalid codex native fields"):
+                run_sync(config_root=config_root, home=home)
 
-            rules_file = home / ".codex" / "rules" / "coding-agents.rules"
-            content = rules_file.read_text(encoding="utf-8")
-            self.assertIn(
-                'prefix_rule(pattern=["git", "push", "--force"], '
-                'decision="forbidden", '
-                'justification="Use --force-with-lease instead.")',
-                content,
-            )
-            self.assertNotIn("match", content)
-
-    def test_codex_rules_translation_order_and_filtering(self) -> None:
+    def test_codex_rules_reject_invalid_typed_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -1877,15 +1659,8 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
-            rules_file = home / ".codex" / "rules" / "coding-agents.rules"
-            self.assertTrue(rules_file.exists())
-            content = rules_file.read_text(encoding="utf-8")
-            self.assertLess(
-                content.find('prefix_rule(pattern=["python"], decision="allow")'),
-                content.find('prefix_rule(pattern=["git"], decision="forbidden")'),
-            )
-            self.assertNotIn("maybe", content)
+            with self.assertRaisesRegex(ValueError, "invalid codex native fields"):
+                run_sync(config_root=config_root, home=home)
 
     def test_opencode_agent_preserves_native_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2238,7 +2013,7 @@ hooks = false
             self.assertNotIn("<", codex_skill.split("---", 2)[1])
             self.assertNotIn(">", codex_skill.split("---", 2)[1])
 
-    def test_codex_skill_copy_preserves_supported_frontmatter(self) -> None:
+    def test_codex_skill_rejects_unknown_typed_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -2258,22 +2033,8 @@ hooks = false
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
-
-            codex_skill = (home / ".codex" / "skills" / "s1" / "SKILL.md").read_text(
-                encoding="utf-8"
-            )
-            self.assertIn("license: MIT", codex_skill)
-            self.assertIn("allowed-tools:", codex_skill)
-            self.assertIn("- Bash", codex_skill)
-            self.assertIn("metadata:", codex_skill)
-            self.assertIn("owner: platform", codex_skill)
-            self.assertIn("unknown-native-field: kept", codex_skill)
-            claude_skill = (home / ".claude" / "skills" / "s1" / "SKILL.md").read_text(
-                encoding="utf-8"
-            )
-            self.assertNotIn("allowed-tools:", claude_skill)
-            self.assertNotIn("metadata:", claude_skill)
+            with self.assertRaisesRegex(ValueError, "invalid codex native fields"):
+                run_sync(config_root=config_root, home=home)
 
     def test_claude_skill_preserves_native_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2363,6 +2124,52 @@ body
             self.assertIn("rules/old.md", message)
             self.assertIn("skills/old-skill/SKILL.md", message)
 
+    def test_duplicate_markdown_target_native_key_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "rules" / "duplicate.md",
+                "---\n"
+                "schema: coding-agents/v4\n"
+                "kind: rule\n"
+                "id: duplicate\n"
+                "name: duplicate\n"
+                "targets:\n"
+                "  claude:\n"
+                "    native:\n"
+                "      model: first\n"
+                "      model: second\n"
+                "---\n"
+                "Rule body\n",
+            )
+
+            with self.assertRaisesRegex(
+                SourceSchemaError, "duplicate YAML key `model`"
+            ):
+                run_sync(config_root=config_root, home=home)
+
+    def test_permission_target_raw_keys_remain_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, _ = config_root_home(tmp)
+            write(
+                config_root / "permissions" / "policy.yaml",
+                "schema: coding-agents/v4\n"
+                "kind: permission-policy\n"
+                "id: test\n"
+                "name: test\n"
+                "targets:\n"
+                "  opencode:\n"
+                "    raw:\n"
+                "      futureNativeKey: true\n",
+            )
+
+            permissions = load_permissions(config_root / "permissions")
+
+            self.assertEqual(
+                permissions.targets.root["opencode"].raw,
+                {"futureNativeKey": True},
+            )
+
     def test_wrong_kind_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -2416,17 +2223,14 @@ body
 
             commands_dir = home / ".config" / "opencode" / "commands"
             claude_commands_dir = home / ".claude" / "commands"
-            codex_command_skill_dir = home / ".codex" / "skills" / "one"
             self.assertTrue((commands_dir / "one.md").exists())
             self.assertTrue((claude_commands_dir / "one.md").exists())
-            self.assertTrue((codex_command_skill_dir / "SKILL.md").exists())
 
             shutil.rmtree(config_root / "commands")
             run_sync(config_root=config_root, home=home)
 
             self.assertFalse((commands_dir / "one.md").exists())
             self.assertFalse((claude_commands_dir / "one.md").exists())
-            self.assertFalse(codex_command_skill_dir.exists())
             manifest = json.loads(
                 (commands_dir / ".coding-agents-managed.json").read_text(
                     encoding="utf-8"
@@ -2439,14 +2243,8 @@ body
                 )
             )
             self.assertEqual(claude_manifest["entries"], {})
-            codex_manifest = json.loads(
-                (home / ".codex" / "skills" / ".coding-agents-managed.json").read_text(
-                    encoding="utf-8"
-                )
-            )
-            self.assertEqual(codex_manifest["entries"], {})
 
-    def test_codex_command_skill_uses_source_prefix_on_name_collision(self) -> None:
+    def test_codex_omits_commands_on_skill_name_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -2470,26 +2268,14 @@ body
 
             cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
             self.assertIn('path = "~/.codex/skills/one"', cfg)
-            self.assertIn('path = "~/.codex/skills/source-command-one"', cfg)
-            self.assertTrue(
-                (
-                    home / ".codex" / "skills" / "source-command-one" / "SKILL.md"
-                ).exists()
+            self.assertNotIn('path = "~/.codex/skills/source-command-one"', cfg)
+            self.assertFalse(
+                (home / ".codex" / "skills" / "source-command-one").exists()
             )
-            generated = (
-                home / ".codex" / "skills" / "source-command-one" / "SKILL.md"
-            ).read_text(encoding="utf-8")
-            self.assertIn("name: source-command-one", generated)
-            self.assertIn("run the one command", generated)
 
-    def test_codex_command_skill_cascading_collision_matches_config_registration(
+    def test_codex_omits_all_commands_without_creating_collision_aliases(
         self,
     ) -> None:
-        # Skill "one" forces command "one" to rename to "source-command-one".
-        # A second command whose stem literally IS "source-command-one" must
-        # then cascade to "source-command-source-command-one" -- and
-        # config.toml's registration list must name the exact same three
-        # directories that land on disk, not diverge on the second rename.
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(
@@ -2522,15 +2308,8 @@ body
             run_sync(config_root=config_root, home=home)
 
             cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            for path in (
-                "~/.codex/skills/one",
-                "~/.codex/skills/source-command-one",
-                "~/.codex/skills/source-command-source-command-one",
-            ):
-                self.assertIn(f'path = "{path}"', cfg)
-                self.assertTrue(
-                    (home / ".codex" / path.removeprefix("~/.codex/")).exists()
-                )
+            self.assertIn('path = "~/.codex/skills/one"', cfg)
+            self.assertNotIn("source-command-one", cfg)
 
     def test_prunes_stale_rules_agents_skills_and_codex_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

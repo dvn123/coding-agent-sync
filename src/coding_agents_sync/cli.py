@@ -56,15 +56,6 @@ def sync(
             ),
         ),
     ] = None,
-    legacy_config_root: Annotated[
-        Path | None,
-        typer.Option(
-            "--base",
-            file_okay=False,
-            dir_okay=True,
-            hidden=True,
-        ),
-    ] = None,
     home: Annotated[
         Path | None,
         typer.Option(
@@ -79,9 +70,7 @@ def sync(
         typer.Option("--check", help="Report managed drift without writing."),
     ] = False,
 ) -> None:
-    if config_root is not None and legacy_config_root is not None:
-        _fail("--config-root and --base are mutually exclusive", code=2)
-    resolved_config_root = config_root or legacy_config_root or default_config_root()
+    resolved_config_root = config_root or default_config_root()
     try:
         drift = run_sync(
             config_root=resolved_config_root,
@@ -93,6 +82,7 @@ def sync(
         NativeConfigError,
         PatchError,
         SourceSchemaError,
+        ValueError,
     ) as error:
         _fail(str(error))
     if drift:

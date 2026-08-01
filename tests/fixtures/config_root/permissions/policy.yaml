@@ -1,4 +1,4 @@
-schema: coding-agents/v3
+schema: coding-agents/v4
 kind: permission-policy
 id: fixture-policy
 name: Fixture policy
@@ -20,3 +20,19 @@ secret_paths:
   - "**/.env"
 secret_names:
   - FIXTURE_TOKEN
+targets:
+  codex:
+    omit:
+      tools: Codex has no portable user permission channel.
+      workspace: Codex has no portable workspace permission channel.
+      secret_paths: Codex has no portable secret-path channel.
+      secret_names: Codex has no portable secret-name channel.
+  cursor:
+    omit:
+      tools: Cursor Desktop and Agent do not share a full tool permission surface.
+      workspace: Cursor has no shared workspace permission channel.
+      secret_paths: Cursor Desktop has no secret-path deny channel.
+      secret_names: Cursor has no secret-name ask channel.
+  claude:
+    omit:
+      workspace.ask: Claude has no workspace ask channel.

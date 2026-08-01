@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,26 +9,16 @@ from tempfile import TemporaryDirectory
 import tomlkit
 import yaml
 
-from .artifacts import (
-    Artifact,
-    FileTreeArtifact,
-    ManagedRootArtifact,
-    OptionalTextArtifact,
-    RetiredRootArtifact,
-    RetiredTextArtifact,
-    TextArtifact,
-    TreeArtifact,
-)
 from .io import (
+    MANAGED_MANIFEST,
     ManagedEntryConflict,
     entry_hash,
     load_manifest,
     retire_manifested_entries,
     sync_manifested_entries,
     write_bytes,
-    write_optional_text,
-    write_text,
 )
+from .plan import ManifestMode, OwnedFile, OwnedTree, Plan
 
 
 def _validate_structured(path: Path) -> None:
@@ -70,218 +60,328 @@ def _prune_tree(target: Path, expected_files: set[Path]) -> None:
                 child.rmdir()
 
 
-def write_tree_artifact(artifact: TreeArtifact) -> None:
-    if artifact.target.is_symlink():
+def _tree_files(tree: OwnedTree) -> dict[Path, bytes]:
+    return dict(tree.files)
+
+
+def _write_owned_file(file: OwnedFile, destination: Path | None = None) -> None:
+    path = destination or file.path
+    if file.content is not None:
+        write_bytes(path, file.content)
+    elif file.retire_if is None:
+        path.unlink(missing_ok=True)
+    elif path.is_file() and path.read_bytes() == file.retire_if:
+        path.unlink()
+
+
+def _write_owned_tree(tree: OwnedTree, destination: Path | None = None) -> None:
+    if tree.declaration or tree.retired:
         return
-    artifact.target.mkdir(parents=True, exist_ok=True)
-
-    expected_files: set[Path] = set()
-    overrides = {
-        Path(path): content for path, content in artifact.text_overrides.items()
-    }
-
-    for source_file in sorted(
-        path for path in artifact.source.rglob("*") if path.is_file()
-    ):
-        rel = source_file.relative_to(artifact.source)
-        expected_files.add(rel)
-        if rel in overrides:
-            continue
-        write_bytes(artifact.target / rel, source_file.read_bytes())
-
-    for rel, content in sorted(overrides.items(), key=lambda item: str(item[0])):
-        expected_files.add(rel)
-        write_text(artifact.target / rel, content)
-
-    _prune_tree(artifact.target, expected_files)
-
-
-def write_file_tree_artifact(artifact: FileTreeArtifact) -> None:
-    if artifact.target.is_symlink():
+    target = destination or tree.root
+    if target.is_symlink():
         return
-    artifact.target.mkdir(parents=True, exist_ok=True)
-    expected_files = set(artifact.files)
-    for rel, content in sorted(artifact.files.items(), key=lambda item: str(item[0])):
-        write_text(artifact.target / rel, content)
-    _prune_tree(artifact.target, expected_files)
+    target.mkdir(parents=True, exist_ok=True)
+    files = _tree_files(tree)
+    for relative, content in files.items():
+        write_bytes(target / relative, content)
+    _prune_tree(target, set(files))
 
 
-def _destination(artifact: Artifact) -> Path | None:
-    if isinstance(artifact, (TextArtifact, OptionalTextArtifact)):
-        return artifact.path
-    if isinstance(artifact, (FileTreeArtifact, TreeArtifact)):
-        return artifact.target
-    return None
+def _managed_groups(
+    plan: Plan,
+) -> tuple[tuple[Path, ManifestMode, set[str], bool], ...]:
+    groups: dict[tuple[Path, ManifestMode], tuple[set[str], bool]] = {}
 
+    def add(root: Path, mode: ManifestMode, name: str | None, retired: bool) -> None:
+        current, was_retired = groups.setdefault((root, mode), (set(), retired))
+        if was_retired != retired:
+            raise ManagedEntryConflict(f"Conflicting managed root: {root}")
+        if name is not None:
+            current.add(name)
 
-def _write_artifact(artifact: Artifact, destination: Path | None = None) -> None:
-    if isinstance(artifact, TextArtifact):
-        write_text(destination or artifact.path, artifact.content)
-    elif isinstance(artifact, FileTreeArtifact):
-        write_file_tree_artifact(
-            FileTreeArtifact(destination or artifact.target, artifact.files)
-        )
-    elif isinstance(artifact, OptionalTextArtifact):
-        write_optional_text(destination or artifact.path, artifact.content)
-    elif isinstance(artifact, TreeArtifact):
-        write_tree_artifact(
-            TreeArtifact(
-                artifact.source,
-                destination or artifact.target,
-                artifact.text_overrides,
+    for tree in plan.trees:
+        if tree.declaration or tree.retired:
+            if tree.manifest_root is None:
+                raise ManagedEntryConflict(f"Missing managed root: {tree.root}")
+            add(tree.manifest_root, tree.manifest_mode, None, tree.retired)
+        elif tree.manifest_root is not None:
+            add(
+                tree.manifest_root,
+                tree.manifest_mode,
+                tree.root.relative_to(tree.manifest_root).as_posix(),
+                False,
             )
-        )
-    elif isinstance(artifact, RetiredTextArtifact):
-        path = destination or artifact.path
-        if path.is_file() and path.read_text() == artifact.generated_content:
-            path.unlink()
-    else:
-        raise TypeError(f"Unsupported concrete artifact: {artifact!r}")
+    for file in plan.files:
+        if file.manifest_root is not None:
+            add(
+                file.manifest_root,
+                "file",
+                (
+                    file.path.relative_to(file.manifest_root).as_posix()
+                    if file.content is not None
+                    else None
+                ),
+                False,
+            )
+    return tuple(
+        (root, mode, current, retired)
+        for (root, mode), (current, retired) in groups.items()
+    )
 
 
-def preflight_artifacts(artifacts: Sequence[Artifact]) -> None:
-    producers = {
-        destination: artifact
-        for artifact in artifacts
-        if (destination := _destination(artifact)) is not None
-    }
-    for managed in (
-        item
-        for item in artifacts
-        if isinstance(item, (ManagedRootArtifact, RetiredRootArtifact))
-    ):
-        previous = load_manifest(managed.root / ".coding-agents-managed.json")
-        current = managed.current if isinstance(managed, ManagedRootArtifact) else set()
+def _plan_producers(plan: Plan) -> dict[Path, OwnedFile | OwnedTree]:
+    producers: dict[Path, OwnedFile | OwnedTree] = {}
+    for file in plan.files:
+        if file.content is not None:
+            producers[file.path] = file
+    for tree in plan.trees:
+        if not tree.declaration and not tree.retired:
+            producers[tree.root] = tree
+    return producers
+
+
+def _output_paths(plan: Plan) -> list[Path]:
+    return [
+        *(file.path for file in plan.files if file.content is not None),
+        *(
+            tree.root
+            for tree in plan.trees
+            if not tree.declaration and not tree.retired
+        ),
+    ]
+
+
+def _content_paths(plan: Plan) -> list[Path]:
+    return [
+        *(file.path for file in plan.files if file.content is not None),
+        *(
+            tree.root / relative
+            for tree in plan.trees
+            if not tree.declaration and not tree.retired
+            for relative, _ in tree.files
+        ),
+    ]
+
+
+def _paths_overlap(path: Path, other: Path) -> bool:
+    return path == other or path in other.parents or other in path.parents
+
+
+def _absolute(path: Path, label: str) -> None:
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be absolute: {path}")
+
+
+def _managed_name(path: Path, root: Path, label: str) -> None:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        raise ValueError(f"{label} must be inside its manifest root: {path}") from None
+    if not relative.parts:
+        raise ValueError(f"{label} cannot equal its manifest root: {path}")
+
+
+def _validate_paths(plan: Plan) -> None:
+    for file in plan.files:
+        _absolute(file.path, "OwnedFile path")
+        if file.manifest_root is not None:
+            _absolute(file.manifest_root, "OwnedFile manifest root")
+            _managed_name(file.path, file.manifest_root, "OwnedFile path")
+    for tree in plan.trees:
+        _absolute(tree.root, "OwnedTree root")
+        if tree.manifest_root is not None:
+            _absolute(tree.manifest_root, "OwnedTree manifest root")
+            if not tree.declaration and not tree.retired:
+                _managed_name(tree.root, tree.manifest_root, "OwnedTree root")
+        seen: set[Path] = set()
+        for relative, _ in tree.files:
+            if (
+                not relative.parts
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or relative in seen
+            ):
+                raise ValueError(f"unsafe OwnedTree file path: {relative}")
+            seen.add(relative)
+    for value in plan.native_values:
+        _absolute(value.path, "NativeValue path")
+    for patch in plan.native_patches:
+        _absolute(patch.path, "NativePatch path")
+
+
+def _validate_plan(plan: Plan) -> None:
+    _validate_paths(plan)
+    for diagnostic in plan.diagnostics:
+        if diagnostic.level == "error":
+            source = f": {diagnostic.source}" if diagnostic.source else ""
+            raise ValueError(f"{diagnostic.message}{source}")
+
+    paths = _output_paths(plan)
+    for index, path in enumerate(paths):
+        for other in paths[:index]:
+            if _paths_overlap(path, other):
+                raise ManagedEntryConflict(
+                    f"Overlapping generated paths: {path} and {other}"
+                )
+
+    for root, _, _, _ in _managed_groups(plan):
+        manifest = root / MANAGED_MANIFEST
+        for path in _content_paths(plan):
+            if _paths_overlap(path, manifest):
+                raise ManagedEntryConflict(
+                    f"Generated output overlaps managed manifest: {path} and {manifest}"
+                )
+
+    surfaces = [
+        *((value.target, value.path) for value in plan.native_values),
+        *((patch.target, patch.path) for patch in plan.native_patches),
+    ]
+    target_paths: dict[str, Path] = {}
+    path_targets: dict[Path, str] = {}
+    for target, path in surfaces:
+        previous_path = target_paths.setdefault(target, path)
+        if previous_path != path:
+            raise ValueError(f"Conflicting native surface path: {target}")
+        previous_target = path_targets.setdefault(path, target)
+        if previous_target != target:
+            raise ValueError(f"Conflicting native surface target: {path}")
+
+    native = [
+        (value.target, value.path, value.pointer) for value in plan.native_values
+    ] + [
+        (patch.target, patch.path, operation.pointer)
+        for patch in plan.native_patches
+        for operation in patch.operations
+    ]
+    for index, (target, path, pointer) in enumerate(native):
+        for _, other_path, other_pointer in native[:index]:
+            if path != other_path:
+                continue
+            length = min(len(pointer), len(other_pointer))
+            if pointer[:length] == other_pointer[:length]:
+                raise ValueError(f"Overlapping native pointers: {target} {pointer}")
+    for path in [
+        *(value.path for value in plan.native_values),
+        *(patch.path for patch in plan.native_patches),
+    ]:
+        for output in paths:
+            if _paths_overlap(path, output):
+                raise ManagedEntryConflict(
+                    f"Overlapping portable and native paths: {output} and {path}"
+                )
+
+
+def preflight_plan(plan: Plan) -> None:
+    _validate_plan(plan)
+    producers = _plan_producers(plan)
+    for root, mode, current, retired in _managed_groups(plan):
+        previous = load_manifest(root / ".coding-agents-managed.json")
         desired: dict[str, str] = {}
         with TemporaryDirectory() as temporary:
             stage = Path(temporary)
             for name in current:
-                target = managed.root / name
+                target = root / name
                 producer = producers.get(target)
-                if producer is not None:
-                    _write_artifact(producer, stage / name)
-                hash_ = entry_hash(stage / name, managed.mode)
+                if producer is None:
+                    raise ManagedEntryConflict(f"Missing generated {mode}: {target}")
+                if isinstance(producer, OwnedFile):
+                    _write_owned_file(producer, stage / name)
+                else:
+                    _write_owned_tree(producer, stage / name)
+                hash_ = entry_hash(stage / name, mode)
                 if hash_ is None:
-                    raise ManagedEntryConflict(
-                        f"Missing generated {managed.mode}: {target}"
-                    )
+                    raise ManagedEntryConflict(f"Missing generated {mode}: {target}")
                 desired[name] = hash_
             for path in stage.rglob("*"):
                 if path.is_file():
                     _validate_structured(path)
+        if retired:
+            current = set()
         previous_names = set(previous)
         for name in current - previous_names:
-            target = managed.root / name
-            actual = entry_hash(target, managed.mode)
+            target = root / name
+            actual = entry_hash(target, mode)
             if (target.exists() or target.is_symlink()) and actual != desired[name]:
                 raise ManagedEntryConflict(
-                    f"Refusing to claim unmanifested generated {managed.mode}: {target}"
+                    f"Refusing to claim unmanifested generated {mode}: {target}"
                 )
         for name, expected in previous.items():
-            actual = entry_hash(managed.root / name, managed.mode)
+            actual = entry_hash(root / name, mode)
             if expected is None and name not in current and actual is not None:
                 raise ManagedEntryConflict(
-                    f"Refusing to prune legacy generated {managed.mode} "
-                    "without a hash: "
-                    f"{managed.root / name}"
+                    f"Refusing to prune legacy generated {mode} without a hash: "
+                    f"{root / name}"
                 )
-            if expected is None:
-                continue
-            if actual is not None and actual not in {expected, desired.get(name)}:
-                raise ManagedEntryConflict(
-                    f"Refusing to replace modified generated {managed.mode}: "
-                    f"{managed.root / name}"
-                )
-
-
-def artifact_drift(artifacts: Sequence[Artifact]) -> tuple[Path, ...]:
-    drift: set[Path] = set()
-    for item in artifacts:
-        if isinstance(item, TextArtifact):
-            if not item.path.is_file() or item.path.read_text() != item.content:
-                drift.add(item.path)
-        elif isinstance(item, OptionalTextArtifact):
-            if item.content is None:
-                if item.path.exists():
-                    drift.add(item.path)
-            elif not item.path.is_file() or item.path.read_text() != item.content:
-                drift.add(item.path)
-        elif isinstance(item, FileTreeArtifact):
-            actual = (
-                {
-                    path.relative_to(item.target)
-                    for path in item.target.rglob("*")
-                    if path.is_file()
+            if (
+                expected is not None
+                and actual is not None
+                and actual
+                not in {
+                    expected,
+                    desired.get(name),
                 }
-                if item.target.is_dir()
-                else set()
-            )
-            if actual != set(item.files) or any(
-                (item.target / path).read_text() != content
-                for path, content in item.files.items()
-                if (item.target / path).is_file()
             ):
-                drift.add(item.target)
-        elif isinstance(item, TreeArtifact):
-            expected = {
-                path.relative_to(item.source)
-                for path in item.source.rglob("*")
+                raise ManagedEntryConflict(
+                    f"Refusing to replace modified generated {mode}: {root / name}"
+                )
+
+
+def plan_drift(plan: Plan) -> tuple[Path, ...]:
+    drift: set[Path] = set()
+    for file in plan.files:
+        if file.content is None:
+            if (file.retire_if is None and file.path.exists()) or (
+                file.retire_if is not None
+                and file.path.is_file()
+                and file.path.read_bytes() == file.retire_if
+            ):
+                drift.add(file.path)
+        elif not file.path.is_file() or file.path.read_bytes() != file.content:
+            drift.add(file.path)
+    for tree in plan.trees:
+        if tree.declaration or tree.retired:
+            continue
+        actual = (
+            {
+                path.relative_to(tree.root)
+                for path in tree.root.rglob("*")
                 if path.is_file()
-            } | set(item.text_overrides)
-            actual = (
-                {
-                    path.relative_to(item.target)
-                    for path in item.target.rglob("*")
-                    if path.is_file()
-                }
-                if item.target.is_dir()
-                else set()
-            )
-            if expected != actual:
-                drift.add(item.target)
-                continue
-            for relative in expected:
-                desired = item.text_overrides.get(relative)
-                if desired is None:
-                    if (item.target / relative).read_bytes() != (
-                        item.source / relative
-                    ).read_bytes():
-                        drift.add(item.target)
-                        break
-                elif (item.target / relative).read_text() != desired:
-                    drift.add(item.target)
-                    break
-        elif isinstance(item, ManagedRootArtifact):
-            manifest_path = item.root / ".coding-agents-managed.json"
-            manifest = load_manifest(manifest_path)
-            hashes_match = set(manifest) == item.current and all(
-                expected == entry_hash(item.root / name, item.mode)
-                for name, expected in manifest.items()
-            )
-            if not hashes_match:
-                drift.add(manifest_path)
-        elif isinstance(item, RetiredRootArtifact):
-            manifest_path = item.root / ".coding-agents-managed.json"
+            }
+            if tree.root.is_dir()
+            else set()
+        )
+        expected = set(_tree_files(tree))
+        if actual != expected or any(
+            (tree.root / relative).read_bytes() != content
+            for relative, content in tree.files
+            if (tree.root / relative).is_file()
+        ):
+            drift.add(tree.root)
+    for root, mode, current, retired in _managed_groups(plan):
+        manifest_path = root / ".coding-agents-managed.json"
+        if retired:
             if manifest_path.exists():
                 drift.add(manifest_path)
-        elif (
-            isinstance(item, RetiredTextArtifact)
-            and item.path.is_file()
-            and item.path.read_text() == item.generated_content
+            continue
+        manifest = load_manifest(manifest_path)
+        if set(manifest) != current or any(
+            expected != entry_hash(root / name, mode)
+            for name, expected in manifest.items()
         ):
-            drift.add(item.path)
+            drift.add(manifest_path)
     return tuple(sorted(drift))
 
 
-def write_artifacts(artifacts: Sequence[Artifact]) -> None:
-    for artifact in artifacts:
-        if not isinstance(artifact, (ManagedRootArtifact, RetiredRootArtifact)):
-            _write_artifact(artifact)
+def write_plan(plan: Plan) -> None:
+    for file in plan.files:
+        _write_owned_file(file)
+    for tree in plan.trees:
+        _write_owned_tree(tree)
 
 
-def publish_manifests(artifacts: Sequence[Artifact]) -> None:
-    for artifact in artifacts:
-        if isinstance(artifact, ManagedRootArtifact):
-            sync_manifested_entries(artifact.root, artifact.current, artifact.mode)
-        elif isinstance(artifact, RetiredRootArtifact):
-            retire_manifested_entries(artifact.root, artifact.mode)
+def publish_plan_manifests(plan: Plan) -> None:
+    for root, mode, current, retired in _managed_groups(plan):
+        if retired:
+            retire_manifested_entries(root, mode)
+        else:
+            sync_manifested_entries(root, current, mode)

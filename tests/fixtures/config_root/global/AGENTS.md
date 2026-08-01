@@ -1,5 +1,5 @@
 ---
-schema: coding-agents/v3
+schema: coding-agents/v4
 kind: global
 id: fixture-global
 name: Fixture global

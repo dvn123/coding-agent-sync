@@ -106,13 +106,15 @@ def _write_probe_source(config_root: Path, sentinel: str) -> None:
     rules.mkdir(parents=True)
     (rules / "cursor-desktop-capability-probe.md").write_text(
         "---\n"
-        "schema: coding-agents/v3\n"
+        "schema: coding-agents/v4\n"
         "kind: rule\n"
         "id: cursor-desktop-capability-probe\n"
         "name: Cursor Desktop capability probe\n"
         "description: Inert ancestor-rule capability sentinel.\n"
-        "activation:\n"
-        "  always: true\n"
+        "targets:\n"
+        "  cursor:\n"
+        "    native:\n"
+        "      always_apply: true\n"
         "---\n"
         f"{sentinel}\n",
         encoding="utf-8",
