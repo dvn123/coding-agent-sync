@@ -12,19 +12,19 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     ValidationError,
     computed_field,
     field_validator,
     model_validator,
 )
 
-from .metadata import snake_keys, to_snake
+from .metadata import to_snake
 
-SCHEMA = "coding-agents/v3"
+SCHEMA = "coding-agents/v4"
 type SourceKind = Literal["global", "rule", "skill", "command", "agent"]
 
 TOOL_NAMES: frozenset[str] = frozenset({"claude", "cursor", "opencode", "codex"})
-RESERVED_PREFIXES: frozenset[str] = TOOL_NAMES | {"internal"}
 COMMON_KEYS: frozenset[str] = frozenset({"schema", "kind", "id", "name", "description"})
 RESERVED_RULE_STEMS: frozenset[str] = frozenset({"coding-agents-global"})
 
@@ -53,7 +53,11 @@ def _reject_duplicate_yaml_keys(path: Path, node: yaml.Node) -> None:
             _reject_duplicate_yaml_keys(path, value)
 
 
-def _reject_normalized_yaml_key_collisions(path: Path, value: Any) -> None:
+def _reject_normalized_yaml_key_collisions(
+    path: Path, value: Any, *, target_block: bool = False
+) -> None:
+    if target_block:
+        return
     if isinstance(value, dict):
         seen: set[str] = set()
         for key, child in value.items():
@@ -63,7 +67,9 @@ def _reject_normalized_yaml_key_collisions(path: Path, value: Any) -> None:
                     f"{path}: normalized YAML key collision `{normalized}`"
                 )
             seen.add(normalized)
-            _reject_normalized_yaml_key_collisions(path, child)
+            _reject_normalized_yaml_key_collisions(
+                path, child, target_block=key == "targets"
+            )
     elif isinstance(value, list):
         for child in value:
             _reject_normalized_yaml_key_collisions(path, child)
@@ -73,20 +79,46 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class RuleActivation(StrictModel):
-    always: bool | None = None
-    globs: list[str] = Field(default_factory=list)
+class TargetBlock(StrictModel):
+    """One target's typed escape hatch, raw fields, and loss acknowledgement."""
+
+    native: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+    omit: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("omit")
+    @classmethod
+    def _validate_omissions(cls, value: dict[str, str]) -> dict[str, str]:
+        for path, reason in value.items():
+            if (
+                not path
+                or path != path.strip()
+                or not all(
+                    part and part.replace("_", "").isalnum() for part in path.split(".")
+                )
+                or not isinstance(reason, str)
+                or not reason.strip()
+                or reason != reason.strip()
+            ):
+                raise ValueError(
+                    "omit must map a dotted portable path to a non-empty trimmed reason"
+                )
+        return value
+
+
+class TargetBlocks(RootModel[dict[str, TargetBlock]]):
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def _validate_targets(self) -> TargetBlocks:
+        if unknown := set(self.root) - TOOL_NAMES:
+            raise ValueError(f"unknown targets: {sorted(unknown)}")
+        return self
 
 
 class CommandExecution(StrictModel):
     agent: str | None = None
     subtask: bool = False
-
-
-class AgentTools(StrictModel):
-    inherit: bool | None = None
-    allow: list[str] = Field(default_factory=list)
-    deny: list[str] = Field(default_factory=list)
 
 
 def _portable_tokens(value: tuple[str, ...]) -> bool:
@@ -333,7 +365,7 @@ class WorkspacePermissions(StrictModel):
 
 
 class PermissionPolicyDocument(StrictModel):
-    schema_: Literal["coding-agents/v3"] = Field(alias="schema")
+    schema_: Literal["coding-agents/v4"] = Field(alias="schema")
     kind: Literal["permission-policy"]
     id: str
     name: str
@@ -343,6 +375,7 @@ class PermissionPolicyDocument(StrictModel):
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
     secret_paths: tuple[str, ...] = ()
     secret_names: tuple[str, ...] = ()
+    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
 
     @field_validator("tools")
     @classmethod
@@ -402,7 +435,7 @@ class PermissionPolicyDocument(StrictModel):
 
 
 class PermissionRulesDocument(StrictModel):
-    schema_: Literal["coding-agents/v3"] = Field(alias="schema")
+    schema_: Literal["coding-agents/v4"] = Field(alias="schema")
     kind: Literal["permission-rules"]
     id: str
     name: str
@@ -411,6 +444,7 @@ class PermissionRulesDocument(StrictModel):
     allow: tuple[CommandPermissionEntry, ...] = ()
     ask: tuple[CommandPermissionEntry, ...] = ()
     deny: tuple[CommandPermissionEntry, ...] = ()
+    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
 
 
 def _resolve_permission_entries(
@@ -430,7 +464,7 @@ class GlobalExtra(StrictModel):
 
 
 class RuleExtra(StrictModel):
-    activation: RuleActivation = Field(default_factory=RuleActivation)
+    pass
 
 
 class SkillExtra(StrictModel):
@@ -448,7 +482,6 @@ EFFORT_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh", "ma
 
 
 class AgentExtra(StrictModel):
-    tools: AgentTools = Field(default_factory=AgentTools)
     effort: str | None = None
     background: bool = False
     color: str | None = None
@@ -468,7 +501,7 @@ class SourceModel(BaseModel):
     id: str
     name: str
     description: str
-    targets: dict[str, dict[str, Any]]
+    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
     body: str
 
     @computed_field
@@ -482,7 +515,7 @@ class GlobalSource(SourceModel):
 
 
 class RuleSource(SourceModel):
-    activation: RuleActivation = Field(default_factory=RuleActivation)
+    pass
 
 
 class SkillSource(SourceModel):
@@ -498,7 +531,6 @@ class CommandSource(SourceModel):
 
 
 class AgentSource(SourceModel):
-    tools: AgentTools = Field(default_factory=AgentTools)
     effort: str | None = None
     background: bool = False
     color: str | None = None
@@ -517,6 +549,8 @@ class PermissionSource(BaseModel):
     secret_paths: tuple[str, ...]
     secret_names: tuple[str, ...]
     commands: CommandPermissions
+    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
+    command_targets: tuple[tuple[Path, TargetBlocks, bool], ...] = ()
 
 
 class SourceBundle(BaseModel):
@@ -536,44 +570,54 @@ def _model_error(path: Path, exc: ValidationError) -> SourceSchemaError:
 
 def _split_frontmatter(
     path: Path, meta: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    """Split a source's frontmatter into (canonical candidates, per-tool buckets).
+) -> tuple[dict[str, Any], TargetBlocks]:
+    """Separate portable fields from exact-key target blocks.
 
-    Base identity keys are dropped (caller already has them). `internal:*`
-    fields and an `internal:` block are dropped entirely -- no tool ever sees
-    them. Every other key is either a `<tool>:` prefix (flat scalar sugar or a
-    nested block) routed into that tool's bucket, or a canonical-field
-    candidate returned for the caller's per-kind strict validation.
+    `raw` is intentionally never normalized. Target compilers own typed-field
+    validation, while this layer only makes the three target block names and
+    omission reasons structurally safe.
     """
-    targets: dict[str, dict[str, Any]] = {name: {} for name in TOOL_NAMES}
-    remaining: dict[str, Any] = {}
+    remaining = dict(meta)
+    target_data = remaining.pop("targets", {})
+    remaining.pop("internal", None)
+    if not isinstance(target_data, dict):
+        raise SourceSchemaError(f"{path}: `targets` must be a mapping")
+    try:
+        targets = TargetBlocks.model_validate(target_data)
+    except ValidationError as exc:
+        raise _model_error(path, exc) from exc
+    return {
+        key: value for key, value in remaining.items() if key not in COMMON_KEYS
+    }, targets
 
-    for key, value in meta.items():
-        if key in COMMON_KEYS:
-            continue
-        if key in RESERVED_PREFIXES:
-            if key == "internal":
-                continue
-            if not isinstance(value, dict):
-                raise SourceSchemaError(f"{path}: `{key}` must be a mapping")
-            targets[key].update(value)
-            continue
-        if ":" in key:
-            prefix, _, field_name = key.partition(":")
-            if prefix in RESERVED_PREFIXES:
-                if prefix != "internal":
-                    targets[prefix][field_name] = value
-                continue
-        remaining[key] = value
 
-    return remaining, targets
+def _validate_markdown_frontmatter(path: Path) -> None:
+    """Reject duplicate YAML keys before python-frontmatter collapses them."""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        raise SourceSchemaError(f"{path}: invalid Markdown source") from None
+    if not lines or lines[0].strip() != "---":
+        return
+    for index, line in enumerate(lines[1:], 1):
+        if line.strip() not in {"---", "..."}:
+            continue
+        try:
+            node = yaml.compose("".join(lines[1:index]), Loader=yaml.SafeLoader)
+        except yaml.YAMLError:
+            raise SourceSchemaError(f"{path}: invalid YAML frontmatter") from None
+        if node is not None:
+            _reject_duplicate_yaml_keys(path, node)
+        return
 
 
 def _parse_common(
     path: Path, expected_kind: SourceKind
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]], str]:
+) -> tuple[dict[str, Any], dict[str, Any], TargetBlocks, str]:
+    _validate_markdown_frontmatter(path)
     post = frontmatter.loads(path.read_text(encoding="utf-8"))
-    meta = snake_keys(dict(post.metadata or {}))
+    meta = dict(post.metadata or {})
 
     if meta.get("schema") != SCHEMA:
         raise SourceSchemaError(f"{path}: missing or invalid schema `{SCHEMA}`")
@@ -607,12 +651,10 @@ def load_rule(path: Path) -> RuleSource:
         raise SourceSchemaError(f"{path}: reserved rule filename `{path.name}`")
     common, remaining, targets, body = _parse_common(path, "rule")
     try:
-        extra = RuleExtra.model_validate(remaining)
+        RuleExtra.model_validate(remaining)
     except ValidationError as exc:
         raise _model_error(path, exc) from exc
-    return RuleSource(
-        path=path, targets=targets, body=body, activation=extra.activation, **common
-    )
+    return RuleSource(path=path, targets=targets, body=body, **common)
 
 
 def load_skill(path: Path) -> SkillSource:
@@ -655,12 +697,24 @@ def load_agent(path: Path) -> AgentSource:
         path=path,
         targets=targets,
         body=body,
-        tools=extra.tools,
         effort=extra.effort,
         background=extra.background,
         color=extra.color,
         **common,
     )
+
+
+def _snake_source_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            to_snake(str(key)): (
+                child if key == "targets" else _snake_source_keys(child)
+            )
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_snake_source_keys(child) for child in value]
+    return value
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -675,7 +729,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise SourceSchemaError(f"{path}: source must be a mapping")
     _reject_normalized_yaml_key_collisions(path, parsed)
-    return snake_keys(parsed)
+    return _snake_source_keys(parsed)
 
 
 def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSource:
@@ -774,6 +828,17 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         secret_paths=policy.secret_paths,
         secret_names=policy.secret_names,
         commands=commands,
+        targets=policy.targets,
+        command_targets=tuple(
+            (
+                path,
+                fragment.targets,
+                bool(
+                    fragment.options or fragment.allow or fragment.ask or fragment.deny
+                ),
+            )
+            for path, fragment in fragments
+        ),
     )
 
 

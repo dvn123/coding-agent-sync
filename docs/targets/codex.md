@@ -1,65 +1,35 @@
 # Codex Target Reference
 
-## Compiler outputs
+## Generated surfaces
 
-| Source kind | Generated output |
+| Source | Output |
 | --- | --- |
 | Global and rules | `<home>/.codex/AGENTS.md` |
-| Rule execution policy | `<home>/.codex/rules/coding-agents.rules` |
-| Native rule fragments | `<home>/.codex/rules/<fragment>.rules` |
-| Skill | `<home>/.codex/skills/<source-directory>/` |
-| Command | generated skill below `<home>/.codex/skills/` |
-| Agent | `<home>/.codex/agents/<source-stem>.toml` |
-| Registrations | named paths in `<home>/.codex/config.toml` |
+| Typed rule policy | `<home>/.codex/rules/coding-agents.rules` |
+| Skill | `<home>/.codex/skills/<directory>/` |
+| Command | no generated surface |
+| Agent | `<home>/.codex/agents/<stem>.toml` |
+| Registrations | owned pointers in `<home>/.codex/config.toml` |
 
-`<home>/.codex` is the compiler's Codex home even when the process running the
-CLI has another `CODEX_HOME`.
+Global and rule bodies concatenate into `AGENTS.md`. A rule may separately use
+strict `targets.codex.native.rules` entries containing a non-empty literal
+`pattern`, `decision` (`allow`, `prompt`, or `forbidden`), and optional
+`justification`. Unknown values are errors. Codex does not receive portable
+commands or command permissions; sources must explicitly omit them.
 
-## Instructions and rules
+Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
+`allowed-tools`. Typed agent fields are `name`, `description`,
+`developer_instructions`, `model`, `model_reasoning_effort`, `sandbox_mode`,
+and `nickname_candidates`. `targets.codex.raw` is supported for agent TOML
+fields and is visibly unvalidated. Non-equivalent portable skill or agent
+fields require a reasoned omit acknowledgement.
 
-Codex has one guideline channel. The compiler concatenates the global body,
-then rule bodies in source-path order, with blank lines between sections.
+`patches/codex.yaml` targets `<home>/.codex/config.toml`; it may only use
+pointers disjoint from generated skill and agent registrations. Raw files below
+`target-config/codex/raw/` mirror below `<home>/.codex`; `config.toml` and the
+generated rules file are reserved. Raw files are byte-preserved and
+manifest-owned.
 
-Codex-specific `rules` metadata is translated to native execution-policy DSL.
-Unsupported or lossy values produce warnings. Canonical user permissions do
-not enter this DSL: Codex's matcher cannot safely represent their predicates,
-and its rules govern host execution rather than the ordinary sandboxed path.
-
-External native fragments from
-`config_root/target-config/codex/rules/*.rules` are copied verbatim beside the
-generated `coding-agents.rules`. All files share one managed-root manifest, so
-an existing unmanifested filename cannot be claimed.
-
-## Skills and commands
-
-Canonical skills are mirrored into same-named directories. Codex frontmatter
-contains only supported fields.
-
-Commands are wrapped as generated skills. A command's derived directory name
-is resolved against existing skill names and earlier commands; collisions use
-the source-prefixed fallback. The same name-resolution result drives both file
-generation and config registration.
-
-## Agents
-
-Canonical agents become TOML documents containing identity, description,
-developer instructions, supported reasoning effort, and a derived sandbox
-mode. An agent that cannot write lowers to `read-only`; other agents lower to
-`workspace-write`. `codex:` fields override derived native values.
-
-Agent descriptions and config paths are registered under
-`/agents/<slug>/description` and `/agents/<slug>/config_file`.
-
-## Native configuration
-
-The compiler reconciles generated skill registrations at `/skills/config` and
-agent registrations at the pointers above. Their semantic hashes are recorded
-in `config_root/.coding-agents-native.json`.
-
-`config_root/patches/codex.yaml` and the optional mode-`0600`
-`config_root/patches.local/codex.yaml` reconcile other named paths in
-`<home>/.codex/config.toml`. TOML comments and unrelated fields are preserved.
-Patch operations cannot replace a generated pointer with conflicting content.
-
-The `codex` patch surface may own selected `/mcp_servers/<name>` paths. The
-compiler supplies no default servers and preserves every unnamed MCP entry.
+Codex ownership is pointer plus semantic hash for registrations and portable
+manifests for files. Unnamed TOML keys and unmanifested siblings remain
+Codex-owned.

@@ -1,4 +1,4 @@
-schema: coding-agents/v3
+schema: coding-agents/v4
 kind: permission-rules
 id: fixture-commands
 name: Fixture commands
@@ -17,3 +17,10 @@ deny:
   - command: fixture-tool
     subcommand: remove
     exact: true
+targets:
+  codex:
+    omit:
+      commands: Codex exec policy cannot represent portable command predicates.
+  cursor:
+    omit:
+      commands: Cursor Desktop has no ask or deny command channel.

@@ -1,83 +1,34 @@
 # Cursor Target Reference
 
-## Compiler outputs
+## Generated surfaces
 
-| Source kind | Generated output |
+| Source | Output |
 | --- | --- |
 | Global | `<home>/.cursor/rules/coding-agents-global.mdc` |
-| Rule | `<home>/.cursor/rules/<source-stem>.mdc` |
-| Skill | `<home>/.cursor/skills/<source-directory>/` |
-| Command | unsupported |
-| Agent | `<home>/.cursor/agents/<source-file>.md` |
-| CLI permissions | named paths in `<home>/.cursor/cli-config.json` |
-| Desktop permissions | named paths in `<home>/.cursor/permissions.json` |
+| Rule | `<home>/.cursor/rules/<stem>.mdc` |
+| Skill | `<home>/.cursor/skills/<directory>/` |
+| Command | no generated surface |
+| Agent | no generated surface |
+| Permissions | owned pointers in `<home>/.cursor/cli-config.json` when portable policy is exact |
 
-Cursor Agent and Cursor Desktop share the ancestor-discovered MDC rule
-channel. The compiler does not generate or depend on a Cursor plugin.
+Cursor has one shared MDC rule delivery path for Desktop and Agent. The global
+rule filename is reserved. Typed rule fields are `description`, `globs`, and
+`always_apply`; a scoped rule must state `always_apply: false`. Typed skill
+fields are `name`, `description`, `paths`, `disable-model-invocation`, and
+`metadata`.
 
-## Global instructions and rules
+Cursor does not receive portable user commands, user agents, or command
+permissions. Sources must acknowledge `omit.command`, `omit.agent`, and
+non-empty command-policy `omit.commands` as applicable. The compiler creates
+no generated shell-command allowlist for this omitted policy.
 
-The global body is emitted as the reserved always-on rule
-`coding-agents-global.mdc`. Canonical rules become MDC files:
+Patches target `cli-config.json`, `permissions.json`, `settings.json`, and
+`mcp.json` through the corresponding `cursor-*` patch names. They must not
+overlap generated pointers; in particular, a Cursor Desktop patch cannot
+contribute to the terminal allowlist. Raw files below
+`target-config/cursor/raw/` mirror below `<home>/.cursor`; those four native
+pointer files are reserved.
 
-- `activation.always: true` lowers to `alwaysApply: true`;
-- `activation.globs` lowers to Cursor `globs`;
-- no activation metadata emits an ancestor-discovered rule with no
-  `alwaysApply` or `globs`.
-
-The output filename `coding-agents-global.mdc` is reserved for the global
-source. The rules root is manifest-owned; unmanifested sibling files survive.
-The writer also retires the legacy plugin only when its prior managed hash
-proves ownership.
-
-## Skills and agents
-
-Skill trees are mirrored and receive Cursor-supported frontmatter. Canonical
-license is omitted because Cursor does not support it; supported `cursor:`
-fields pass through.
-
-Agents preserve their source filenames. Canonical write capability derives the
-native `readonly` flag, and canonical background mode lowers to
-`is_background`. Target-specific values override derived values.
-
-## Native configuration
-
-Canonical command permissions generate separate values for:
-
-- Cursor Agent `/approvalMode`, expressible command and tool allows in
-  `/permissions/allow`, command/tool/secret-path denies in
-  `/permissions/deny`, and `autoAcceptWebSearch` when `websearch` is declared;
-- Cursor Desktop `/approvalMode` and expressible command allows in
-  `/terminalAllowlist`.
-
-Cursor has no ask channel, so portable asks are absent rather than converted
-to denies. Cursor Desktop also has no deny channel. Free-text command rules
-and exact zero-argument rules are omitted because the verified native matcher
-cannot represent them. Leading options expand to both valued and valueless
-token shapes; wrapper guards are emitted around asks and denies where
-possible.
-
-Cursor Agent maps portable `read` and `write` to `Read(**)` and `Write(**)`.
-It does not map `edit` or `webfetch`, whose closest native channels would widen
-the authored decision. The compiler deliberately does not synthesize Desktop
-secret-path or non-shell tool entries when that surface cannot express them.
-
-External patches resolve from `config_root`:
-
-| Patch name | Native target |
-| --- | --- |
-| `cursor-cli-config` | `<home>/.cursor/cli-config.json` |
-| `cursor-permissions` | `<home>/.cursor/permissions.json` |
-| `cursor-settings` | `<home>/.cursor/settings.json` |
-| `cursor-mcp` | `<home>/.cursor/mcp.json` |
-
-Optional same-named files under `patches.local/` must have mode `0600`.
-Generated pointers use native semantic-hash ownership. Patch-only settings and
-MCP pointers own only their exact named paths; unrelated native fields remain
-tool-owned. Compatible Cursor Agent list extensions may add native tool
-entries. Cursor Desktop's generated terminal allowlist is reserved from patch
-contributions.
-
-`coding-agents-cursor-desktop-probe` provides an opt-in macOS capability check.
-It compiles an isolated ancestor rule into a temporary home and inspects only
-the Cursor instance it launches.
+The rules and skills roots use portable manifests. The compiler retires only
+its previously manifested legacy agent/plugin roots and preserves unrelated
+Cursor content.

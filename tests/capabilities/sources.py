@@ -6,7 +6,7 @@ def source_document(
 ) -> str:
     return (
         "---\n"
-        "schema: coding-agents/v3\n"
+        "schema: coding-agents/v4\n"
         f"kind: {kind}\n"
         f"id: {identifier}\n"
         f"name: {name}\n"

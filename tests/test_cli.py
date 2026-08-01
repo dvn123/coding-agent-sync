@@ -77,7 +77,7 @@ def test_empty_xdg_uses_home_fallback(monkeypatch, tmp_path: Path) -> None:
     assert (home / ".config/coding-agents/.coding-agents-native.json").is_file()
 
 
-def test_explicit_roots_and_hidden_base_alias(monkeypatch, tmp_path: Path) -> None:
+def test_explicit_roots(monkeypatch, tmp_path: Path) -> None:
     explicit_home = tmp_path / "explicit-home"
     config_root = copy_config_root(tmp_path / "explicit-config")
     monkeypatch.setenv("HOME", str(tmp_path / "ignored-home"))
@@ -94,14 +94,6 @@ def test_explicit_roots_and_hidden_base_alias(monkeypatch, tmp_path: Path) -> No
     assert not (tmp_path / "ignored-xdg").exists()
     assert "--config-root" in runner.invoke(main, ["--help"]).output
     assert "--base" not in runner.invoke(main, ["--help"]).output
-
-    alias_home = tmp_path / "alias-home"
-    alias = runner.invoke(
-        main,
-        ["--base", str(config_root), "--home", str(alias_home)],
-    )
-    assert alias.exit_code == 0
-    assert (alias_home / ".codex/AGENTS.md").is_file()
 
 
 def test_local_patch_mode_override_and_check_drift(tmp_path: Path) -> None:
@@ -140,7 +132,7 @@ def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
     home = tmp_path / "home"
     config_root = copy_config_root(tmp_path / "config")
     source = config_root / "rules/always.md"
-    source.write_text(source.read_text().replace("schema: coding-agents/v3\n", ""))
+    source.write_text(source.read_text().replace("schema: coding-agents/v4\n", ""))
 
     result = CliRunner().invoke(
         main,
@@ -149,6 +141,6 @@ def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "Error: invalid coding-agent source(s)" in result.output
-    assert "missing or invalid schema `coding-agents/v3`" in result.output
+    assert "missing or invalid schema `coding-agents/v4`" in result.output
     assert "Traceback" not in result.output
     assert not home.exists()
