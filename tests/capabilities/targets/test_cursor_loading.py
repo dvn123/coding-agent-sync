@@ -191,7 +191,7 @@ EXPECTATIONS.append(
 )
 
 
-@pytest.mark.capability_case("cursor.loading")
+@pytest.mark.capability_case("cursor-agent.loading")
 @pytest.mark.capability_live
 @pytest.mark.parametrize(
     ("observation", "channel", "sentinel", "present"),

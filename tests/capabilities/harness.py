@@ -78,6 +78,17 @@ def run_probe[T, **P](
 
 
 def version(target: Target) -> str:
+    if target.name == "cursor-desktop":
+        from coding_agents_sync.probes.cursor_desktop import (
+            CURSOR_APP,
+            ProbeUnavailable,
+            _cursor_version,
+        )
+
+        try:
+            return _cursor_version(CURSOR_APP)
+        except ProbeUnavailable:
+            return ""
     executable = shutil.which(target.command)
     if not executable:
         return ""
@@ -95,6 +106,8 @@ def version(target: Target) -> str:
 
 
 def update(target: Target) -> tuple[bool, str]:
+    if target.updater is None:
+        return False, "target is not updated by the harness"
     if not (executable := shutil.which(target.updater[0])):
         return False, f"{target.updater[0]} updater is unavailable"
     try:

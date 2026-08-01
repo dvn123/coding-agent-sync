@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from pytest_httpserver import HTTPServer
 
 from capabilities.harness import (
     Paths,
@@ -34,6 +35,14 @@ DENIED_SKILL = "blackbox-denied-probe"
 DENIED_BODY = "OPEN_CODE_DENIED_SKILL_BODY_2d95a8"
 COMMAND_NAME = "blackbox-command-probe"
 COMMAND_BODY = "OPEN_CODE_COMMAND_BODY_63a70e"
+CONFIG_COMMAND_NAME = "blackbox-config-command-probe"
+CONFIG_COMMAND_BODY = "OPEN_CODE_CONFIG_COMMAND_BODY_5f43a1"
+PATH_SKILL = "blackbox-path-skill-probe"
+PATH_SKILL_DESCRIPTION = "Discover the explicit skill-path marker."
+PATH_SKILL_BODY = "OPEN_CODE_PATH_SKILL_BODY_0c974e"
+URL_SKILL = "blackbox-url-skill-probe"
+URL_SKILL_DESCRIPTION = "Discover the loopback URL skill marker."
+URL_SKILL_BODY = "OPEN_CODE_URL_SKILL_BODY_9b275d"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +74,36 @@ def write_fixtures(config_home: Path) -> None:
     )
 
 
+def write_path_skill(root: Path) -> None:
+    skill = root / PATH_SKILL
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\n"
+        f"name: {PATH_SKILL}\n"
+        f"description: {PATH_SKILL_DESCRIPTION}\n"
+        "---\n"
+        f"{PATH_SKILL_BODY}\n"
+    )
+
+
+def remote_skill_server(request: pytest.FixtureRequest) -> HTTPServer:
+    server = HTTPServer("127.0.0.1", 0, threaded=True)
+    server.expect_request("/skills/index.json").respond_with_json(
+        {"skills": [{"name": URL_SKILL, "version": "1", "files": ["SKILL.md"]}]}
+    )
+    server.expect_request(f"/skills/{URL_SKILL}/SKILL.md").respond_with_data(
+        "---\n"
+        f"name: {URL_SKILL}\n"
+        f"description: {URL_SKILL_DESCRIPTION}\n"
+        "---\n"
+        f"{URL_SKILL_BODY}\n",
+        content_type="text/markdown",
+    )
+    server.start()
+    request.addfinalizer(server.stop)
+    return server
+
+
 @pytest.fixture(scope="module")
 def runtime(
     request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
@@ -86,17 +125,30 @@ def runtime(
         enabled=False,
     )
     stub = recorded_server(request, state.respond)
+    remote = remote_skill_server(request)
     config = paths.root / "opencode.json"
-    config.write_text(
-        json.dumps(
-            opencode_config(
-                stub.base_url,
-                "loading-probe",
-                "loading",
-                {"skill": {"*": "allow", DENIED_SKILL: "deny"}},
-            )
-        )
+    path_skills = paths.root / "path-skills"
+    write_path_skill(path_skills)
+    probe_config = opencode_config(
+        stub.base_url,
+        "loading-probe",
+        "loading",
+        {"skill": {"*": "allow", DENIED_SKILL: "deny"}},
     )
+    probe_config["command"] = {
+        CONFIG_COMMAND_NAME: {
+            "template": f"{CONFIG_COMMAND_BODY} all=[$ARGUMENTS] first=[$1]",
+            "description": "config command fixture",
+            "agent": "build",
+            "model": "test/loading-probe",
+            "subtask": False,
+        }
+    }
+    probe_config["skills"] = {
+        "paths": [str(path_skills)],
+        "urls": [remote.url_for("/skills/")],
+    }
+    config.write_text(json.dumps(probe_config))
     write_fixtures(paths.config)
     env = environment(
         paths,
@@ -147,14 +199,14 @@ def model_case(
     runtime: Runtime,
     requested_skill: str | None = None,
     *,
-    command: bool = False,
+    command: str | None = None,
 ) -> tuple[tuple[OpenCodeRequest, ...], tuple[OpenCodeEvent, ...]]:
     runtime.state.enabled = requested_skill is not None
     runtime.state.arguments = {"name": requested_skill}
     runtime.stub.requests.clear()
     args = ["run"]
     if command:
-        args += ["--command", COMMAND_NAME, "alpha"]
+        args += ["--command", command, "alpha"]
     else:
         args.append("Call the skill tool exactly as instructed by the model.")
     args += [
@@ -184,31 +236,45 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             timeout=30,
         )
         catalog = decode_skill_catalog(process.stdout)
+        text = catalog.text("skill_catalog")
         return CheckResult(
             {
-                "catalog-name": SKILL_NAME in catalog.text("skill_catalog"),
-                "catalog-description": SKILL_DESCRIPTION
-                in catalog.text("skill_catalog"),
+                "catalog-name": SKILL_NAME in text,
+                "catalog-description": SKILL_DESCRIPTION in text,
+                "path-skill-catalog": all(
+                    value in text for value in (PATH_SKILL, PATH_SKILL_DESCRIPTION)
+                ),
+                "url-skill-catalog": all(
+                    value in text for value in (URL_SKILL, URL_SKILL_DESCRIPTION)
+                ),
             },
-            catalog.text("skill_catalog"),
+            text,
         )
-    if name == "command":
-        requests, _ = model_case(runtime, command=True)
+    if name in {"command", "config-command"}:
+        command = COMMAND_NAME if name == "command" else CONFIG_COMMAND_NAME
+        body = COMMAND_BODY if name == "command" else CONFIG_COMMAND_BODY
+        requests, _ = model_case(runtime, command=command)
         command_user = requests[0].text("user")
         return CheckResult(
             {
-                "command-body": COMMAND_BODY in command_user,
-                "command-all-arguments": "all-arguments=[alpha]" in command_user,
-                "command-first-argument": "first-argument=[alpha]" in command_user,
-                "command-no-placeholder": all(
+                f"{name}-body": body in command_user,
+                f"{name}-all-arguments": "all-arguments=[alpha]" in command_user
+                or "all=[alpha]" in command_user,
+                f"{name}-first-argument": "first-argument=[alpha]" in command_user
+                or "first=[alpha]" in command_user,
+                f"{name}-no-placeholder": all(
                     placeholder not in command_user
                     for placeholder in ("$ARGUMENTS", "$1")
                 ),
             },
             command_user,
         )
-
-    skill = SKILL_NAME if name == "allowed" else DENIED_SKILL
+    skill = {
+        "allowed": SKILL_NAME,
+        "denied": DENIED_SKILL,
+        "path-skill": PATH_SKILL,
+        "url-skill": URL_SKILL,
+    }[name]
     requests, events = model_case(runtime, skill)
     event = find_event(events, skill)
     initial = requests[0]
@@ -234,6 +300,15 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             ),
         }
     )
+    if name in {"path-skill", "url-skill"}:
+        body = PATH_SKILL_BODY if name == "path-skill" else URL_SKILL_BODY
+        checks = {
+            f"{name}-status": event is not None and event.status == "completed",
+            f"{name}-body-event": event is not None and body in str(event.output),
+            f"{name}-body-model": any(
+                body in request.text("tool") for request in requests[1:]
+            ),
+        }
     return CheckResult(checks, str(event))
 
 
@@ -267,4 +342,68 @@ EXPECTATIONS = (
     scope="module",
 )
 def test_opencode_loading(observation: CheckResult, check: str) -> None:
+    assert observation.checks[check], observation.detail
+
+
+@pytest.mark.capability_case("opencode.skills-catalog")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(
+    ("observation", "check"),
+    tuple(
+        pytest.param("catalog", check, id=check)
+        for check in ("catalog-name", "catalog-description")
+    ),
+    indirect=("observation",),
+    scope="module",
+)
+def test_opencode_skill_catalog(observation: CheckResult, check: str) -> None:
+    assert observation.checks[check], observation.detail
+
+
+@pytest.mark.capability_case("opencode.command-config")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(
+    ("observation", "check"),
+    tuple(
+        pytest.param("config-command", f"config-command-{suffix}", id=suffix)
+        for suffix in ("body", "all-arguments", "first-argument", "no-placeholder")
+    ),
+    indirect=("observation",),
+    scope="module",
+)
+def test_opencode_config_command(observation: CheckResult, check: str) -> None:
+    assert observation.checks[check], observation.detail
+
+
+@pytest.mark.capability_case("opencode.skill-paths")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(
+    ("observation", "check"),
+    (
+        pytest.param("catalog", "path-skill-catalog"),
+        pytest.param("path-skill", "path-skill-status"),
+        pytest.param("path-skill", "path-skill-body-event"),
+        pytest.param("path-skill", "path-skill-body-model"),
+    ),
+    indirect=("observation",),
+    scope="module",
+)
+def test_opencode_skill_paths(observation: CheckResult, check: str) -> None:
+    assert observation.checks[check], observation.detail
+
+
+@pytest.mark.capability_case("opencode.skill-urls")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(
+    ("observation", "check"),
+    (
+        pytest.param("catalog", "url-skill-catalog"),
+        pytest.param("url-skill", "url-skill-status"),
+        pytest.param("url-skill", "url-skill-body-event"),
+        pytest.param("url-skill", "url-skill-body-model"),
+    ),
+    indirect=("observation",),
+    scope="module",
+)
+def test_opencode_skill_urls(observation: CheckResult, check: str) -> None:
     assert observation.checks[check], observation.detail

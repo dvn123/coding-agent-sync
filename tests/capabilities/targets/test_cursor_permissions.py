@@ -324,7 +324,7 @@ def observe(runtime: Runtime, name: str) -> PermissionResult:
 observation = cached_scenario_fixture(observe)
 
 
-@pytest.mark.capability_case("cursor.permissions")
+@pytest.mark.capability_case("cursor-agent.permissions")
 @pytest.mark.capability_live
 @pytest.mark.parametrize(
     ("observation", "expected_outcome", "expected_execution"),

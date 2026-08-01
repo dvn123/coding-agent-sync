@@ -62,7 +62,14 @@ def runtime() -> tuple[str, Seatbelt]:
 
 
 def command(
-    executable: str, base_url: str, model: str, prompt: str, *, force: bool = False
+    executable: str,
+    base_url: str,
+    model: str,
+    prompt: str,
+    *,
+    force: bool = False,
+    disable_project_configs: bool = True,
+    approve_mcps: bool = False,
 ) -> tuple[str, ...]:
     return (
         executable,
@@ -76,12 +83,13 @@ def command(
         "stream-json",
         "--model",
         model,
-        "--disable-project-configs",
+        *(("--disable-project-configs",) if disable_project_configs else ()),
         "--disable-indexing",
         "--disable-codebase-ref",
         "--single-turn",
         "--trust",
         *(("--force",) if force else ()),
+        *(("--approve-mcps",) if approve_mcps else ()),
         prompt,
     )
 

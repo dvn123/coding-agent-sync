@@ -14,7 +14,7 @@ from typing import Annotated, Any, Never
 
 import typer
 
-from .sync import run_sync
+from ..sync import run_sync
 
 PROBE_SCHEMA = "coding-agents/cursor-desktop-probe/v2"
 PROBE_ROOT = Path("/tmp/coding-agents-cursor")
@@ -22,6 +22,8 @@ CURSOR_APP = Path("/Applications/Cursor.app")
 CURSOR_BUNDLE_ID = "com.todesktop.230313mzl4w4u92"
 RETIRED_RULES_PLUGIN = Path(".cursor/plugins/local/coding-agents-rules")
 RUN_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+RULE_SENTINEL_PATTERN = re.compile(r"CURSOR_DESKTOP_RULE_[0-9A-F]{32}")
+COMPILED_RULE_NAME = "cursor-desktop-capability-probe.mdc"
 LOCAL_RULE_EVENT = re.compile(
     r'LocalCursorRulesService load completed \{[^\n]*"ruleCount":(\d+)(?:,|\})'
 )
@@ -29,6 +31,16 @@ PLUGIN_RULE_EVENT = re.compile(
     r"CursorPluginsAgentSkillsService load completed "
     r'\{[^\n]*"ruleCount":(\d+)(?:,|\})'
 )
+# Cursor has no scripting definition, so it exposes no stable window document path
+# to bind to the workspace. Pair the owned CLI process group with the narrowest
+# reliable app-level guard: refuse to quit unless the probe still owns the only
+# Cursor window.
+OWNED_CURSOR_QUIT_SCRIPT = f'''tell application id "{CURSOR_BUNDLE_ID}"
+if (count of windows) is not 1 then
+error "Cursor ownership changed; refusing app-wide quit"
+end if
+quit
+end tell'''
 
 
 class ProbeStatus(StrEnum):
@@ -71,7 +83,7 @@ class ProbeState:
 
     @property
     def compiled_rule(self) -> Path:
-        return self.home / ".cursor" / "rules" / "cursor-desktop-capability-probe.mdc"
+        return self.home / ".cursor" / "rules" / COMPILED_RULE_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +301,13 @@ def inspect_rule_loading(
             local_counts = [int(count) for count in LOCAL_RULE_EVENT.findall(log)]
             if workspace_marker not in log or 1 not in local_counts:
                 continue
+            sentinels = set(RULE_SENTINEL_PATTERN.findall(log))
+            rule_path_logged = COMPILED_RULE_NAME in log
+            identity_logged = bool(sentinels or rule_path_logged)
+            if identity_logged and not (
+                state.rule_sentinel in sentinels or str(state.compiled_rule) in log
+            ):
+                continue
             plugin_counts = [int(count) for count in PLUGIN_RULE_EVENT.findall(log)]
             plugin_count = plugin_counts[-1] if plugin_counts else None
             plugin_detail = (
@@ -296,12 +315,20 @@ def inspect_rule_loading(
                 if plugin_count is not None
                 else ""
             )
+            loading_detail = (
+                "Cursor Desktop loader diagnostics logged the owned rule identity "
+                "and loaded"
+                if identity_logged
+                else "Cursor Desktop loader diagnostics do not expose rule path or "
+                "content; "
+                "the owned workspace loaded"
+            )
             return ProbeResult(
                 ProbeStatus.LOADED,
-                "Cursor Desktop loaded one ancestor rule and the retired "
+                f"{loading_detail} one ancestor rule and the retired "
                 f"coding-agents-rules plugin is absent{plugin_detail}",
                 state.cursor_version,
-                1 + len(local_counts) + len(plugin_counts),
+                1 + len(local_counts) + len(plugin_counts) + int(identity_logged),
                 local_rule_count=1,
                 plugin_rule_count=plugin_count,
                 generated_plugin_present=False,
@@ -336,7 +363,16 @@ def _quit_owned_cursor(state: ProbeState) -> None:
             return
         try:
             inspection = subprocess.run(
-                ("ps", "-p", str(state.launcher_pid), "-o", "command="),
+                (
+                    "ps",
+                    "-ww",
+                    "-p",
+                    str(state.launcher_pid),
+                    "-o",
+                    "pgid=",
+                    "-o",
+                    "command=",
+                ),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -345,14 +381,21 @@ def _quit_owned_cursor(state: ProbeState) -> None:
             raise ProbeError(f"cannot inspect owned Cursor process: {error}") from error
         if inspection.returncode != 0:
             return
-        if str(state.workspace) not in inspection.stdout:
+        try:
+            process_group, command = inspection.stdout.strip().split(maxsplit=1)
+        except ValueError as error:
+            raise ProbeError("cannot verify owned Cursor process group") from error
+        if (
+            process_group != str(state.launcher_pid)
+            or str(state.workspace) not in command
+        ):
             raise ProbeError("refusing to quit a Cursor process not owned by probe")
         try:
             subprocess.run(
                 (
                     "/usr/bin/osascript",
                     "-e",
-                    f'tell application id "{CURSOR_BUNDLE_ID}" to quit',
+                    OWNED_CURSOR_QUIT_SCRIPT,
                 ),
                 check=True,
                 capture_output=True,
@@ -367,7 +410,7 @@ def _quit_owned_cursor(state: ProbeState) -> None:
                 if exited_pid:
                     return
                 try:
-                    os.kill(state.launcher_pid, 0)
+                    os.killpg(state.launcher_pid, 0)
                 except ProcessLookupError:
                     return
                 time.sleep(0.1)
@@ -375,6 +418,9 @@ def _quit_owned_cursor(state: ProbeState) -> None:
             return
         except OSError as error:
             raise ProbeError(f"cannot quit owned Cursor process: {error}") from error
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr.strip() if error.stderr else str(error)
+            raise ProbeError(f"cannot quit owned Cursor process: {detail}") from error
         except subprocess.SubprocessError as error:
             raise ProbeError(
                 f"cannot quit owned Cursor process cleanly: {error}"

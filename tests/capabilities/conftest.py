@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,7 +8,8 @@ import pytest
 
 from capabilities.harness import resolve_cursor_local, update, version
 from capabilities.model import Case, Comparison, Observation, Support
-from capabilities.registry import CASES, TARGETS, validate_registry
+from capabilities.registry import CASES, CASES_BY_ID, TARGETS, validate_registry
+from capabilities.report import capability_report, write_report
 
 
 @dataclass(slots=True)
@@ -39,8 +39,8 @@ class State:
             )
         elif failures:
             actual, detail = (
-                Support.UNSUPPORTED,
-                f"{len(failures)} of {len(calls)} assertions failed",
+                Support.CONTRADICTED,
+                f"{len(failures)} of {len(calls)} checks failed",
             )
         elif skipped:
             actual = Support.UNAVAILABLE
@@ -56,13 +56,22 @@ class State:
             )
         else:
             actual, detail = (
-                Support.SUPPORTED,
-                f"{len(calls)} native assertions passed",
+                case.expected,
+                f"{len(calls)} checks passed",
             )
-        return Observation(case, actual, detail, self.versions.get(case.target, ""))
+        return Observation(
+            case, actual, detail, self.versions.get(case.target, ""), len(calls)
+        )
 
 
 state: State | None = None
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool:
+    targets = Path(__file__).parent / "targets"
+    return not config.getoption("--capabilities-live") and (
+        collection_path == targets or collection_path.parent == targets
+    )
 
 
 def requested_case_ids(arguments: Iterable[str], cwd: Path) -> set[str]:
@@ -99,6 +108,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="run installed coding-agent capability probes",
     )
     group.addoption(
+        "--capabilities-desktop",
+        action="store_true",
+        help="allow the Cursor Desktop behavioral capability probe to launch the GUI",
+    )
+    group.addoption(
+        "--capability-report",
+        metavar="PATH",
+        type=Path,
+        help="write deterministic JSON capability evidence to PATH",
+    )
+    group.addoption(
         "--target",
         action="append",
         choices=sorted(TARGETS),
@@ -111,14 +131,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="run one capability case; repeat to select multiple",
     )
     group.addoption(
+        "--update-targets",
+        action="store_true",
+        help="update selected targets before probing them",
+    )
+    group.addoption(
+        "--bootstrap-cursor-runtime",
+        action="store_true",
+        help="download a matching Cursor local runtime into the managed cache",
+    )
+    group.addoption(
         "--skip-update",
         action="store_true",
-        help="test installed versions without running target updaters",
+        help="deprecated no-op; target updates require --update-targets",
     )
 
 
 def pytest_configure(config: pytest.Config) -> None:
     global state
+    if config.getoption("update_targets") and config.getoption("skip_update"):
+        raise pytest.UsageError("--update-targets and --skip-update cannot be combined")
     if config.getoption("--capabilities-live"):
         validate_registry()
         state = State()
@@ -130,9 +162,8 @@ def line(config: pytest.Config, message: str) -> None:
 
 
 def selected_case_ids(config: pytest.Config) -> set[str]:
-    known = {case.id for case in CASES}
     requested = set(config.getoption("capability_cases") or ())
-    if unknown := requested - known:
+    if unknown := requested - CASES_BY_ID.keys():
         raise pytest.UsageError(f"unknown capability cases: {sorted(unknown)}")
     targets = set(config.getoption("target") or ())
     return {
@@ -150,22 +181,26 @@ def prepare_targets(config: pytest.Config, case_ids: set[str]) -> None:
         if name not in selected_targets:
             continue
         before = version(target)
-        if not config.getoption("skip_update"):
+        if config.getoption("update_targets"):
             ok, detail = update(target)
-            line(config, f"{'ok' if ok else 'warn'}  {name} update: {detail}")
+            if not ok:
+                raise pytest.UsageError(f"{name} update failed: {detail}")
+            line(config, f"ok  {name} update: {detail}")
         observed = version(target)
+        if config.getoption("update_targets") and not observed:
+            raise pytest.UsageError(
+                f"{name} update completed but no installed version was observed"
+            )
         state.versions[name] = observed
         line(
             config,
             f"info  {name} version: {before or 'missing'} -> {observed or 'missing'}",
         )
-    if "cursor" in selected_targets and state.versions.get("cursor"):
+    if "cursor-agent" in selected_targets and state.versions.get("cursor-agent"):
         local, detail = resolve_cursor_local(
-            allow_download=not config.getoption("skip_update")
+            allow_download=bool(config.getoption("bootstrap_cursor_runtime"))
         )
         line(config, f"{'ok' if local else 'warn'}  cursor local runtime: {detail}")
-        if local:
-            os.environ["CURSOR_AGENT_LOCAL"] = str(local)
 
 
 def pytest_collection_modifyitems(
@@ -177,8 +212,14 @@ def pytest_collection_modifyitems(
             if item.get_closest_marker("capability_live"):
                 item.add_marker(skip)
         return
-    known = {case.id for case in CASES}
     selected = selected_case_ids(config)
+    desktop_rules = "cursor-desktop.rules"
+    if desktop_rules in selected and not config.getoption("--capabilities-desktop"):
+        if desktop_rules in set(config.getoption("capability_cases") or ()):
+            raise pytest.UsageError(
+                "--case cursor-desktop.rules requires --capabilities-desktop"
+            )
+        selected.remove(desktop_rules)
     collected = set()
     deselected = []
     retained = []
@@ -188,7 +229,7 @@ def pytest_collection_modifyitems(
             continue
         marker = item.get_closest_marker("capability_case")
         case_id = str(marker.args[0]) if marker and marker.args else ""
-        if case_id not in known:
+        if case_id not in CASES_BY_ID:
             raise pytest.UsageError(
                 f"unknown capability case: {case_id or item.nodeid}"
             )
@@ -208,6 +249,8 @@ def pytest_collection_modifyitems(
     )
     if not collected:
         raise pytest.UsageError("no live capability cases selected")
+    if config.option.collectonly:
+        return
     prepare_targets(config, collected)
 
 
@@ -219,28 +262,42 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 def pytest_sessionfinish(session: pytest.Session) -> None:
     if state is None:
         return
-    observations = [
-        observation
+    observations = {
+        case.id: observation
         for case in CASES
         if (observation := state.observation(case)) is not None
-    ]
-    for observation in observations:
-        line(
-            session.config,
-            f"{observation.comparison.value:10} {observation.case.id}: "
-            f"{observation.actual.value} ({observation.detail})",
-        )
-    failures = [
-        item for item in observations if item.comparison is Comparison.REGRESSION
-    ]
-    gains = [
-        item for item in observations if item.comparison is Comparison.CAPABILITY_GAIN
-    ]
-    unavailable = [item for item in observations if item.actual is Support.UNAVAILABLE]
+    }
+    report = capability_report(observations, state.versions)
     line(
         session.config,
-        f"summary  {len(observations)} cases, {len(failures)} failures, "
-        f"{len(gains)} gains, {len(unavailable)} unavailable",
+        f"{'target':15} {'surface':38} {'actual':13} {'comparison':15} "
+        f"{'checks':6} {'management':11} {'evidence-kind':16} detail",
+    )
+    for surface in report["surfaces"]:
+        line(
+            session.config,
+            f"{surface['target']:15} {surface['id']:38} "
+            f"{surface['actual']:13} {surface['comparison']:15} "
+            f"{surface['check_count']:6} "
+            f"{surface['management']:11} "
+            f"{surface['evidence_kind'] or '-':16} {surface['detail']}",
+        )
+    if path := session.config.getoption("capability_report"):
+        write_report(path, report)
+        line(session.config, f"report   {path}")
+    observed = list(observations.values())
+    failures = [item for item in observed if item.comparison is Comparison.REGRESSION]
+    gains = [item for item in observed if item.comparison is Comparison.CAPABILITY_GAIN]
+    unavailable = [item for item in observed if item.actual is Support.UNAVAILABLE]
+    unprobed = sum(
+        surface["comparison"] is Comparison.NOT_PROBED for surface in report["surfaces"]
+    )
+    line(
+        session.config,
+        f"summary  {len(observed)} observed of {len(CASES)} cases, "
+        f"{len(failures)} failures, "
+        f"{len(gains)} gains, {len(unavailable)} unavailable, "
+        f"{unprobed} surfaces not probed",
     )
     if failures:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED

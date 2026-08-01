@@ -15,9 +15,9 @@ def supported[T, **P](
 ) -> T:
     result = function(*args, **kwargs)
     if isinstance(result, CommandResult) and result.returncode:
-        pytest.skip(
-            f"unavailable: installed OpenCode failed {operation}: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+        pytest.fail(
+            f"installed OpenCode failed {operation}\n"
+            f"stdout={result.stdout.strip()}\nstderr={result.stderr.strip()}"
         )
     return result
 
@@ -67,6 +67,7 @@ def environment(
             "XDG_STATE_HOME": str(paths.state),
             "OPENCODE_CONFIG": str(config_path),
             "OPENCODE_DISABLE_AUTOUPDATE": "true",
+            "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
             "BUN_CONFIG_REGISTRY": "http://127.0.0.1:9",
             "NPM_CONFIG_REGISTRY": "http://127.0.0.1:9",
             "npm_config_registry": "http://127.0.0.1:9",

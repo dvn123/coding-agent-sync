@@ -107,6 +107,17 @@ else:
     )
 
 
+def _drain_pty(master: int, output: bytearray) -> None:
+    while readable := select.select([master], [], [], 0)[0]:
+        try:
+            if chunk := os.read(readable[0], 65_536):
+                output.extend(chunk)
+            else:
+                return
+        except OSError:
+            return
+
+
 def run_pty(
     command: tuple[str, ...],
     *,
@@ -138,12 +149,14 @@ def run_pty(
                     output.extend(os.read(master, 65_536))
             if complete():
                 completed = True
-                os.write(master, b"\x03\x03")
+                with suppress(OSError):
+                    os.write(master, b"\x03\x03")
                 break
         timed_out = (
             not completed and child.poll() is None and time.monotonic() >= deadline
         )
         _terminate_group(child)
+        _drain_pty(master, output)
         if timed_out:
             raise CommandTimeout(
                 f"{command[0]} did not finish within {timeout:g} seconds"
