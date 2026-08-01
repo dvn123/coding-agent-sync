@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import json
-import re
-from functools import cache
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
-import coding_agents_sync.cursor_desktop_probe as probe
-from coding_agents_sync.cursor_desktop_probe import (
+import coding_agents_sync.probes.cursor_desktop as probe
+from coding_agents_sync.probes.cursor_desktop import (
     PROBE_SCHEMA,
     ProbeError,
     ProbeState,
@@ -25,29 +23,13 @@ from coding_agents_sync.cursor_desktop_probe import (
     verify_probe,
 )
 
-DESKTOP_RESOURCES = probe.CURSOR_APP / "Contents/Resources/app"
-DESKTOP_SCHEMA = (
-    DESKTOP_RESOURCES / "extensions/cursor-always-local/schemas/permissions.schema.json"
-)
-DESKTOP_BUNDLE = DESKTOP_RESOURCES / "out/vs/workbench/workbench.desktop.main.js"
-AGENT_EXEC_BUNDLE = DESKTOP_RESOURCES / "extensions/cursor-agent-exec/dist/main.js"
-
-installed = pytest.mark.skipif(
-    not DESKTOP_BUNDLE.is_file(), reason="Cursor Desktop is not installed"
-)
-
-
-@cache
-def desktop_bundle() -> str:
-    return DESKTOP_BUNDLE.read_text(errors="replace")
-
 
 def state_at(path: Path) -> ProbeState:
     return ProbeState(
         PROBE_SCHEMA,
         path.name,
         str(path),
-        "CURSOR_DESKTOP_RULE_A",
+        f"CURSOR_DESKTOP_RULE_{path.name.upper()}",
         "3.13.10",
     )
 
@@ -59,12 +41,14 @@ def write_agent_log(
     *,
     filename: str = "Cursor Agent Exec.log",
     root: Path | None = None,
+    rule_identity: str | None = None,
 ) -> Path:
     root = root or state.path / "logs"
     log = root / "run/window/exthost" / filename
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text(
-        "cursor_agent_exec.startup.workspace_paths "
+        (f"{rule_identity}\n" if rule_identity else "")
+        + "cursor_agent_exec.startup.workspace_paths "
         f'{{"workspacePathCount":1,"workspacePaths":["{state.workspace}"]}}\n'
         "LocalCursorRulesService load completed "
         f'{{"durationMs":12,"ruleCount":{local_rule_count}}}\n'
@@ -214,6 +198,32 @@ def test_inspector_requires_one_local_rule_and_ignores_unrelated_plugin_count(
     assert result.local_rule_count == 1
     assert result.plugin_rule_count == plugin_rule_count
     assert result.generated_plugin_present is False
+    assert "do not expose rule path or content" in result.detail
+
+
+@pytest.mark.parametrize("identity", ["sentinel", "path"])
+def test_inspector_matches_owned_rule_identity_when_logged(
+    identity: str, tmp_path: Path
+) -> None:
+    state = state_at(tmp_path / ("a" * 32))
+    marker = state.rule_sentinel if identity == "sentinel" else str(state.compiled_rule)
+    logs = write_agent_log(state, 1, 0, rule_identity=marker)
+
+    result = inspect_rule_loading(state, logs_root=logs)
+
+    assert result
+    assert result.matching_log_count == 4
+    assert "logged the owned rule identity" in result.detail
+
+
+def test_inspector_rejects_foreign_rule_identity_in_owned_workspace(
+    tmp_path: Path,
+) -> None:
+    state = state_at(tmp_path / ("a" * 32))
+    foreign = state_at(tmp_path / ("b" * 32))
+    logs = write_agent_log(state, 1, 0, rule_identity=foreign.rule_sentinel)
+
+    assert inspect_rule_loading(state, logs_root=logs) is None
 
 
 def test_inspector_reads_timestamped_cursor_agent_log(tmp_path: Path) -> None:
@@ -307,7 +317,7 @@ def test_quit_refuses_process_without_owned_arguments(
         probe.subprocess,
         "run",
         lambda *_args, **_kwargs: probe.subprocess.CompletedProcess(
-            (), 0, stdout="/Applications/Cursor.app/Contents/MacOS/Cursor"
+            (), 0, stdout="123 /Applications/Cursor.app/Contents/MacOS/Cursor"
         ),
     )
 
@@ -327,7 +337,7 @@ def test_quit_uses_normal_application_shutdown_and_waits_for_exit(
         command: tuple[str, ...], **_kwargs: Any
     ) -> probe.subprocess.CompletedProcess[str]:
         commands.append(command)
-        stdout = f"Cursor {state.workspace}" if command[0] == "ps" else ""
+        stdout = f"123 Cursor {state.workspace}" if command[0] == "ps" else ""
         return probe.subprocess.CompletedProcess(command, 0, stdout=stdout)
 
     monkeypatch.setattr(probe.subprocess, "run", run)
@@ -337,19 +347,58 @@ def test_quit_uses_normal_application_shutdown_and_waits_for_exit(
         if isinstance(result := next(attempts), Exception):
             raise result
 
-    monkeypatch.setattr(probe.os, "kill", inspect_process)
+    monkeypatch.setattr(probe.os, "killpg", inspect_process)
     monkeypatch.setattr(probe.time, "sleep", lambda _seconds: None)
 
     _quit_owned_cursor(state)
 
     assert commands == [
-        ("ps", "-p", "123", "-o", "command="),
+        ("ps", "-ww", "-p", "123", "-o", "pgid=", "-o", "command="),
         (
             "/usr/bin/osascript",
             "-e",
-            'tell application id "com.todesktop.230313mzl4w4u92" to quit',
+            probe.OWNED_CURSOR_QUIT_SCRIPT,
         ),
     ]
+
+
+def test_quit_fails_safe_when_another_cursor_window_appears(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state = ProbeState(
+        **{**probe.asdict(state_at(tmp_path / ("a" * 32))), "launcher_pid": 123}
+    )
+    commands: list[tuple[str, ...]] = []
+
+    def run(
+        command: tuple[str, ...], **_kwargs: Any
+    ) -> probe.subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[0] == "ps":
+            return probe.subprocess.CompletedProcess(
+                command, 0, stdout=f"123 Cursor {state.workspace}"
+            )
+        raise probe.subprocess.CalledProcessError(
+            1,
+            command,
+            stderr="Cursor ownership changed; refusing app-wide quit",
+        )
+
+    monkeypatch.setattr(probe.subprocess, "run", run)
+    monkeypatch.setattr(
+        probe.os,
+        "killpg",
+        lambda *_args: pytest.fail("owned process group should remain untouched"),
+    )
+
+    with pytest.raises(ProbeError, match="ownership changed"):
+        _quit_owned_cursor(state)
+
+    assert commands[-1] == (
+        "/usr/bin/osascript",
+        "-e",
+        probe.OWNED_CURSOR_QUIT_SCRIPT,
+    )
 
 
 def test_load_rejects_probe_state_ownership_mismatch(tmp_path: Path) -> None:
@@ -361,91 +410,3 @@ def test_load_rejects_probe_state_ownership_mismatch(tmp_path: Path) -> None:
 
     with pytest.raises(ProbeError, match="ownership mismatch"):
         load_probe(run_id, root=tmp_path)
-
-
-# Desktop is a GUI, so the assertions below read the installed application
-# bundle. They prove which `permissions.json` keys Desktop parses and the
-# values it accepts, not how it executes a command.
-
-
-@installed
-def test_desktop_schema_lists_the_permission_keys_and_approval_modes() -> None:
-    properties = json.loads(DESKTOP_SCHEMA.read_text())["properties"]
-
-    assert properties.keys() == {
-        "mcpAllowlist",
-        "terminalAllowlist",
-        "approvalMode",
-        "autoRun",
-        "autoReview",
-    }
-    assert set(properties["approvalMode"]["enum"]) == {
-        "allowlist",
-        "unrestricted",
-        "manual",
-    }
-
-
-@installed
-def test_desktop_parses_the_schema_keys_as_four_channels() -> None:
-    bundle = desktop_bundle()
-
-    for pattern in (
-        r"mcpAllowlist:Array\.isArray\([\w$]+\.mcpAllowlist\)",
-        r"terminalAllowlist:Array\.isArray\([\w$]+\.terminalAllowlist\)",
-        r"approvalMode:[\w$]+\([\w$]+\.approvalMode\)",
-        r"([\w$]+)\.autoReview\?\?\1\.autoRun",
-        r'([\w$]+)==="allowlist"\|\|\1==="unrestricted"\|\|\1==="manual"',
-        r"allowInstructions:[\w$]+\([\w$]+\.allow_instructions\),"
-        r"blockInstructions:[\w$]+\([\w$]+\.block_instructions\)",
-    ):
-        assert re.search(pattern, bundle), pattern
-
-
-@installed
-def test_desktop_lets_the_permission_file_approval_mode_decide_auto_run() -> None:
-    bundle = desktop_bundle()
-
-    assert re.search(
-        r'case"unrestricted":case"allowlist":return!0;case"manual":return!1', bundle
-    )
-    assert re.search(
-        r'case"unrestricted":return!0;case"allowlist":case"manual":return!1', bundle
-    )
-    assert re.search(
-        r"canAddToAllowlistFromIde\([\w$]+\)\{return [\w$]+\(\)\.isAdminControlled\|\|"
-        r"this\._hasAdminConfiguredPermissionsFilePaths\|\|"
-        r"this\._permissionsFileApprovalMode!==void 0\?!1:",
-        bundle,
-    )
-
-
-@installed
-def test_desktop_lowers_the_terminal_allowlist_to_allows_with_no_deny_list() -> None:
-    bundle = AGENT_EXEC_BUNDLE.read_text(errors="replace")
-
-    assert re.search(r"\.map\([\w$]+=>`Shell\(\$\{[\w$]+\}\)`\)", bundle)
-    assert re.search(r"\{allow:[\w$]+,deny:\[\]\}", bundle)
-    assert re.search(
-        r"getEffectiveTerminalAllowlist\(\)\.map\([\w$]+=>`Shell\(\$\{[\w$]+\}\)`\)",
-        desktop_bundle(),
-    )
-
-
-@installed
-def test_desktop_evaluates_every_parsed_command_in_a_chain() -> None:
-    bundle = AGENT_EXEC_BUNDLE.read_text(errors="replace")
-
-    for token in (
-        "Parser failed to parse command (possible bypass)",
-        "Parser found no commands (possible bypass)",
-        "allCommandsRunnable",
-        "allCommandsAllowlisted",
-        "unapprovedCommands",
-        "notAllowedCommands",
-    ):
-        assert token in bundle, token
-    # The workbench hands its composed allow list to this engine, so the
-    # per-command evaluation above is the one Desktop shell calls go through.
-    assert "dashboardTerminalAllowlistOverriddenByPermissionsFile" in bundle
-    assert "dashboardTerminalAllowlistOverriddenByPermissionsFile" in desktop_bundle()

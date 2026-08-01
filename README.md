@@ -112,10 +112,45 @@ The opt-in capability harness can exercise selected installed targets in
 isolated temporary homes:
 
 ```sh
-uv run --locked pytest --capabilities-live --skip-update \
-  tests/capabilities/targets/codex_loading.py
+uv run --locked pytest --capabilities-live \
+  --capability-report /tmp/capabilities.json tests/capabilities/
 ```
 
-Repeat `--target` or `--case` to narrow the live suite. The harness strips
-credential environment variables and treats missing target executables as
-unavailable.
+The v2 report (`coding-agents/capability-report/v2`) includes every registered
+case and every declared target surface. A
+surface's `management` is `generated`, `patch_only`, or `unmanaged`; an
+unobserved surface is explicitly `unverified` / `not_probed`. Its
+`evidence_kind` distinguishes target-native evidence from installed-static
+evidence; only `compiler_e2e` proves the compiler lowering path. Repeat
+`--target` or `--case` to narrow the live suite.
+
+`actual` is a conclusion at the stated `evidence_kind`. In particular,
+`installed_static` / `supported` means the capability is declared or present in
+installed artifacts; it does not claim runtime execution.
+
+Some cases intentionally establish that a surface is unsupported. Their
+`support_when_checks_pass` value records whether passing checks prove
+`supported` or `unsupported`. A failed check is `contradicted` / `regression`,
+never proof of the opposite binary capability. Surface rows retain singular
+fields when one case supplies evidence; rows with multiple cases expose every
+case in `cases` and every full observation in `observations`. Their aggregate
+is `contradicted` if selected evidence regresses or conflicts, and their
+`check_count` is the sum of all associated observations.
+
+Static Cursor Desktop bundle evidence is included by `--capabilities-live`; its
+behavioral rule-loading probe also requires the explicit GUI opt-in:
+
+```sh
+uv run --locked pytest --capabilities-live --capabilities-desktop \
+  --case cursor-desktop.rules tests/capabilities/
+```
+
+The harness strips credential environment variables and treats missing target
+executables or Desktop applications as unavailable.
+
+Live probes use the installed target versions by default. Updating targets is
+explicit with `--update-targets`; it fails the run if an update fails or no
+post-update version can be observed. `--skip-update` remains a deprecated
+no-op and cannot be combined with `--update-targets`. Cursor local-runtime
+cache lookup is read-only by default; use `--bootstrap-cursor-runtime` to
+download a matching runtime into the managed cache.

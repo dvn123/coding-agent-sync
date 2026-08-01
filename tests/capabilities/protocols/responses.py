@@ -80,6 +80,73 @@ def responses_tool(call_id: str, command: str, *, escalated: bool = False) -> by
     )
 
 
+def responses_function_call(
+    call_id: str,
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> bytes:
+    item = {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": json.dumps(arguments, separators=(",", ":")),
+    }
+    if namespace:
+        item["namespace"] = namespace
+    return responses_sse(
+        [
+            {"type": "response.created", "response": {"id": f"resp-{call_id}"}},
+            {
+                "type": "response.output_item.done",
+                "item": item,
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp-{call_id}",
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                },
+            },
+        ]
+    )
+
+
+def responses_tool_search(call_id: str, query: str) -> bytes:
+    return responses_sse(
+        [
+            {"type": "response.created", "response": {"id": f"resp-{call_id}"}},
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "tool_search_call",
+                    "id": f"tsc-{call_id}",
+                    "call_id": call_id,
+                    "execution": "client",
+                    "status": "completed",
+                    "arguments": {"query": query},
+                },
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp-{call_id}",
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                },
+            },
+        ]
+    )
+
+
 class ResponsesRequest(DecodedRequest):
     __slots__ = ()
 
@@ -124,6 +191,24 @@ class ResponsesRequest(DecodedRequest):
                     "arguments": str(),
                 }:
                     pass
+                case {
+                    "type": "tool_search_call",
+                    "arguments": dict(),
+                    "execution": str(),
+                }:
+                    pass
+                case {
+                    "type": "tool_search_output",
+                    "tools": list(tools),
+                    "execution": str(),
+                }:
+                    observations.extend(
+                        strings(
+                            tools,
+                            channel="tool_search_output",
+                            source_path=f"{path}.tools",
+                        )
+                    )
                 case {"type": str(kind)}:
                     raise ProtocolShapeError(
                         f"unknown Responses item {kind!r} at {path}"

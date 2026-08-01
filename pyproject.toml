@@ -23,7 +23,7 @@ dev = [
 
 [project.scripts]
 coding-agents-check = "coding_agents_sync.cli:check"
-coding-agents-cursor-desktop-probe = "coding_agents_sync.cursor_desktop_probe:main"
+coding-agents-cursor-desktop-probe = "coding_agents_sync.probes.cursor_desktop:main"
 coding-agents-sync = "coding_agents_sync.cli:main"
 
 [build-system]
@@ -41,6 +41,7 @@ packages = ["src/coding_agents_sync"]
 testpaths = ["tests"]
 markers = [
   "capability_case(id): installed coding-agent capability covered by a live test",
+  "capability_desktop: launches the Cursor Desktop GUI when explicitly enabled",
   "capability_live: launches installed coding agents through isolated local services",
 ]
 

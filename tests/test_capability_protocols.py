@@ -11,7 +11,8 @@ from capabilities.protocols.opencode import (
     decode_skill_catalog,
 )
 from capabilities.protocols.responses import ResponsesRequest
-from capabilities.targets.codex_permissions import decode_execpolicy
+from capabilities.targets.opencode import config as opencode_config
+from capabilities.targets.test_codex_permissions import decode_execpolicy
 
 
 def test_anthropic_decoder_retains_channel_and_source_path() -> None:
@@ -56,6 +57,36 @@ def test_responses_decoder_indexes_native_roles() -> None:
     )
     assert match.channel == "developer"
     assert match.source_path == "$.input[0].content[0].text"
+
+
+def test_responses_decoder_accepts_native_tool_search_exchange() -> None:
+    decoded = ResponsesRequest.decode(
+        {
+            "model": "test",
+            "input": [
+                {
+                    "type": "tool_search_call",
+                    "arguments": {"query": "probe"},
+                    "execution": "client",
+                },
+                {
+                    "type": "tool_search_output",
+                    "execution": "client",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "mcp__probe__echo",
+                            "description": "probe description",
+                        }
+                    ],
+                },
+            ],
+            "tools": [],
+        }
+    )
+
+    assert "mcp__probe__echo" in decoded.text("tool_search_output")
+    assert "probe description" in decoded.text("tool_search_output")
 
 
 def test_chat_decoder_separates_messages_and_tools() -> None:
@@ -144,6 +175,34 @@ def test_opencode_inspector_decoders_reject_unknown_envelopes() -> None:
         decode_skill_catalog("{}")
     with pytest.raises(ProtocolShapeError, match="config inspector"):
         decode_config("[]")
+
+
+def test_opencode_probe_config_is_wholly_native_v1() -> None:
+    config = opencode_config(
+        "http://127.0.0.1:1234",
+        "probe",
+        "protocol",
+        {"bash": {"*": "allow"}},
+    )
+
+    assert set(config) == {
+        "$schema",
+        "model",
+        "small_model",
+        "autoupdate",
+        "enabled_providers",
+        "permission",
+        "provider",
+    }
+    assert not {"permissions", "providers"} & config.keys()
+    provider = config["provider"]["test"]
+    assert provider["npm"] == "@ai-sdk/openai-compatible"
+    assert provider["options"]["baseURL"] == "http://127.0.0.1:1234/v1"
+    assert provider["models"]["probe"] == {
+        "name": "Protocol Probe",
+        "tool_call": True,
+        "limit": {"context": 100000, "output": 1000},
+    }
 
 
 def test_codex_execpolicy_decoder_retains_channel_and_source_path() -> None:
