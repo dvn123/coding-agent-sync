@@ -346,9 +346,9 @@ class SyncTests(unittest.TestCase):
         tradeoff is absolute -- a CLI deny holds even under `--force`, so the
         guarded variant is unrunnable rather than approvable -- but the
         alternative is letting the dangerous variant ride the allow.
-        Cursor Desktop has no deny channel either, so a narrowed family
-        leaves its allowlist entirely and prompts per invocation, which is
-        ask-equivalent.
+        Cursor Desktop has no deny channel either, so the narrowed allow
+        rules leave its allowlist and prompt per invocation, which is
+        ask-equivalent, while the rest of the family stays allowlisted.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -445,8 +445,8 @@ class SyncTests(unittest.TestCase):
                     "Shell(terraform:show * -json *)",
                 ],
             )
-            # Every family is narrowed, so Desktop's allowlist is empty and
-            # its file is not emitted at all.
+            # Every allow rule is narrowed, so Desktop's allowlist is empty
+            # and its file is not emitted at all.
             self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_a_tail_predicate_is_accepted_on_an_allow(self) -> None:
@@ -692,8 +692,8 @@ class SyncTests(unittest.TestCase):
         The ask re-expresses the allow's tail as subcommand tokens, so
         `narrows` cannot prove containment and the overlap would ride the
         allow. The ask's own forms are clawed back through the CLI deny
-        channel, the family leaves Desktop's allowlist, and the source earns
-        a warning because the clawback is coarser than the ask.
+        channel, the colliding allow rule leaves Desktop's allowlist, and the
+        source earns a warning because the clawback is coarser than the ask.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -754,6 +754,134 @@ class SyncTests(unittest.TestCase):
                 ["Shell(git:status)", "Shell(git:status *)"],
             )
             self.assertNotIn("deny", cursor_cli["permissions"])
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"], ["git:status", "git:status *"]
+            )
+
+    def test_a_narrowing_excludes_only_the_colliding_rule_on_desktop(self) -> None:
+        """Desktop keeps the family's safe rules when one rule is narrowed.
+
+        Only the allow rule the gated variant rides leaves the Desktop
+        allowlist; its siblings stay allowlisted instead of the whole
+        command family prompting per invocation.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"], ["git", "push"]],
+                ask=[
+                    {
+                        "command": "git",
+                        "subcommand": ["push"],
+                        "tail": [["--force"]],
+                    }
+                ],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(git:push)",
+                    "Shell(git:push *)",
+                    "Shell(git:status)",
+                    "Shell(git:status *)",
+                ],
+            )
+            self.assertEqual(
+                cursor_cli["permissions"]["deny"],
+                [
+                    "Shell(git:push --force)",
+                    "Shell(git:push --force *)",
+                    "Shell(git:push * --force)",
+                    "Shell(git:push * --force *)",
+                ],
+            )
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"], ["git:status", "git:status *"]
+            )
+
+    def test_a_text_ask_unlowers_only_the_colliding_rule(self) -> None:
+        """A text guard costs the colliding rule, not the command family.
+
+        The kubectl secret guard has no token-matcher form, so the allow it
+        narrows leaves both Cursor allowlists, while unrelated kubectl
+        subcommands stay allowlisted on both surfaces.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["kubectl", "get"], ["kubectl", "logs"]],
+                ask=[
+                    {
+                        "command": "kubectl",
+                        "subcommand": ["get", "secret"],
+                        "text": ["yaml"],
+                    }
+                ],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                ["Shell(kubectl:logs)", "Shell(kubectl:logs *)"],
+            )
+            self.assertNotIn("deny", cursor_cli["permissions"])
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"], ["kubectl:logs", "kubectl:logs *"]
+            )
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            bash = opencode["permission"]["bash"]
+            for command, decision in {
+                "kubectl get pods": "allow",
+                "kubectl get secret db -o yaml": "ask",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
+
+    def test_an_option_embedding_sibling_rule_leaves_desktop_too(self) -> None:
+        """A rule whose subcommand embeds declared options also collides.
+
+        Its option-hole heads (`prog:--profile * --profile status *`) can
+        carry the gated variant even though the ask narrows only the plain
+        sibling, so both local-tool rules leave Desktop's allowlist.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                options={"local-tool": ["--profile"]},
+                allow=[
+                    ["git", "status"],
+                    ["local-tool", "status"],
+                    ["local-tool", "--profile", "status"],
+                ],
+                ask=[
+                    {
+                        "command": "local-tool",
+                        "subcommand": ["status"],
+                        "tail": [["--destroy"]],
+                    }
+                ],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertIn(
+                "Shell(local-tool:--profile status)",
+                cursor_cli["permissions"]["allow"],
+            )
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(
                 desktop["terminalAllowlist"], ["git:status", "git:status *"]
@@ -1156,7 +1284,7 @@ class SyncTests(unittest.TestCase):
                     "Shell(local-tool:--profile * status * --destroy *)",
                 ],
             )
-            # The narrowed local-tool family leaves Desktop's allowlist.
+            # The narrowed local-tool rule leaves Desktop's allowlist.
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(
                 desktop["terminalAllowlist"], ["git:status", "git:status *"]
@@ -1292,7 +1420,7 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
             # The guard's text predicate has no token-matcher form, so the
-            # whole kubectl family leaves the CLI allowlist rather than
+            # colliding kubectl get rule leaves the CLI allowlist rather than
             # letting the secret dump ride it. Desktop loses it too.
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
             self.assertNotIn("permissions", cursor_cli)

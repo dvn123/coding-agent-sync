@@ -43,15 +43,20 @@ hand-authored native content under pointer ownership.
 - An ask that narrows an allow claws the guarded variant back through the
   CLI deny channel. The clawback is absolute (a CLI deny holds even under
   `--force`), but the alternative is letting the dangerous variant ride the
-  allow. Desktop has no deny channel, so the narrowed family leaves its
-  allowlist and prompts per invocation, which is ask-equivalent. A narrowing
-  ask the token matcher cannot express (a text predicate) excludes the
-  family from the CLI allowlist too.
+  allow. Desktop has no deny channel, so the allow rules the guarded
+  variant rides leave its allowlist and prompt per invocation, which is
+  ask-equivalent, while the rest of the family stays allowlisted. The
+  colliding rules are the ones the ask provably narrows, the ones it
+  prefix-overlaps, and the ones whose option-hole heads can carry the
+  variant (an allow whose subcommand embeds declared options ahead of the
+  ask's). A narrowing ask the token matcher cannot express (a text
+  predicate) drops the same rules from the CLI allowlist too.
 - An ask that shares an allow's subcommand prefix without provably narrowing
   it (for example, the ask re-expresses the allow's tail as subcommand
-  tokens) is a guarded overlap: it is clawed back and excludes the Desktop
-  family the same way, and the compile emits a warning, because containment
-  cannot be proven and the residual overlap would otherwise ride the allow.
+  tokens) is a guarded overlap: it is clawed back and excludes the colliding
+  rules from Desktop the same way, and the compile emits a warning, because
+  containment cannot be proven and the residual overlap would otherwise ride
+  the allow.
   An ask that embeds the allow's declared option vocabulary (`git -C foo
   status` against allow `[git, status]` with `options: {git: [-C]}`) is a
   guarded overlap for the same reason: it rides the emitted option-hole
