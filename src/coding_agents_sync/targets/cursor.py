@@ -111,6 +111,24 @@ def _prefixes(
     )
 
 
+def _rides_options(
+    ask: CommandPermission, allowed: CommandPermission, options: tuple[str, ...]
+) -> bool:
+    """The allow's option-hole heads can carry the ask's gated variant.
+
+    With `--profile` declared, an allow whose subcommand ends with the ask's
+    behind option tokens emits heads like `prog:--profile * status *`, which
+    the gated variant `prog --profile prod status --flag` rides even though
+    the ask never names the option.
+    """
+    if allowed.exact or len(allowed.subcommand) <= len(ask.subcommand):
+        return False
+    lead = allowed.subcommand[: len(allowed.subcommand) - len(ask.subcommand)]
+    return allowed.subcommand[len(lead) :] == ask.subcommand and all(
+        token in options for token in lead
+    )
+
+
 def _permission_values(
     sources: SourceBundle, root: Path
 ) -> tuple[tuple[NativeValue, ...], tuple[Diagnostic, ...]]:
@@ -140,12 +158,13 @@ def _permission_values(
         if rule.command in INTERPRETER_COMMANDS
     )
 
-    # An ask that narrows an allow carves a dangerous variant out of an
-    # allowed family. The CLI deny channel claws the variant back; Desktop
-    # has no deny channel, so the whole family leaves its allowlist and
-    # prompts per invocation, which is ask-equivalent. A narrowing ask the
-    # token matcher cannot express (a text predicate) excludes the family
-    # from the CLI allowlist too, rather than letting the variant ride it.
+    # An ask that narrows an allow carves a dangerous variant out of the
+    # allow's patterns. The CLI deny channel claws the variant back; Desktop
+    # has no deny channel, so the allow rules the variant rides leave its
+    # allowlist and prompt per invocation, which is ask-equivalent, while
+    # the rest of the family stays allowlisted. A narrowing ask the token
+    # matcher cannot express (a text predicate) drops the same rules from
+    # the CLI allowlist too, rather than letting the variant ride them.
     # An ask that shares an allow's subcommand prefix without provably
     # narrowing it is a guarded overlap: it is clawed back the same way,
     # with a warning, because the overlap would otherwise ride the allow.
@@ -171,23 +190,38 @@ def _permission_values(
         )
         for rule in overlap
     )
+
+    def colliding(ask: CommandPermission) -> frozenset[CommandPermission]:
+        options = commands.option_tokens(ask.command)
+        return frozenset(
+            allowed
+            for allowed in allowed_rules
+            if ask.narrows(allowed)
+            or _prefixes(ask, allowed, options)
+            or _rides_options(ask, allowed, options)
+        )
+
     clawback: list[str] = []
-    unlowering: set[str] = set()
+    unlowered: set[CommandPermission] = set()
+    desktop_excluded: set[CommandPermission] = set()
     for rule in (*narrowing, *overlap):
+        hit = colliding(rule)
+        desktop_excluded |= hit
         if forms := rule_patterns(permissions, cursor_shell_variants, (rule,)):
             clawback.extend(forms)
         else:
-            unlowering.add(rule.command)
-    excluded = {rule.command for rule in (*narrowing, *overlap)}
+            # The variant has no token-matcher form to claw back, so the
+            # allow rules it rides cannot keep their CLI wildcards either.
+            unlowered |= hit
     allow = rule_patterns(
         permissions,
         cursor_shell_variants,
-        tuple(rule for rule in allowed_rules if rule.command not in unlowering),
+        tuple(rule for rule in allowed_rules if rule not in unlowered),
     )
     desktop_allow = rule_patterns(
         permissions,
         cursor_shell_variants,
-        tuple(rule for rule in allowed_rules if rule.command not in excluded),
+        tuple(rule for rule in allowed_rules if rule not in desktop_excluded),
     )
 
     cli: list[NativeValue] = [
