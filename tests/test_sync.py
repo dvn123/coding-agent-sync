@@ -849,6 +849,33 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
+    def test_a_tilde_command_projects_literally(self) -> None:
+        """Home-relative command text is a valid portable token.
+
+        Agents type `~/.config/coding-agents/sync.sh`; the tilde form is the
+        command text matchers compare against, so the token alphabet carries
+        `~` and every target projects it unexpanded.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["~/.config/coding-agents/sync.sh"]],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                ["Shell(~/.config/coding-agents/sync.sh)"],
+            )
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn(
+                "Bash(~/.config/coding-agents/sync.sh *)",
+                claude["permissions"]["allow"],
+            )
+
     def test_an_option_embedding_sibling_rule_leaves_desktop_too(self) -> None:
         """A rule whose subcommand embeds declared options also collides.
 
