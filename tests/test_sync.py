@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import re
 import shutil
@@ -207,13 +209,17 @@ def permission_rules_doc(
     }
     if extra:
         source.update(extra)
+    targets: dict[str, dict[str, Any]] = {}
     if source["allow"] or source["ask"] or source["deny"]:
-        source["targets"] = {
-            "cursor": {
-                "omit": {"commands": "Cursor lacks portable command predicates."}
-            },
-            "codex": {"omit": {"commands": "Codex has no portable command policy."}},
+        targets["codex"] = {
+            "omit": {"commands": "Codex has no portable command policy."}
         }
+    if source["deny"]:
+        targets["cursor"] = {
+            "omit": {"commands.deny": "Cursor Desktop has no deny channel."}
+        }
+    if targets:
+        source["targets"] = targets
     return yaml.safe_dump(source, sort_keys=False)
 
 
@@ -329,15 +335,20 @@ def resolve_opencode_bash(patterns: dict[str, str], command: str) -> str:
 
 
 class SyncTests(unittest.TestCase):
-    def test_an_ask_guards_an_allow_only_where_an_ask_channel_exists(self) -> None:
+    def test_an_ask_guards_an_allow_through_the_strictest_available_channel(
+        self,
+    ) -> None:
         """An allow is unconditional; its guard is best-effort.
 
-        Neither Cursor Agent nor Cursor Desktop has an ask channel, so the
-        guard is simply absent there and the allow is still emitted.
-        Withholding the allow instead cost far more Cursor Agent traffic than
-        it protected, and lowering the ask to a Cursor Agent deny would hold
-        even under `--force`, making the command unrunnable rather than
-        approvable.
+        Cursor's CLI has no ask channel, so a narrowing ask is clawed back
+        through its deny channel: the allowed family still runs, but the
+        guarded variant stops and a plain ask never leaves the source. The
+        tradeoff is absolute -- a CLI deny holds even under `--force`, so the
+        guarded variant is unrunnable rather than approvable -- but the
+        alternative is letting the dangerous variant ride the allow.
+        Cursor Desktop has no deny channel either, so a narrowed family
+        leaves its allowlist entirely and prompts per invocation, which is
+        ask-equivalent.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -403,7 +414,39 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["permissions"]["allow"], [])
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(fd)",
+                    "Shell(gh:api)",
+                    "Shell(gh:api *)",
+                    "Shell(terraform:show)",
+                    "Shell(terraform:show *)",
+                ],
+            )
+            self.assertEqual(
+                cursor_cli["permissions"]["deny"],
+                [
+                    "Shell(fd:--exec)",
+                    "Shell(fd:--exec *)",
+                    "Shell(fd:* --exec)",
+                    "Shell(fd:* --exec *)",
+                    "Shell(fd:-x)",
+                    "Shell(fd:-x *)",
+                    "Shell(fd:* -x)",
+                    "Shell(fd:* -x *)",
+                    "Shell(gh:api -X DELETE)",
+                    "Shell(gh:api -X DELETE *)",
+                    "Shell(gh:api * -X DELETE)",
+                    "Shell(gh:api * -X DELETE *)",
+                    "Shell(terraform:show -json)",
+                    "Shell(terraform:show -json *)",
+                    "Shell(terraform:show * -json)",
+                    "Shell(terraform:show * -json *)",
+                ],
+            )
+            # Every family is narrowed, so Desktop's allowlist is empty and
+            # its file is not emitted at all.
             self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_a_tail_predicate_is_accepted_on_an_allow(self) -> None:
@@ -445,13 +488,33 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            # Command predicates have no lossless Cursor projection. The
-            # source acknowledges that omission, while the two glob targets
-            # still receive their exact native forms.
+            # A token-bounded tail projects to Cursor; a text predicate does
+            # not, since the token matcher cannot hold a substring. Only the
+            # mytool family reaches either Cursor surface, while the two glob
+            # targets still receive both exact native forms.
             self.assertIn("Bash(othertool*--check*)", claude["permissions"]["allow"])
             self.assertEqual(resolve_opencode_bash(bash, "othertool --check"), "allow")
             self.assertEqual(resolve_opencode_bash(bash, "othertool --write"), "ask")
-            self.assertFalse((home / ".cursor/permissions.json").exists())
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(mytool:run --dry-run)",
+                    "Shell(mytool:run --dry-run *)",
+                    "Shell(mytool:run * --dry-run)",
+                    "Shell(mytool:run * --dry-run *)",
+                ],
+            )
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"],
+                [
+                    "mytool:run --dry-run",
+                    "mytool:run --dry-run *",
+                    "mytool:run * --dry-run",
+                    "mytool:run * --dry-run *",
+                ],
+            )
 
     def test_leading_options_open_one_hole_in_each_target_shape(self) -> None:
         """A declared option token expands every head that has a right anchor.
@@ -499,8 +562,38 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["permissions"]["allow"], [])
-            self.assertFalse((home / ".cursor/permissions.json").exists())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(git:status)",
+                    "Shell(git:status *)",
+                    "Shell(git:-C status)",
+                    "Shell(git:-C status *)",
+                    "Shell(git:--no-pager status)",
+                    "Shell(git:--no-pager status *)",
+                    "Shell(git:-C * status)",
+                    "Shell(git:-C * status *)",
+                    "Shell(git:--no-pager * status)",
+                    "Shell(git:--no-pager * status *)",
+                ],
+            )
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(desktop["approvalMode"], "allowlist")
+            self.assertEqual(
+                desktop["terminalAllowlist"],
+                [
+                    "git:status",
+                    "git:status *",
+                    "git:-C status",
+                    "git:-C status *",
+                    "git:--no-pager status",
+                    "git:--no-pager status *",
+                    "git:-C * status",
+                    "git:-C * status *",
+                    "git:--no-pager * status",
+                    "git:--no-pager * status *",
+                ],
+            )
 
     def test_a_deny_reaches_every_target_that_has_a_deny_channel(self) -> None:
         """Cursor Desktop's shipped schema has no deny key, so it degrades."""
@@ -535,8 +628,274 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(kubectl:get)",
+                    "Shell(kubectl:get *)",
+                    "Shell(kubectl:--context get)",
+                    "Shell(kubectl:--context get *)",
+                    "Shell(kubectl:--context * get)",
+                    "Shell(kubectl:--context * get *)",
+                ],
+            )
+            self.assertEqual(
+                cursor_cli["permissions"]["deny"],
+                [
+                    "Shell(kubectl:apply)",
+                    "Shell(kubectl:apply *)",
+                    "Shell(kubectl:--context apply)",
+                    "Shell(kubectl:--context apply *)",
+                    "Shell(kubectl:--context * apply)",
+                    "Shell(kubectl:--context * apply *)",
+                ],
+            )
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"],
+                [
+                    "kubectl:get",
+                    "kubectl:get *",
+                    "kubectl:--context get",
+                    "kubectl:--context get *",
+                    "kubectl:--context * get",
+                    "kubectl:--context * get *",
+                ],
+            )
+
+    def test_a_bare_exact_rule_projects_the_exact_bare_form(self) -> None:
+        """`prog:` is the exact-bare shape: the program with no arguments.
+
+        The bare-exact live scenarios prove `Shell(prog:)` runs the bare
+        command and rejects any argument, so a bare exact rule projects
+        instead of being dropped from both Cursor surfaces.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[{"command": "fd", "exact": True}],
+                deny=[{"command": "shred", "exact": True}],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["permissions"]["allow"], ["Shell(fd:)"])
+            self.assertEqual(cursor_cli["permissions"]["deny"], ["Shell(shred:)"])
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(desktop["terminalAllowlist"], ["fd:"])
+
+    def test_an_unprovable_overlap_is_clawed_back_with_a_warning(self) -> None:
+        """A prefix-sharing ask that cannot narrow is guarded, not dropped.
+
+        The ask re-expresses the allow's tail as subcommand tokens, so
+        `narrows` cannot prove containment and the overlap would ride the
+        allow. The ask's own forms are clawed back through the CLI deny
+        channel, the family leaves Desktop's allowlist, and the source earns
+        a warning because the clawback is coarser than the ask.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[
+                    {
+                        "command": "terraform",
+                        "subcommand": ["show"],
+                        "tail": [["-json"]],
+                    }
+                ],
+                ask=[{"command": "terraform", "subcommand": ["show", "-json"]}],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertIn("guarded overlap terraform show -json", stderr.getvalue())
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(terraform:show -json)",
+                    "Shell(terraform:show -json *)",
+                    "Shell(terraform:show * -json)",
+                    "Shell(terraform:show * -json *)",
+                ],
+            )
+            self.assertEqual(
+                cursor_cli["permissions"]["deny"],
+                [
+                    "Shell(terraform:show -json)",
+                    "Shell(terraform:show -json *)",
+                ],
+            )
             self.assertFalse((home / ".cursor/permissions.json").exists())
+
+    def test_a_distinct_subcommand_ask_stays_standalone(self) -> None:
+        """No shared prefix, no overlap: the ask simply does not project."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                ask=[["git", "commit"]],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertNotIn("guarded overlap", stderr.getvalue())
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                ["Shell(git:status)", "Shell(git:status *)"],
+            )
+            self.assertNotIn("deny", cursor_cli["permissions"])
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"], ["git:status", "git:status *"]
+            )
+
+    def test_an_interpreter_allow_is_never_projected(self) -> None:
+        """Shell(sh) would allow every payload the interpreter runs.
+
+        The live interpreter scenarios prove the payload rides the allow, so
+        a declared interpreter allow is skipped with a warning rather than
+        projected to either Cursor surface.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["sh"], ["bash"], ["zsh"], ["eval"], ["git", "status"]],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            warnings = stderr.getvalue()
+            for interpreter in ("sh", "bash", "zsh", "eval"):
+                with self.subTest(interpreter=interpreter):
+                    self.assertIn(
+                        f"omitted allow {interpreter}: Cursor cannot confine "
+                        "an interpreter payload",
+                        warnings,
+                    )
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                ["Shell(git:status)", "Shell(git:status *)"],
+            )
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"], ["git:status", "git:status *"]
+            )
+
+    def test_an_option_embedding_ask_is_a_guarded_overlap(self) -> None:
+        """`git -C foo status` rides the emitted `git:-C * status` head.
+
+        The declared option vocabulary expands every allow head, so an ask
+        whose subcommand embeds those tokens overlaps the allow even though
+        the raw subcommand prefix differs. It is clawed back and warned.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                ask=[["git", "-C", "foo", "status"]],
+                options={"git": ["-C"]},
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertIn("guarded overlap git -C foo status", stderr.getvalue())
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(
+                cursor_cli["permissions"]["deny"],
+                [
+                    "Shell(git:-C foo status)",
+                    "Shell(git:-C foo status *)",
+                    "Shell(git:-C -C foo status)",
+                    "Shell(git:-C -C foo status *)",
+                    "Shell(git:-C * -C foo status)",
+                    "Shell(git:-C * -C foo status *)",
+                ],
+            )
+            self.assertFalse((home / ".cursor/permissions.json").exists())
+
+    def test_an_undeclared_leading_token_ask_stays_standalone(self) -> None:
+        """Only declared option tokens open the hole; `--quiet` does not."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                ask=[["git", "--quiet", "status"]],
+                options={"git": ["-C"]},
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertNotIn("guarded overlap", stderr.getvalue())
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertTrue((home / ".cursor/permissions.json").exists())
+
+    def test_an_exact_allow_admits_nothing_for_an_extending_ask_to_overlap(
+        self,
+    ) -> None:
+        """An exact allow matches only its bare subcommand, so a longer ask
+        shares no match with it: no clawback, no exclusion, no warning."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[{"command": "git", "subcommand": ["status"], "exact": True}],
+                ask=[["git", "status", "--short"]],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertNotIn("guarded overlap", stderr.getvalue())
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["permissions"]["allow"], ["Shell(git:status)"])
+            self.assertNotIn("deny", cursor_cli["permissions"])
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(desktop["terminalAllowlist"], ["git:status"])
+
+    def test_a_text_deny_warns_when_it_cannot_project(self) -> None:
+        """A deny the token matcher cannot hold degrades to a prompt, but
+        the drop is never silent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                deny=[{"command": "git", "subcommand": ["push"], "text": ["--force"]}],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertIn(
+                "omitted deny git push ~--force: Cursor's token matcher "
+                "cannot hold a text predicate",
+                stderr.getvalue(),
+            )
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertNotIn("deny", cursor_cli["permissions"])
 
     def test_opencode_orders_buckets_so_the_strictest_decision_matches_last(
         self,
@@ -575,7 +934,10 @@ class SyncTests(unittest.TestCase):
         Claude Code resolves `timeout` to its payload and takes the strictest
         verdict across both forms, so it needs neither; emitting a blanket
         allow there would widen every wrapped command that has no rule. It
-        does not resolve `env`, so it receives both for that one.
+        does not resolve `env`, so it receives both for that one. Cursor's
+        token matcher cannot peel a wrapper either, but a bare `Shell(env)`
+        allow would match any payload the wrapper carries, so Cursor receives
+        only rule-attached wrapper forms and no blanket.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -631,8 +993,37 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["permissions"]["allow"], [])
-            self.assertFalse((home / ".cursor/permissions.json").exists())
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(git:status)",
+                    "Shell(git:status *)",
+                    "Shell(timeout:git status)",
+                    "Shell(timeout:git status *)",
+                    "Shell(timeout:* git status)",
+                    "Shell(timeout:* git status *)",
+                    "Shell(env:git status)",
+                    "Shell(env:git status *)",
+                    "Shell(env:* git status)",
+                    "Shell(env:* git status *)",
+                ],
+            )
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"],
+                [
+                    "git:status",
+                    "git:status *",
+                    "timeout:git status",
+                    "timeout:git status *",
+                    "timeout:* git status",
+                    "timeout:* git status *",
+                    "env:git status",
+                    "env:git status *",
+                    "env:* git status",
+                    "env:* git status *",
+                ],
+            )
 
     def test_codex_receives_no_user_command_permissions(self) -> None:
         """Its rules file carries only hand-authored Starlark.
@@ -703,7 +1094,7 @@ class SyncTests(unittest.TestCase):
                 "targets:\n"
                 "  cursor:\n"
                 "    omit:\n"
-                "      commands: Cursor lacks portable command predicates.\n"
+                "      commands.deny: Cursor Desktop has no deny channel.\n"
                 "  codex:\n"
                 "    omit:\n"
                 "      commands: Codex has no portable command policy.\n",
@@ -729,7 +1120,47 @@ class SyncTests(unittest.TestCase):
             )
             self.assertIn("Bash(local-tool wipe *)", claude["permissions"]["deny"])
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["permissions"]["allow"], [])
+            self.assertEqual(
+                cursor_cli["permissions"]["allow"],
+                [
+                    "Shell(git:status)",
+                    "Shell(git:status *)",
+                    "Shell(local-tool:status)",
+                    "Shell(local-tool:status *)",
+                    "Shell(local-tool:--profile status)",
+                    "Shell(local-tool:--profile status *)",
+                    "Shell(local-tool:--profile * status)",
+                    "Shell(local-tool:--profile * status *)",
+                ],
+            )
+            self.assertEqual(
+                cursor_cli["permissions"]["deny"],
+                [
+                    "Shell(local-tool:wipe)",
+                    "Shell(local-tool:wipe *)",
+                    "Shell(local-tool:--profile wipe)",
+                    "Shell(local-tool:--profile wipe *)",
+                    "Shell(local-tool:--profile * wipe)",
+                    "Shell(local-tool:--profile * wipe *)",
+                    "Shell(local-tool:status --destroy)",
+                    "Shell(local-tool:status --destroy *)",
+                    "Shell(local-tool:status * --destroy)",
+                    "Shell(local-tool:status * --destroy *)",
+                    "Shell(local-tool:--profile status --destroy)",
+                    "Shell(local-tool:--profile status --destroy *)",
+                    "Shell(local-tool:--profile status * --destroy)",
+                    "Shell(local-tool:--profile status * --destroy *)",
+                    "Shell(local-tool:--profile * status --destroy)",
+                    "Shell(local-tool:--profile * status --destroy *)",
+                    "Shell(local-tool:--profile * status * --destroy)",
+                    "Shell(local-tool:--profile * status * --destroy *)",
+                ],
+            )
+            # The narrowed local-tool family leaves Desktop's allowlist.
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(
+                desktop["terminalAllowlist"], ["git:status", "git:status *"]
+            )
 
     def test_local_command_fragment_conflicting_with_committed_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -765,7 +1196,10 @@ class SyncTests(unittest.TestCase):
 
             self.assertTrue((home / ".claude/settings.json").exists())
 
-    def test_nonempty_permission_fragment_requires_command_omissions(self) -> None:
+    def test_command_fragment_omissions_track_each_targets_projection_gap(
+        self,
+    ) -> None:
+        # Cursor projects allows losslessly, so only Codex owes an omission.
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
@@ -778,8 +1212,29 @@ class SyncTests(unittest.TestCase):
                 "allow: [[git, status]]\n",
             )
 
+            with self.assertRaisesRegex(ValueError, "commands is unsupported on codex"):
+                run_sync(config_root=config_root, home=home)
+
+        # Desktop has no deny channel, so a deny fragment owes the Cursor
+        # commands.deny omission even though the CLI projects it.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "permissions/policy.yaml", permission_policy_doc())
+            write(
+                config_root / "permissions/commands/nonempty.yaml",
+                "schema: coding-agents/v4\n"
+                "kind: permission-rules\n"
+                "id: nonempty\n"
+                "name: Nonempty\n"
+                "deny: [[git, push]]\n"
+                "targets:\n"
+                "  codex:\n"
+                "    omit:\n"
+                "      commands: Codex has no portable command policy.\n",
+            )
+
             with self.assertRaisesRegex(
-                ValueError, "commands is unsupported on cursor"
+                ValueError, "commands.deny is unsupported on cursor"
             ):
                 run_sync(config_root=config_root, home=home)
 
@@ -835,6 +1290,13 @@ class SyncTests(unittest.TestCase):
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
+
+            # The guard's text predicate has no token-matcher form, so the
+            # whole kubectl family leaves the CLI allowlist rather than
+            # letting the secret dump ride it. Desktop loses it too.
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertNotIn("permissions", cursor_cli)
+            self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_user_permission_patch_overlap_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

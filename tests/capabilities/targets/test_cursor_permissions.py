@@ -37,8 +37,13 @@ TRAILING = "blackbox-trailing"
 UNMATCHED = "blackbox-unmatched"
 OPT = "blackbox-opt"
 WRAP_OK = "twrap"
+WRAP2 = "twrap2"
 API = "blackbox-api"
 OPT2 = "blackbox-opt2"
+SMART = "blackbox-smart"
+DESKTOP = "blackbox-desktop"
+HOOKED = "blackbox-hooked"
+BARE_EXACT = "blackbox-texact"
 MODEL = "permission-probe"
 
 
@@ -187,6 +192,57 @@ SCENARIOS = {
         (ALLOWED, TRAILING),
         False,
     ),
+    # A wrapper allow attached to its rule covers only that payload; the
+    # leading hole covers the wrapper's own arguments.
+    "wrapper-attached-exact": (f"{WRAP2} {ALLOWED}", "success", (ALLOWED,), False),
+    "wrapper-attached-args": (f"{WRAP2} {ALLOWED} a", "success", (ALLOWED,), False),
+    "wrapper-attached-wrapper-args": (
+        f"{WRAP2} 30 {ALLOWED} a",
+        "success",
+        (ALLOWED,),
+        False,
+    ),
+    "wrapper-attached-other-payload": (
+        f"{WRAP2} {UNMATCHED} b",
+        "rejected",
+        (),
+        False,
+    ),
+    # The hole the compiler must never emit: a bare wrapper allow matches any
+    # payload the wrapper carries.
+    "wrapper-blanket-hole": (
+        f"{WRAP_OK} 30 {UNMATCHED} b",
+        "success",
+        (UNMATCHED,),
+        False,
+    ),
+    # An explicit allow survives any redirect: the bundle's redirect-safety
+    # classification gates auto-allow decisions, not a user allowlist entry,
+    # so even a target outside the workspace runs (containment owns the
+    # write itself).
+    "redirect-workspace": (f"{ALLOWED} a > out.txt", "success", (ALLOWED,), False),
+    "redirect-dev-null": (f"{ALLOWED} a > /dev/null", "success", (ALLOWED,), False),
+    "redirect-outside": (
+        f"{ALLOWED} a > $HOME/probe-out.txt",
+        "success",
+        (ALLOWED,),
+        False,
+    ),
+    # smartAllowlistDenylist is a soft deny: it forces a prompt rather than
+    # blocking, so --force still runs the command.
+    "smart-prompt": (f"{SMART} a", "rejected", (), False),
+    "smart-forced": (f"{SMART} a", "success", (SMART,), True),
+    # The Desktop permissions.json beside cli-config.json is honored by the
+    # same runtime: its terminalAllowlist allows this command alone.
+    "desktop-allowlist": (f"{DESKTOP} status", "success", (DESKTOP,), False),
+    # A beforeShellExecution hook denies an otherwise allowlisted command,
+    # and --force does not override the hook verdict.
+    "hook-denied": (f"{HOOKED} a", "rejected", (), False),
+    "hook-denied-forced": (f"{HOOKED} a", "rejected", (), True),
+    # PROBE: is `Shell(prog:)` (colon, empty argstring) the exact-bare form?
+    # Valid means the bare command runs and any argument revokes the match.
+    "bare-exact-exact": (BARE_EXACT, "success", (BARE_EXACT,), False),
+    "bare-exact-args": (f"{BARE_EXACT} a", "rejected", (), False),
 }
 
 
@@ -222,6 +278,18 @@ def runtime(
                         f"Shell({API}:api *)",
                         # PROBE G: only the trailing-star form, no bare form.
                         f"Shell({OPT2}:-C * status *)",
+                        # A wrapper allow attached to its rule, with and
+                        # without the wrapper's own arguments. Never a bare
+                        # `Shell(twrap2)`, which would allow any payload.
+                        f"Shell({WRAP2}:{ALLOWED})",
+                        f"Shell({WRAP2}:{ALLOWED} *)",
+                        f"Shell({WRAP2}:* {ALLOWED})",
+                        f"Shell({WRAP2}:* {ALLOWED} *)",
+                        # Allowlisted, then clawed back by the hook below.
+                        f"Shell({HOOKED})",
+                        # PROBE: exact-bare form, colon with an empty
+                        # argstring.
+                        f"Shell({BARE_EXACT}:)",
                     ],
                     "deny": [
                         f"Shell({DENIED})",
@@ -232,7 +300,35 @@ def runtime(
                         f"Shell({API}:api * -X DELETE *)",
                         f"Shell({API}:api * -X DELETE)",
                     ],
+                    # Undocumented soft-deny channel: forces a prompt for
+                    # the matched command instead of blocking it outright.
+                    "smartAllowlistDenylist": [f"Shell({SMART})"],
                 },
+            }
+        )
+    )
+    # The Desktop permissions file shares the CLI's permission provider, so
+    # its terminalAllowlist is enforced by this runtime too.
+    (cursor / "permissions.json").write_text(
+        json.dumps({"approvalMode": "allowlist", "terminalAllowlist": [DESKTOP]})
+    )
+    hook = paths.bin / "shell-hook.sh"
+    hook.write_text(
+        "#!/bin/sh\n"
+        "payload=$(cat)\n"
+        'case "$payload" in\n'
+        f"*{HOOKED}*) "
+        'printf \'{"permission":"deny","user_message":"probe hook"}\' ;;\n'
+        "esac\n"
+    )
+    hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
+    hooks_dir = paths.home / ".cursor"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "hooks": {"beforeShellExecution": [{"command": str(hook)}]},
             }
         )
     )
@@ -248,15 +344,25 @@ def runtime(
             OPT,
             API,
             OPT2,
+            SMART,
+            DESKTOP,
+            HOOKED,
+            BARE_EXACT,
         )
     }
     for command, marker in markers.items():
         recorder = paths.bin / command
         recorder.write_text(f"#!/bin/sh\n/usr/bin/touch {marker}\n")
         recorder.chmod(recorder.stat().st_mode | stat.S_IXUSR)
-    for wrapper_name in ("timeout", WRAP_OK):
+    for wrapper_name in ("timeout", WRAP_OK, WRAP2):
         wrapper = paths.bin / wrapper_name
-        wrapper.write_text('#!/bin/sh\nshift\nexec "$@"\n')
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            # A numeric first argument is the wrapper's own (like timeout's
+            # duration); anything else is already the payload.
+            'case "$1" in [0-9]*) shift ;; esac\n'
+            'exec "$@"\n'
+        )
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     state = ToolResponder(
         "Shell",

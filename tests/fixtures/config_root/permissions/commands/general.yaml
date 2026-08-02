@@ -23,4 +23,4 @@ targets:
       commands: Codex exec policy cannot represent portable command predicates.
   cursor:
     omit:
-      commands: Cursor Desktop has no ask or deny command channel.
+      commands.deny: Cursor Desktop has no deny channel; the CLI projects it.

@@ -266,11 +266,11 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 },
             )
         )
-        for path, targets, has_intent in permissions.command_targets:
+        for path, targets, intent in permissions.command_targets:
             value = targets.root.get("codex", type(value)())
             diagnostics.extend(unhandled_target_block(path, "codex", value))
             diagnostics.extend(
-                omissions(path, "codex", value, {"commands"} if has_intent else set())
+                omissions(path, "codex", value, {"commands"} if intent else set())
             )
     native_values = [
         NativeValue(

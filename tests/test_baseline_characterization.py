@@ -252,16 +252,61 @@ def test_raw_target_files_are_manifested_and_pruned(tmp_path: Path) -> None:
     assert json.loads(manifest_path.read_text())["entries"] == {}
 
 
-def test_cursor_omissions_suppress_lossy_native_projections(tmp_path: Path) -> None:
+def test_cursor_projects_commands_alongside_native_patches(tmp_path: Path) -> None:
+    """Commands project to both Cursor surfaces; omissions cover the rest.
+
+    The CLI receives the allow corpus (with `env` wrapper forms attached to
+    their rule, never as a blanket) plus the exact deny. Desktop receives
+    the same allow through its allowlist. The omitted tools, workspace,
+    secret paths, and secret names still contribute nothing, and the
+    hand-authored patches survive beside the generated pointers.
+    """
     config_root, home = isolated_roots(tmp_path)
 
     run_sync(config_root=config_root, home=home)
 
+    allowlist = [
+        "fixture-tool:status",
+        "fixture-tool:status *",
+        "fixture-tool:-C status",
+        "fixture-tool:-C status *",
+        "fixture-tool:-C * status",
+        "fixture-tool:-C * status *",
+        "env:fixture-tool status",
+        "env:fixture-tool status *",
+        "env:* fixture-tool status",
+        "env:* fixture-tool status *",
+        "env:fixture-tool -C status",
+        "env:fixture-tool -C status *",
+        "env:* fixture-tool -C status",
+        "env:* fixture-tool -C status *",
+        "env:fixture-tool -C * status",
+        "env:fixture-tool -C * status *",
+        "env:* fixture-tool -C * status",
+        "env:* fixture-tool -C * status *",
+    ]
     assert json.loads((home / ".cursor/cli-config.json").read_text()) == {
-        "fixture": {"cursor_cli": True}
+        "fixture": {"cursor_cli": True},
+        "approvalMode": "allowlist",
+        "permissions": {
+            "allow": [f"Shell({pattern})" for pattern in allowlist],
+            "deny": [
+                "Shell(fixture-tool:remove)",
+                "Shell(fixture-tool:-C remove)",
+                "Shell(fixture-tool:-C * remove)",
+                "Shell(env:fixture-tool remove)",
+                "Shell(env:* fixture-tool remove)",
+                "Shell(env:fixture-tool -C remove)",
+                "Shell(env:* fixture-tool -C remove)",
+                "Shell(env:fixture-tool -C * remove)",
+                "Shell(env:* fixture-tool -C * remove)",
+            ],
+        },
     }
     assert json.loads((home / ".cursor/permissions.json").read_text()) == {
-        "fixture": {"cursor_desktop": True}
+        "fixture": {"cursor_desktop": True},
+        "approvalMode": "allowlist",
+        "terminalAllowlist": allowlist,
     }
 
 

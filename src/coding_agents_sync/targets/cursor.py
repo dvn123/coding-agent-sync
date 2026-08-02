@@ -14,12 +14,18 @@ from ..patches import (
     validate_generated_conflicts,
 )
 from ..plan import Diagnostic, NativePatch, NativeValue, OwnedFile, OwnedTree, Plan
-from ..sources import SkillSource, SourceBundle, StrictModel, TargetBlock
+from ..sources import (
+    CommandPermission,
+    SkillSource,
+    SourceBundle,
+    StrictModel,
+    describe_rule,
+)
 from .permissions import (
     CURSOR_TOOL_FLAGS,
     CURSOR_TOOL_PATTERNS,
-    bucket_patterns,
     cursor_shell_variants,
+    rule_patterns,
     tool_patterns,
 )
 from .support import (
@@ -82,32 +88,114 @@ def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
     )
 
 
-def _permission_values(sources: SourceBundle, root: Path) -> tuple[NativeValue, ...]:
-    if not (permissions := sources.permissions):
-        return ()
-    policy_omit = block(permissions, "cursor").omit
-    commands_omitted = any(
-        "commands" in targets.root.get("cursor", TargetBlock()).omit
-        for _, targets, has_intent in permissions.command_targets
-        if has_intent
+INTERPRETER_COMMANDS = frozenset({"bash", "eval", "sh", "zsh"})
+
+
+def _prefixes(
+    rule: CommandPermission, allowed: CommandPermission, options: tuple[str, ...]
+) -> bool:
+    if rule.command != allowed.command or allowed.exact:
+        # An exact allow admits nothing beyond its subcommand, so no
+        # non-narrowing ask can overlap it.
+        return False
+    if rule.subcommand[: len(allowed.subcommand)] == allowed.subcommand:
+        return True
+    # An ask may embed the allow's leading-option vocabulary: with `-C`
+    # declared, `git -C foo status` ends with `status` and rides the
+    # emitted option-hole head `git:-C * status`.
+    return bool(
+        allowed.subcommand
+        and rule.subcommand
+        and rule.subcommand[0] in options
+        and rule.subcommand[-len(allowed.subcommand) :] == allowed.subcommand
     )
-    commands_omitted |= "commands" in policy_omit
+
+
+def _permission_values(
+    sources: SourceBundle, root: Path
+) -> tuple[tuple[NativeValue, ...], tuple[Diagnostic, ...]]:
+    if not (permissions := sources.permissions):
+        return (), ()
+    policy_omit = block(permissions, "cursor").omit
     tools_omitted = "tools" in policy_omit
     secrets_omitted = "secret_paths" in policy_omit
-    if commands_omitted and tools_omitted and secrets_omitted:
-        return ()
-    shell = bucket_patterns(permissions, cursor_shell_variants, lambda wrapper: wrapper)
+    commands = permissions.commands
+    has_rules = bool(commands.allow or commands.ask or commands.deny)
+    if not has_rules and tools_omitted and secrets_omitted:
+        return (), ()
+
+    diagnostics: list[Diagnostic] = []
+    # An allowlisted interpreter carries its payload as an argument, so
+    # Shell(sh) allows everything the interpreter runs. Never project one.
+    allowed_rules = tuple(
+        rule for rule in commands.allow if rule.command not in INTERPRETER_COMMANDS
+    )
+    diagnostics.extend(
+        Diagnostic(
+            "warning",
+            f"omitted allow {describe_rule(rule)}: "
+            "Cursor cannot confine an interpreter payload",
+        )
+        for rule in commands.allow
+        if rule.command in INTERPRETER_COMMANDS
+    )
+
+    # An ask that narrows an allow carves a dangerous variant out of an
+    # allowed family. The CLI deny channel claws the variant back; Desktop
+    # has no deny channel, so the whole family leaves its allowlist and
+    # prompts per invocation, which is ask-equivalent. A narrowing ask the
+    # token matcher cannot express (a text predicate) excludes the family
+    # from the CLI allowlist too, rather than letting the variant ride it.
+    # An ask that shares an allow's subcommand prefix without provably
+    # narrowing it is a guarded overlap: it is clawed back the same way,
+    # with a warning, because the overlap would otherwise ride the allow.
+    narrowing = tuple(
+        rule
+        for rule in commands.ask
+        if any(rule.narrows(allowed) for allowed in allowed_rules)
+    )
+    overlap = tuple(
+        rule
+        for rule in commands.ask
+        if rule not in narrowing
+        and any(
+            _prefixes(rule, allowed, commands.option_tokens(rule.command))
+            for allowed in allowed_rules
+        )
+    )
+    diagnostics.extend(
+        Diagnostic(
+            "warning",
+            f"guarded overlap {describe_rule(rule)}: the ask shares an "
+            "allow's subcommand prefix but does not provably narrow it",
+        )
+        for rule in overlap
+    )
+    clawback: list[str] = []
+    unlowering: set[str] = set()
+    for rule in (*narrowing, *overlap):
+        if forms := rule_patterns(permissions, cursor_shell_variants, (rule,)):
+            clawback.extend(forms)
+        else:
+            unlowering.add(rule.command)
+    excluded = {rule.command for rule in (*narrowing, *overlap)}
+    allow = rule_patterns(
+        permissions,
+        cursor_shell_variants,
+        tuple(rule for rule in allowed_rules if rule.command not in unlowering),
+    )
+    desktop_allow = rule_patterns(
+        permissions,
+        cursor_shell_variants,
+        tuple(rule for rule in allowed_rules if rule.command not in excluded),
+    )
+
     cli: list[NativeValue] = [
         NativeValue(
             "cursor-cli", root / "cli-config.json", ("approvalMode",), "allowlist"
         )
     ]
-    if not commands_omitted or not tools_omitted:
-        allowed = (
-            []
-            if commands_omitted
-            else [f"Shell({pattern})" for pattern in shell["allow"]]
-        )
+    if allowed := [f"Shell({pattern})" for pattern in allow]:
         if not tools_omitted:
             allowed.extend(
                 tool_patterns(permissions.tools, CURSOR_TOOL_PATTERNS, "allow")
@@ -138,8 +226,22 @@ def _permission_values(sources: SourceBundle, root: Path) -> tuple[NativeValue, 
             for path in permissions.secret_paths
             for operation in ("Read", "Write")
         )
-    if not commands_omitted:
-        denied.extend(f"Shell({pattern})" for pattern in shell["deny"])
+    deny_forms: list[str] = []
+    for rule in commands.deny:
+        if forms := rule_patterns(permissions, cursor_shell_variants, (rule,)):
+            deny_forms.extend(forms)
+        else:
+            # Only a text predicate lowers to nothing: exact rules project,
+            # and exact+tail/text is a schema error. Degradation is safe
+            # (the command prompts), but the drop is not silent.
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"omitted deny {describe_rule(rule)}: Cursor's token "
+                    "matcher cannot hold a text predicate",
+                )
+            )
+    denied.extend(f"Shell({pattern})" for pattern in (*deny_forms, *clawback))
     if not tools_omitted:
         denied.extend(tool_patterns(permissions.tools, CURSOR_TOOL_PATTERNS, "deny"))
     if denied:
@@ -151,24 +253,27 @@ def _permission_values(sources: SourceBundle, root: Path) -> tuple[NativeValue, 
                 list(dict.fromkeys(denied)),
             )
         )
-    if commands_omitted:
-        return tuple(cli)
-    return tuple(
-        (
-            *cli,
-            NativeValue(
-                "cursor-desktop",
-                root / "permissions.json",
-                ("approvalMode",),
-                "allowlist",
-            ),
-            NativeValue(
-                "cursor-desktop",
-                root / "permissions.json",
-                ("terminalAllowlist",),
-                list(shell["allow"]),
-            ),
-        )
+    if not desktop_allow:
+        return tuple(cli), tuple(diagnostics)
+    return (
+        tuple(
+            (
+                *cli,
+                NativeValue(
+                    "cursor-desktop",
+                    root / "permissions.json",
+                    ("approvalMode",),
+                    "allowlist",
+                ),
+                NativeValue(
+                    "cursor-desktop",
+                    root / "permissions.json",
+                    ("terminalAllowlist",),
+                    desktop_allow,
+                ),
+            )
+        ),
+        tuple(diagnostics),
     )
 
 
@@ -338,13 +443,19 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             *({"secret_names"} if permissions.secret_names else set()),
         }
         diagnostics.extend(omissions(permissions.paths[0], "cursor", value, required))
-        for path, targets, has_intent in permissions.command_targets:
+        for path, targets, intent in permissions.command_targets:
             value = targets.root.get("cursor", type(value)())
             diagnostics.extend(unhandled_target_block(path, "cursor", value))
             diagnostics.extend(
-                omissions(path, "cursor", value, {"commands"} if has_intent else set())
+                omissions(
+                    path,
+                    "cursor",
+                    value,
+                    {"commands.deny"} if "deny" in intent else set(),
+                )
             )
-    native_values = _permission_values(sources, root)
+    native_values, permission_diagnostics = _permission_values(sources, root)
+    diagnostics.extend(permission_diagnostics)
     patches = []
     for target, path, name in (
         ("cursor-cli", root / "cli-config.json", "cursor-cli-config"),
