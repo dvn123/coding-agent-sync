@@ -98,7 +98,9 @@ def cursor_shell_variants(
     elif lead:
         heads = (lead,)
     elif rule.exact:
-        return ()
+        # An empty head renders as `prog:`, the exact-bare form: the program
+        # with no arguments, pinned by the bare-exact live scenarios.
+        heads = ((),)
     elif not rule.tail:
         return (rule.command,)
     else:
@@ -153,6 +155,27 @@ def literal_directories(workspace: WorkspacePermissions) -> list[str]:
 
 def secret_name_variants(names: Iterable[str]) -> tuple[str, ...]:
     return tuple(f"*{name}*" for name in names)
+
+
+def rule_patterns(
+    permissions: PermissionSource,
+    lower: Callable[[CommandPermission, Sequence[str], str | None], Sequence[str]],
+    rules: Iterable[CommandPermission],
+) -> list[str]:
+    """Lower each rule bare and once per declared wrapper, with no blanket.
+
+    A bare wrapper allow (`Shell(env)`) would match any payload the wrapper
+    carries, so a wrapper form is only ever emitted attached to its rule.
+    """
+    commands = permissions.commands
+    return list(
+        dict.fromkeys(
+            variant
+            for rule in rules
+            for wrapper in (None, *permissions.wrappers)
+            for variant in lower(rule, commands.option_tokens(rule.command), wrapper)
+        )
+    )
 
 
 def bucket_patterns(

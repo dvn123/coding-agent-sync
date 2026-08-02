@@ -229,7 +229,7 @@ CASES = (
             "targets/test_cursor_mcp.py",
             surfaces=(f"cursor-agent.{name}",),
         )
-        for name in ("mcp-runtime", "mcp-oauth")
+        for name in ("mcp-runtime", "mcp-oauth", "mcp-allowlist")
     ),
     *(
         Case(
@@ -640,6 +640,7 @@ SURFACES = (
             "modes",
             "mcp-runtime",
             "mcp-oauth",
+            "mcp-allowlist",
         ),
     ),
     *_surfaces(

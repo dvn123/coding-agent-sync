@@ -9,7 +9,7 @@
 | Skill | `<home>/.cursor/skills/<directory>/` |
 | Command | no generated surface |
 | Agent | no generated surface |
-| Permissions | owned pointers in `<home>/.cursor/cli-config.json` when portable policy is exact |
+| Permissions | owned pointers in `<home>/.cursor/cli-config.json` and `<home>/.cursor/permissions.json` |
 
 Cursor has one shared MDC rule delivery path for Desktop and Agent. The global
 rule filename is reserved. Typed rule fields are `description`, `globs`, and
@@ -17,10 +17,60 @@ rule filename is reserved. Typed rule fields are `description`, `globs`, and
 fields are `name`, `description`, `paths`, `disable-model-invocation`, and
 `metadata`.
 
-Cursor does not receive portable user commands, user agents, or command
-permissions. Sources must acknowledge `omit.command`, `omit.agent`, and
-non-empty command-policy `omit.commands` as applicable. The compiler creates
-no generated shell-command allowlist for this omitted policy.
+Cursor does not receive portable user commands or user agents. Sources must
+acknowledge `omit.command` and `omit.agent` as applicable.
+
+## Command permission projection
+
+Command rules project to two native surfaces. The CLI receives
+`approvalMode: allowlist`, `permissions.allow`, and `permissions.deny` in
+`cli-config.json`; Desktop receives `approvalMode: allowlist` and
+`terminalAllowlist` in `permissions.json`. Both files are merged with
+hand-authored native content under pointer ownership.
+
+- Allow and deny rules lower to `Shell(...)` entries with the program before
+  the colon and the token pattern after it. A bare exact rule (`command:
+  fd, exact: true`) lowers to the exact-bare form `fd:`, which matches the
+  program with no arguments. A rule with a text predicate has no
+  token-bounded form and does not project.
+- An allow whose command is an interpreter (`sh`, `bash`, `zsh`, `eval`)
+  never projects: `Shell(sh)` would allow every payload the interpreter
+  runs. The rule is skipped with a warning. The set is exactly these four,
+  the interpreters with live-probe evidence in the capability suite; other
+  interpreters (`python`, `node`, ...) are not filtered today.
+- A standalone ask never leaves the source: unlisted commands prompt, which
+  is already ask-equivalent.
+- An ask that narrows an allow claws the guarded variant back through the
+  CLI deny channel. The clawback is absolute (a CLI deny holds even under
+  `--force`), but the alternative is letting the dangerous variant ride the
+  allow. Desktop has no deny channel, so the narrowed family leaves its
+  allowlist and prompts per invocation, which is ask-equivalent. A narrowing
+  ask the token matcher cannot express (a text predicate) excludes the
+  family from the CLI allowlist too.
+- An ask that shares an allow's subcommand prefix without provably narrowing
+  it (for example, the ask re-expresses the allow's tail as subcommand
+  tokens) is a guarded overlap: it is clawed back and excludes the Desktop
+  family the same way, and the compile emits a warning, because containment
+  cannot be proven and the residual overlap would otherwise ride the allow.
+  An ask that embeds the allow's declared option vocabulary (`git -C foo
+  status` against allow `[git, status]` with `options: {git: [-C]}`) is a
+  guarded overlap for the same reason: it rides the emitted option-hole
+  head. An ask on a distinct subcommand or against an exact allow stays
+  standalone.
+- A deny rule whose text predicate has no token-bounded form degrades to a
+  prompt (allowlist mode), with a warning.
+- Wrappers never produce a bare allow: `Shell(env)` would match any payload
+  the wrapper carries, so each rule is emitted bare and once per declared
+  wrapper with the wrapper attached (`env:git status`, `env:* git status`,
+  and their trailing-star forms).
+- Desktop has no deny channel, so a fragment containing deny rules must
+  acknowledge `targets.cursor.omit.commands.deny`. The CLI still projects
+  the deny; the omission records the Desktop-side loss.
+
+Hooks are not generated. `hooks.json` and its hook scripts are delivered as
+raw files: `target-config/cursor/raw/hooks.json` mirrors to
+`<home>/.cursor/hooks.json`, where the CLI loads user hooks, and scripts sit
+beside it or anywhere else below `raw/`.
 
 Patches target `cli-config.json`, `permissions.json`, `settings.json`, and
 `mcp.json` through the corresponding `cursor-*` patch names. They must not

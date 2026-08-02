@@ -78,9 +78,13 @@ The compiler projects a canonical field only where its semantics match. For
 example, skill `paths` and `disable_model_invocation` require omissions for
 Codex and OpenCode; agent `background` requires omissions for Codex and
 OpenCode; agent `color` requires an omission for Codex; and `effort: max`
-requires one for Codex. Cursor and Codex have no portable command-policy
-projection, so every non-empty permission-rule fragment must acknowledge
-`targets.cursor.omit.commands` and `targets.codex.omit.commands`.
+requires one for Codex. Cursor projects command allow and deny rules to its
+CLI and Desktop surfaces; only the deny side requires an omission
+acknowledgment (Desktop has no deny channel), so a permission-rule fragment
+containing deny rules must acknowledge
+`targets.cursor.omit.commands.deny`. Codex has no command-policy
+projection, so every non-empty fragment must acknowledge
+`targets.codex.omit.commands`.
 
 ### Skills
 
@@ -130,7 +134,7 @@ deny:
 targets:
   cursor:
     omit:
-      commands: Cursor has no lossless portable command policy.
+      commands.deny: Cursor Desktop has no deny channel; the CLI projects it.
   codex:
     omit:
       commands: Codex has no portable command policy.

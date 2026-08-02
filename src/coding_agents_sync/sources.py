@@ -550,7 +550,7 @@ class PermissionSource(BaseModel):
     secret_names: tuple[str, ...]
     commands: CommandPermissions
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
-    command_targets: tuple[tuple[Path, TargetBlocks, bool], ...] = ()
+    command_targets: tuple[tuple[Path, TargetBlocks, frozenset[str]], ...] = ()
 
 
 class SourceBundle(BaseModel):
@@ -833,8 +833,10 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
             (
                 path,
                 fragment.targets,
-                bool(
-                    fragment.options or fragment.allow or fragment.ask or fragment.deny
+                frozenset(
+                    name
+                    for name in ("options", "allow", "ask", "deny")
+                    if getattr(fragment, name)
                 ),
             )
             for path, fragment in fragments
