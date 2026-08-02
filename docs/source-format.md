@@ -111,7 +111,9 @@ instead.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. `workspace.allow` and `.ask` contain `/`-absolute or `~/`
-roots. Command rules use portable literal argv tokens:
+roots. Command rules use portable literal argv tokens. A token may start with
+`~` to match the home-relative command text agents type; every target matches
+it literally and never expands it.
 
 ```yaml
 schema: coding-agents/v4

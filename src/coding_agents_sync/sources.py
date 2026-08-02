@@ -122,10 +122,13 @@ class CommandExecution(StrictModel):
 
 
 def _portable_tokens(value: tuple[str, ...]) -> bool:
+    # The alphabet includes ~ so a rule can match home-relative command text
+    # exactly as the agent types it (`~/.config/tool/run.sh`); tokens are
+    # compared literally and the tilde is never expanded by any target.
     return bool(value) and all(
         token
         and token == token.strip()
-        and re.fullmatch(r"[A-Za-z0-9_./,@%+=-]+", token) is not None
+        and re.fullmatch(r"[A-Za-z0-9_./,@%+=~-]+", token) is not None
         for token in value
     )
 
