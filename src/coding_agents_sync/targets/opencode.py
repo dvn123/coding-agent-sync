@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import functools
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +9,6 @@ from pydantic import AliasChoices, ConfigDict, Field
 
 from ..models import SyncContext
 from ..patches import (
-    Operation,
     Patch,
     PatchError,
     Pointer,
@@ -168,16 +167,6 @@ def _touches(left: Pointer, right: Pointer) -> bool:
     return left[: min(len(left), len(right))] == right[: min(len(left), len(right))]
 
 
-def _adds_only_denials(operation: Operation, pointer: Pointer) -> bool:
-    if operation.kind == "delete":
-        return False
-    if operation.pointer == pointer:
-        return isinstance(operation.value, Mapping) and all(
-            decision == "deny" for decision in operation.value.values()
-        )
-    return operation.value == "deny"
-
-
 def _validate_patches(
     patches: list[NativePatch], generated: tuple[NativeValue, ...]
 ) -> None:
@@ -190,19 +179,6 @@ def _validate_patches(
                     "opencode patch cannot contribute command permissions at "
                     f"{display_pointer(operation.pointer)}"
                 )
-            for pointer in (
-                ("permission", "read"),
-                ("permission", "edit"),
-                ("permission", "external_directory"),
-            ):
-                if not _touches(operation.pointer, pointer):
-                    continue
-                under = operation.pointer[: len(pointer)] == pointer
-                if not under or not _adds_only_denials(operation, pointer):
-                    raise PatchError(
-                        "opencode patch may only add deny entries at "
-                        f"{display_pointer(pointer)}"
-                    )
 
 
 def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:

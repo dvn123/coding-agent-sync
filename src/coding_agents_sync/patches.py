@@ -136,22 +136,33 @@ def merge_patches(committed: Patch, local: Patch) -> Patch:
     return Patch(tuple(operations))
 
 
+def contributes_to_generated(
+    operation: Operation, pointer: Pointer, value: Any
+) -> bool:
+    """Report whether an operation may co-own a generated pointer.
+
+    A patch contributes to generated output only by agreeing with it exactly or
+    by adding to a container the compiler owns. Any other overlap, including an
+    ancestor or descendant pointer, is ambiguous ownership.
+    """
+
+    if operation.pointer != pointer:
+        return False
+    return (
+        (operation.kind == "set" and operation.value == value)
+        or (operation.kind == "extend" and isinstance(value, list))
+        or (operation.kind == "overlay" and isinstance(value, Mapping))
+    )
+
+
 def validate_generated_conflicts(
     patch: Patch, generated: Mapping[Pointer, Any]
 ) -> None:
     for operation in patch.operations:
         for pointer, value in generated.items():
-            if operation.pointer == pointer:
-                compatible = (
-                    (operation.kind == "set" and operation.value == value)
-                    or (operation.kind == "extend" and isinstance(value, list))
-                    or (operation.kind == "overlay" and isinstance(value, Mapping))
-                )
-                if not compatible:
-                    raise PatchError(
-                        f"reserved generated path {display_pointer(pointer)}"
-                    )
-            elif (
+            if contributes_to_generated(operation, pointer, value):
+                continue
+            if (
                 pointer[: len(operation.pointer)] == operation.pointer
                 or operation.pointer[: len(pointer)] == pointer
             ):

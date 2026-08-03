@@ -18,7 +18,13 @@ from .io import (
     sync_manifested_entries,
     write_bytes,
 )
+from .patches import Pointer, contributes_to_generated
 from .plan import ManifestMode, OwnedFile, OwnedTree, Plan
+
+
+def _pointers_overlap(pointer: Pointer, other: Pointer) -> bool:
+    length = min(len(pointer), len(other))
+    return pointer[:length] == other[:length]
 
 
 def _validate_structured(path: Path) -> None:
@@ -246,20 +252,38 @@ def _validate_plan(plan: Plan) -> None:
         if previous_target != target:
             raise ValueError(f"Conflicting native surface target: {path}")
 
-    native = [
-        (value.target, value.path, value.pointer) for value in plan.native_values
-    ] + [
-        (patch.target, patch.path, operation.pointer)
+    # Generated pointers own their output outright, so any overlap between two
+    # of them is ambiguous. A patch may additionally contribute to a generated
+    # pointer, but only by agreeing with it or adding to a container the
+    # compiler owns; see patches.contributes_to_generated.
+    generated = [
+        (value.target, value.path, value.pointer, value.value)
+        for value in plan.native_values
+    ]
+    operations = [
+        (patch.target, patch.path, operation)
         for patch in plan.native_patches
         for operation in patch.operations
     ]
-    for index, (target, path, pointer) in enumerate(native):
-        for _, other_path, other_pointer in native[:index]:
-            if path != other_path:
-                continue
-            length = min(len(pointer), len(other_pointer))
-            if pointer[:length] == other_pointer[:length]:
+    for index, (target, path, pointer, _) in enumerate(generated):
+        for _, other_path, other_pointer, _ in generated[:index]:
+            if path == other_path and _pointers_overlap(pointer, other_pointer):
                 raise ValueError(f"Overlapping native pointers: {target} {pointer}")
+    for index, (target, path, operation) in enumerate(operations):
+        for _, other_path, other in operations[:index]:
+            if path == other_path and _pointers_overlap(
+                operation.pointer, other.pointer
+            ):
+                raise ValueError(
+                    f"Overlapping native pointers: {target} {operation.pointer}"
+                )
+        for _, other_path, pointer, value in generated:
+            if path != other_path or not _pointers_overlap(operation.pointer, pointer):
+                continue
+            if not contributes_to_generated(operation, pointer, value):
+                raise ValueError(
+                    f"Overlapping native pointers: {target} {operation.pointer}"
+                )
     for path in [
         *(value.path for value in plan.native_values),
         *(patch.path for patch in plan.native_patches),

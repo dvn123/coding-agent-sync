@@ -78,9 +78,10 @@ raw files: `target-config/cursor/raw/hooks.json` mirrors to
 beside it or anywhere else below `raw/`.
 
 Patches target `cli-config.json`, `permissions.json`, `settings.json`, and
-`mcp.json` through the corresponding `cursor-*` patch names. They must not
-overlap generated pointers; in particular, a Cursor Desktop patch cannot
-contribute to the terminal allowlist. Raw files below
+`mcp.json` through the corresponding `cursor-*` patch names. They may
+contribute to a generated pointer where the contribution does not clash; in
+particular, a Cursor Desktop patch cannot contribute to the terminal
+allowlist. Raw files below
 `target-config/cursor/raw/` mirror below `<home>/.cursor`; those four native
 pointer files are reserved.
 
