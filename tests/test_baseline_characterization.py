@@ -65,6 +65,9 @@ V4_PORTABLE_CHANGED = {
 }
 V4_NATIVE_CHANGED = {
     "config-root/.coding-agents-native.json",
+    # Claude's `write` tool class folds onto Edit(**); the baseline emitted a
+    # Write(**) rule that never matched.
+    "home/.claude/settings.json",
     "home/.codex/config.toml",
     "home/.cursor/cli-config.json",
     "home/.cursor/permissions.json",

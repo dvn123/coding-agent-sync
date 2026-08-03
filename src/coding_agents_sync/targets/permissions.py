@@ -7,13 +7,39 @@ from ..sources import CommandPermission, PermissionSource, WorkspacePermissions
 CLAUDE_RESOLVED_WRAPPERS = frozenset(
     {"timeout", "time", "nice", "nohup", "stdbuf", "command", "noglob", "builtin"}
 )
+# Claude's file permission checks only consult Edit rules, and an Edit rule
+# covers every file-editing tool, so `write` folds onto the same pattern as
+# `edit`. A `Write(**)` rule parses but never matches.
 CLAUDE_TOOL_PATTERNS = {
     "read": "Read(**)",
     "edit": "Edit(**)",
-    "write": "Write(**)",
+    "write": "Edit(**)",
     "webfetch": "WebFetch(*)",
     "websearch": "WebSearch(*)",
 }
+# Portable tool classes that collapse onto one Claude pattern, so they cannot
+# carry different decisions there. Strictest first.
+CLAUDE_FOLDED_TOOLS = ("edit", "write")
+DECISION_STRICTNESS = ("deny", "ask", "allow")
+
+
+def fold_claude_tools(tools: Mapping[str, str]) -> tuple[dict[str, str], str | None]:
+    """Resolve `edit` and `write` onto one decision, keeping the stricter one.
+
+    Claude has no rule that matches Write alone, so the two classes cannot
+    diverge there. Returns the resolved map and a note when it had to narrow.
+    """
+    folded = {tool: tools[tool] for tool in CLAUDE_FOLDED_TOOLS if tool in tools}
+    if len(set(folded.values())) <= 1:
+        return dict(tools), None
+    strictest = min(folded.values(), key=DECISION_STRICTNESS.index)
+    spelled = ", ".join(f"{tool}: {value}" for tool, value in folded.items())
+    return {**tools, **dict.fromkeys(folded, strictest)}, (
+        f"Claude folds {spelled} onto one Edit rule, which covers every "
+        f"file-editing tool; applying the stricter {strictest}"
+    )
+
+
 CURSOR_TOOL_PATTERNS = {"read": "Read(**)", "write": "Write(**)"}
 CURSOR_TOOL_FLAGS = {"websearch": "autoAcceptWebSearch"}
 
@@ -130,10 +156,14 @@ def cursor_shell_variants(
 def tool_patterns(
     tools: Mapping[str, str], native: Mapping[str, str], decision: str
 ) -> tuple[str, ...]:
+    # Deduplicated, because several portable classes can share one native
+    # pattern.
     return tuple(
-        native[tool]
-        for tool, chosen in sorted(tools.items())
-        if chosen == decision and tool in native
+        dict.fromkeys(
+            native[tool]
+            for tool, chosen in sorted(tools.items())
+            if chosen == decision and tool in native
+        )
     )
 
 
