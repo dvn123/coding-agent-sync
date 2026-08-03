@@ -233,10 +233,13 @@ be mode `0600`. The named patch surfaces are:
 | `opencode` | `<home>/.config/opencode/opencode.json` |
 
 Patches operate on named JSON/TOML pointers and preserve unnamed native
-fields. A patch cannot overlap a generated pointer, portable file, or raw
-file. Target compilers additionally enforce their own safety rules, such as
-OpenCode's command-policy exclusion and Cursor Desktop terminal-allowlist
-exclusion.
+fields. A patch cannot overlap a portable file or a raw file. It may
+contribute to a generated pointer only where the contribution is unambiguous:
+a `set` that agrees with the generated value, an `extend` onto a generated
+list, or an `overlay` onto a generated map. Every other overlap, including an
+ancestor or descendant pointer, is a clash and is rejected. Target compilers
+additionally enforce their own exclusions, such as OpenCode's command-policy
+exclusion and Cursor Desktop's terminal-allowlist exclusion.
 
 ## Ownership and publication
 

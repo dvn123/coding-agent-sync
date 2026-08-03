@@ -19,7 +19,8 @@ unvalidated and produces a source-located warning.
 Claude receives portable command, tool, workspace, secret-path, and
 secret-name permissions in `settings.json`. It is one of the two targets with
 an exact portable command-policy projection. Generated pointers are semantic
-hash-owned; a Claude settings patch must use different pointers.
+hash-owned; a Claude settings patch may use a different pointer, or contribute
+to a generated one where the contribution does not clash.
 
 `patches/claude-settings.yaml` targets `<home>/.claude/settings.json` and
 `patches/claude-mcp.yaml` targets `<home>/.claude.json`. Local counterparts
