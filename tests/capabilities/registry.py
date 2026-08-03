@@ -57,6 +57,12 @@ CASES = (
         surfaces=("claude.agents",),
         evidence_kind=EvidenceKind.COMPILER_E2E,
     ),
+    Case(
+        "claude.agent-tools",
+        "claude",
+        "targets/test_claude_agent_tools.py",
+        surfaces=("claude.agents",),
+    ),
     *(
         Case(
             f"claude.{name}",
