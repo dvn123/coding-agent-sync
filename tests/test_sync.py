@@ -2358,6 +2358,37 @@ class SyncTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     run_sync(config_root=config_root, home=home)
 
+    def test_claude_folds_write_onto_the_edit_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, tools={"edit": "allow", "write": "allow"})
+
+            run_sync(config_root=config_root, home=home)
+
+            allow = json.loads((home / ".claude/settings.json").read_text())[
+                "permissions"
+            ]["allow"]
+            # Write(**) parses but never matches, so it must not be emitted, and
+            # the shared Edit(**) pattern must appear once.
+            self.assertNotIn("Write(**)", allow)
+            self.assertEqual(allow.count("Edit(**)"), 1)
+
+    def test_claude_folds_split_edit_and_write_to_the_stricter_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, tools={"edit": "allow", "write": "deny"})
+
+            run_sync(config_root=config_root, home=home)
+
+            permissions = json.loads((home / ".claude/settings.json").read_text())[
+                "permissions"
+            ]
+            # One shared pattern, resolved to the stricter side rather than
+            # landing in two buckets at once.
+            self.assertIn("Edit(**)", permissions["deny"])
+            self.assertNotIn("Edit(**)", permissions["allow"])
+            self.assertNotIn("Write(**)", str(permissions))
+
     def test_portable_color_must_be_an_opencode_color(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
