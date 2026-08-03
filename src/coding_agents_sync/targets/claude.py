@@ -16,7 +16,13 @@ from pydantic import (
 from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
 from ..plan import ManifestMode, NativePatch, NativeValue, OwnedFile, OwnedTree, Plan
-from ..sources import AgentSource, SkillSource, SourceBundle, StrictModel
+from ..sources import (
+    EFFORT_LEVELS,
+    AgentSource,
+    SkillSource,
+    SourceBundle,
+    StrictModel,
+)
 from .permissions import (
     CLAUDE_RESOLVED_WRAPPERS,
     CLAUDE_TOOL_PATTERNS,
@@ -34,6 +40,7 @@ from .support import (
     markdown,
     native_patch,
     omissions,
+    one_of,
     raw_files,
     strict_native,
     unhandled_target_block,
@@ -105,6 +112,26 @@ CLAUDE_MCP_WILDCARD = "mcp__*"
 CLAUDE_AGENT_TOOL = re.compile(
     r"[A-Z][A-Za-z0-9]*|mcp__[\w.-]+(?:__(?:[\w.-]+|\*))?", re.ASCII
 )
+# Closed vocabularies from the subagent frontmatter reference. `model` is
+# excluded: it also accepts any full model ID, so it has no closed set.
+# `isolation` documents only `worktree` for frontmatter; `remote` is the Agent
+# tool's other isolation value and is accepted rather than risk a false reject.
+CLAUDE_AGENT_VOCABULARIES = {
+    "permission_mode": frozenset(
+        {
+            "default",
+            "acceptEdits",
+            "auto",
+            "dontAsk",
+            "bypassPermissions",
+            "plan",
+            "manual",
+        }
+    ),
+    "memory": frozenset({"user", "project", "local"}),
+    "isolation": frozenset({"worktree", "remote"}),
+    "effort": EFFORT_LEVELS,
+}
 
 
 def _tool_entries(value: str | list[str]) -> list[str]:
@@ -174,6 +201,14 @@ class ClaudeAgentNative(StrictModel):
                     + (f", or `{CLAUDE_MCP_WILDCARD}`" if denylist else "")
                 )
         return value
+
+    @field_validator("permission_mode", "memory", "isolation", "effort")
+    @classmethod
+    def _validate_vocabularies(
+        cls, value: str | None, info: ValidationInfo
+    ) -> str | None:
+        field = str(info.field_name)
+        return one_of(field, value, CLAUDE_AGENT_VOCABULARIES[field])
 
     @model_validator(mode="after")
     def _validate_tools_resolve(self) -> ClaudeAgentNative:

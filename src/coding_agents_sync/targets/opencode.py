@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from pydantic import AliasChoices, ConfigDict, Field
+from pydantic import AliasChoices, ConfigDict, Field, field_validator
 
 from ..models import SyncContext
 from ..patches import (
@@ -39,6 +39,7 @@ from .support import (
     markdown,
     native_patch,
     omissions,
+    one_of,
     raw_files,
     strict_native,
     unhandled_target_block,
@@ -69,6 +70,25 @@ class OpenCodeCommandNative(StrictModel):
     model: str | None = None
 
 
+# Agent Info in packages/opencode/src/agent/agent.ts. `color` is a free string
+# there, so it has no closed set. Permission effects are allow/ask/deny, nested
+# under a resource map for path-scoped rules.
+OPENCODE_AGENT_MODES = frozenset({"subagent", "primary", "all"})
+OPENCODE_PERMISSION_EFFECTS = frozenset({"allow", "ask", "deny"})
+
+
+def _permission_effects(value: Any, path: str) -> None:
+    """Check every leaf of a permission ruleset, which may nest a path map."""
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            _permission_effects(nested, f"{path}.{key}")
+    elif value not in OPENCODE_PERMISSION_EFFECTS:
+        raise ValueError(
+            f"permission {path} must be one of "
+            f"{sorted(OPENCODE_PERMISSION_EFFECTS)}, got {value!r}"
+        )
+
+
 class OpenCodeAgentNative(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -84,11 +104,26 @@ class OpenCodeAgentNative(StrictModel):
     )
     permission: dict[str, Any] | None = None
     mode: str | None = None
+
     steps: int | None = None
     temperature: float | None = None
     top_p: float | None = None
     disable: bool | None = None
     hidden: bool | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: str | None) -> str | None:
+        return one_of("mode", value, OPENCODE_AGENT_MODES)
+
+    @field_validator("permission")
+    @classmethod
+    def _validate_permission(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if value is not None:
+            _permission_effects(value, "")
+        return value
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
