@@ -2317,6 +2317,111 @@ class SyncTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(deployed.stat().st_mode), 0o700)
 
+    def test_claude_agent_native_tools_reject_inherit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "agents" / "reviewer.md",
+                source_doc(
+                    "agent",
+                    "reviewer",
+                    "reviewer",
+                    "body\n",
+                    description="Reviewer agent",
+                    extra={
+                        "claude": {
+                            "tools": "inherit",
+                            "disallowedTools": ["Edit", "Write"],
+                        }
+                    },
+                ),
+            )
+
+            with self.assertRaisesRegex(ValueError, "does not accept `inherit`"):
+                run_sync(config_root=config_root, home=home)
+            self.assertFalse((home / ".claude/agents/reviewer.md").exists())
+
+    def test_claude_agent_native_tools_reject_non_tool_names(self) -> None:
+        for entry in ("read", "web_fetch", "mcp__*"):
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as tmp:
+                config_root, home = config_root_home(tmp)
+                write(
+                    config_root / "agents" / "reviewer.md",
+                    source_doc(
+                        "agent",
+                        "reviewer",
+                        "reviewer",
+                        "body\n",
+                        description="Reviewer agent",
+                        extra={"claude": {"tools": [entry]}},
+                    ),
+                )
+
+                with self.assertRaisesRegex(ValueError, "is not a tool name"):
+                    run_sync(config_root=config_root, home=home)
+
+    def test_claude_agent_native_tools_reject_empty_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "agents" / "reviewer.md",
+                source_doc(
+                    "agent",
+                    "reviewer",
+                    "reviewer",
+                    "body\n",
+                    description="Reviewer agent",
+                    extra={
+                        "claude": {
+                            "tools": ["Read", "Edit"],
+                            "disallowedTools": "Read, Edit",
+                        }
+                    },
+                ),
+            )
+
+            with self.assertRaisesRegex(ValueError, "zero tools"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_claude_agent_native_tools_accept_names_and_mcp_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "agents" / "reviewer.md",
+                source_doc(
+                    "agent",
+                    "reviewer",
+                    "reviewer",
+                    "body\n",
+                    description="Reviewer agent",
+                    extra={
+                        "claude": {
+                            "tools": ["Read", "mcp__github", "mcp__jaeger__*"],
+                            "disallowedTools": ["mcp__*", "Edit"],
+                        }
+                    },
+                ),
+            )
+            write(
+                config_root / "agents" / "denylist.md",
+                source_doc(
+                    "agent",
+                    "denylist",
+                    "denylist",
+                    "body\n",
+                    description="Denylist agent",
+                    extra={"claude": {"disallowedTools": ["Edit", "Write"]}},
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            reviewer = (home / ".claude/agents/reviewer.md").read_text()
+            self.assertIn("- mcp__jaeger__*", reviewer)
+            denylist = (home / ".claude/agents/denylist.md").read_text()
+            self.assertIn("disallowedTools:", denylist)
+            self.assertNotIn("tools: inherit", denylist)
+
     def test_codex_rules_reject_unknown_typed_fields(
         self,
     ) -> None:

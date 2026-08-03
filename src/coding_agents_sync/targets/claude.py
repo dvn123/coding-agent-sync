@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import AliasChoices, ConfigDict, Field
+from pydantic import (
+    AliasChoices,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
@@ -93,6 +101,18 @@ class ClaudeCommandNative(StrictModel):
     )
 
 
+CLAUDE_MCP_WILDCARD = "mcp__*"
+CLAUDE_AGENT_TOOL = re.compile(
+    r"[A-Z][A-Za-z0-9]*|mcp__[\w.-]+(?:__(?:[\w.-]+|\*))?", re.ASCII
+)
+
+
+def _tool_entries(value: str | list[str]) -> list[str]:
+    """Claude accepts a comma-separated string or a list in either tool field."""
+    items = value.split(",") if isinstance(value, str) else value
+    return [item.strip() for item in items]
+
+
 class ClaudeAgentNative(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -104,7 +124,6 @@ class ClaudeAgentNative(StrictModel):
         serialization_alias="disallowedTools",
         validation_alias=AliasChoices("disallowedTools", "disallowed_tools"),
     )
-
     effort: str | None = None
     background: bool | None = None
     color: str | None = None
@@ -127,6 +146,46 @@ class ClaudeAgentNative(StrictModel):
         validation_alias=AliasChoices("initialPrompt", "initial_prompt"),
     )
     skills: list[str] | None = None
+
+    @field_validator("tools", "disallowed_tools")
+    @classmethod
+    def _validate_tool_names(
+        cls, value: str | list[str] | None, info: ValidationInfo
+    ) -> str | list[str] | None:
+        if value is None:
+            return value
+        denylist = info.field_name == "disallowed_tools"
+        entries = _tool_entries(value)
+        if not denylist and not entries:
+            raise ValueError("tools must not be empty; omit it to inherit every tool")
+        for entry in entries:
+            if entry == "inherit":
+                raise ValueError(
+                    "tools does not accept `inherit`; omit the field to inherit "
+                    "every tool available to subagents (`inherit` is a `model` value)"
+                )
+            if entry == CLAUDE_MCP_WILDCARD and denylist:
+                continue
+            if not CLAUDE_AGENT_TOOL.fullmatch(entry):
+                raise ValueError(
+                    f"{info.field_name} entry {entry!r} is not a tool name; expected "
+                    f"an exact name such as `Read`, `mcp__<server>`, or "
+                    f"`mcp__<server>__*`"
+                    + (f", or `{CLAUDE_MCP_WILDCARD}`" if denylist else "")
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_tools_resolve(self) -> ClaudeAgentNative:
+        if self.tools is None:
+            return self
+        denied = set(_tool_entries(self.disallowed_tools or []))
+        if denied and not set(_tool_entries(self.tools)) - denied:
+            raise ValueError(
+                "every tools entry is also in disallowedTools, so the agent would "
+                "resolve to zero tools and fail to launch"
+            )
+        return self
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
