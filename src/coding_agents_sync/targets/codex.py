@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import tomlkit
-from pydantic import AliasChoices, ConfigDict, Field
+from pydantic import AliasChoices, ConfigDict, Field, field_validator
 
 from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
@@ -25,6 +25,7 @@ from .support import (
     frontmatter,
     native_patch,
     omissions,
+    one_of,
     raw_files,
     strict_native,
     unhandled_target_block,
@@ -55,6 +56,11 @@ class CodexSkillNative(StrictModel):
     )
 
 
+# SandboxMode in codex-rs/protocol/src/config_types.rs. `external-sandbox`
+# is excluded: that enum is SandboxModeRequirement, which config.toml rejects.
+CODEX_SANDBOX_MODES = frozenset({"read-only", "workspace-write", "danger-full-access"})
+
+
 class CodexAgentNative(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -62,9 +68,17 @@ class CodexAgentNative(StrictModel):
     description: str | None = None
     developer_instructions: str | None = None
     model: str | None = None
+    # Not validated: the ReasoningEffort enum ends in Custom(String) for
+    # "a model-defined effort value that this client does not know yet", so
+    # the accepted set is deliberately open.
     model_reasoning_effort: str | None = None
     sandbox_mode: str | None = None
     nickname_candidates: list[str] | None = None
+
+    @field_validator("sandbox_mode")
+    @classmethod
+    def _validate_sandbox_mode(cls, value: str | None) -> str | None:
+        return one_of("sandbox_mode", value, CODEX_SANDBOX_MODES)
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:

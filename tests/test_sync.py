@@ -2317,6 +2317,89 @@ class SyncTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(deployed.stat().st_mode), 0o700)
 
+    def _agent_native(self, config_root: Path, target: str, native: object) -> None:
+        write(
+            config_root / "agents" / "reviewer.md",
+            source_doc(
+                "agent",
+                "reviewer",
+                "reviewer",
+                "body\n",
+                description="Reviewer agent",
+                extra={target: native},
+            ),
+        )
+
+    def test_agent_native_vocabularies_reject_unknown_values(self) -> None:
+        cases = (
+            ("claude", {"permissionMode": "readOnly"}, "permission_mode must be one"),
+            ("claude", {"memory": "session"}, "memory must be one of"),
+            ("claude", {"isolation": "sandbox"}, "isolation must be one of"),
+            ("claude", {"effort": "highest"}, "effort must be one of"),
+            ("codex", {"sandbox_mode": "read only"}, "sandbox_mode must be one of"),
+            # config.toml rejects this SandboxModeRequirement-only value.
+            ("codex", {"sandbox_mode": "external-sandbox"}, "sandbox_mode must be one"),
+            ("opencode", {"mode": "sub-agent"}, "mode must be one of"),
+            ("opencode", {"permission": {"edit": "reject"}}, "permission .edit must"),
+            (
+                "opencode",
+                {"permission": {"bash": {"git push *": "prompt"}}},
+                "permission .bash.git push \\* must be",
+            ),
+        )
+        for target, native, message in cases:
+            with (
+                self.subTest(target=target, native=native),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                config_root, home = config_root_home(tmp)
+                self._agent_native(config_root, target, native)
+
+                with self.assertRaisesRegex(ValueError, message):
+                    run_sync(config_root=config_root, home=home)
+
+    def test_agent_native_vocabularies_accept_documented_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            self._agent_native(
+                config_root,
+                "claude",
+                {
+                    "permissionMode": "acceptEdits",
+                    "memory": "project",
+                    "isolation": "worktree",
+                },
+            )
+            write(
+                config_root / "agents" / "second.md",
+                source_doc(
+                    "agent",
+                    "second",
+                    "second",
+                    "body\n",
+                    description="Second agent",
+                    extra={
+                        "codex": {"sandbox_mode": "workspace-write"},
+                        "opencode": {
+                            "mode": "subagent",
+                            "permission": {"edit": "deny", "bash": {"ls": "allow"}},
+                            # Left unvalidated: ReasoningEffort is an open set.
+                            "reasoningEffort": "model-specific-effort",
+                        },
+                    },
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertIn(
+                "permissionMode: acceptEdits",
+                (home / ".claude/agents/reviewer.md").read_text(),
+            )
+            second = (home / ".config/opencode/agents/second.md").read_text()
+            self.assertIn("mode: subagent", second)
+            self.assertIn("reasoningEffort: model-specific-effort", second)
+
     def test_claude_agent_native_tools_reject_inherit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)

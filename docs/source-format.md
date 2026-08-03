@@ -122,6 +122,18 @@ and `color` are portable only as described above. Tool allow/deny/inheritance
 is deliberately not portable agent intent: write strict target-native settings
 instead.
 
+Because those settings are target-native, they are checked against each host's
+closed vocabulary rather than passed through: Claude `permissionMode`,
+`memory`, `isolation`, and `effort`; Codex `sandbox_mode`; OpenCode `mode` and
+every leaf of `permission`. Claude `tools` and `disallowedTools` must name real
+tools or MCP patterns — omit `tools` to inherit the pool, because a list that
+resolves to nothing makes Claude refuse to spawn the agent, which
+`claude.agent-tools` pins against the installed binary.
+
+Fields whose accepted set is genuinely open stay unchecked: any `model` ID,
+Codex `model_reasoning_effort` (its enum ends in a catch-all for
+model-defined values), and OpenCode `color`.
+
 ### Permissions
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
