@@ -504,6 +504,7 @@ class SourceModel(BaseModel):
     id: str
     name: str
     description: str
+    only: tuple[str, ...] = ()
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
     body: str
 
@@ -571,9 +572,26 @@ def _model_error(path: Path, exc: ValidationError) -> SourceSchemaError:
     return SourceSchemaError(f"{path}: {exc}")
 
 
+def _parse_only(path: Path, value: Any) -> tuple[str, ...]:
+    """Restrict which targets receive this artifact. Absent or empty means all."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise SourceSchemaError(f"{path}: `only` must be a list of target names")
+    if not all(isinstance(item, str) and item for item in value):
+        raise SourceSchemaError(
+            f"{path}: `only` entries must be non-empty target name strings"
+        )
+    if unknown := set(value) - TOOL_NAMES:
+        raise SourceSchemaError(f"{path}: unknown only targets: {sorted(unknown)}")
+    if len(value) != len(set(value)):
+        raise SourceSchemaError(f"{path}: `only` must not contain duplicates")
+    return tuple(value)
+
+
 def _split_frontmatter(
     path: Path, meta: dict[str, Any]
-) -> tuple[dict[str, Any], TargetBlocks]:
+) -> tuple[dict[str, Any], TargetBlocks, tuple[str, ...]]:
     """Separate portable fields from exact-key target blocks.
 
     `raw` is intentionally never normalized. Target compilers own typed-field
@@ -582,6 +600,7 @@ def _split_frontmatter(
     """
     remaining = dict(meta)
     target_data = remaining.pop("targets", {})
+    only = _parse_only(path, remaining.pop("only", None))
     remaining.pop("internal", None)
     if not isinstance(target_data, dict):
         raise SourceSchemaError(f"{path}: `targets` must be a mapping")
@@ -589,9 +608,13 @@ def _split_frontmatter(
         targets = TargetBlocks.model_validate(target_data)
     except ValidationError as exc:
         raise _model_error(path, exc) from exc
-    return {
-        key: value for key, value in remaining.items() if key not in COMMON_KEYS
-    }, targets
+    if only and (extra := set(targets.root) - set(only)):
+        raise SourceSchemaError(f"{path}: targets outside only: {sorted(extra)}")
+    return (
+        {key: value for key, value in remaining.items() if key not in COMMON_KEYS},
+        targets,
+        only,
+    )
 
 
 def _validate_markdown_frontmatter(path: Path) -> None:
@@ -630,12 +653,13 @@ def _parse_common(
         if not meta.get(required):
             raise SourceSchemaError(f"{path}: missing required field `{required}`")
 
-    remaining, targets = _split_frontmatter(path, meta)
+    remaining, targets, only = _split_frontmatter(path, meta)
 
     common = {
         "id": str(meta["id"]),
         "name": str(meta["name"]),
         "description": str(meta.get("description") or ""),
+        "only": only,
     }
     return common, remaining, targets, (post.content or "").lstrip("\n")
 

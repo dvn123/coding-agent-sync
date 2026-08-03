@@ -29,6 +29,7 @@ from .permissions import (
     tool_patterns,
 )
 from .support import (
+    applies_to,
     block,
     frontmatter,
     markdown,
@@ -366,25 +367,44 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     diagnostics: list[Diagnostic] = []
     if sources.globals:
         global_source = sources.globals[0]
-        value = block(global_source, "cursor")
-        diagnostics.extend(unhandled_target_block(global_source.path, "cursor", value))
-        diagnostics.extend(omissions(global_source.path, "cursor", value, set()))
-        meta = {"description": global_source.name, "globs": "", "alwaysApply": True}
-        files.append(
-            OwnedFile(
-                rules_root / "coding-agents-global.mdc",
-                markdown(meta, global_source.body),
-                rules_root,
+        if applies_to(global_source, "cursor"):
+            value = block(global_source, "cursor")
+            diagnostics.extend(
+                unhandled_target_block(global_source.path, "cursor", value)
             )
-        )
-        files.append(
-            OwnedFile(
-                root / "AGENTS.md",
-                None,
-                retire_if=(global_source.body.rstrip() + "\n").encode(),
+            diagnostics.extend(omissions(global_source.path, "cursor", value, set()))
+            meta = {
+                "description": global_source.name,
+                "globs": "",
+                "alwaysApply": True,
+            }
+            files.append(
+                OwnedFile(
+                    rules_root / "coding-agents-global.mdc",
+                    markdown(meta, global_source.body),
+                    rules_root,
+                )
             )
-        )
+            files.append(
+                OwnedFile(
+                    root / "AGENTS.md",
+                    None,
+                    retire_if=(global_source.body.rstrip() + "\n").encode(),
+                )
+            )
+        else:
+            # Manifested MDC is pruned by absence; also retire a leftover host
+            # AGENTS.md that still matches the excluded global body.
+            files.append(
+                OwnedFile(
+                    root / "AGENTS.md",
+                    None,
+                    retire_if=(global_source.body.rstrip() + "\n").encode(),
+                )
+            )
     for rule in sources.rules:
+        if not applies_to(rule, "cursor"):
+            continue
         value = block(rule, "cursor")
         native, issues = strict_native(rule.path, "cursor", value, CursorRuleNative)
         diagnostics.extend(issues)
@@ -423,6 +443,8 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 )
             )
     for skill in sources.skills:
+        if not applies_to(skill, "cursor"):
+            continue
         value = block(skill, "cursor")
         native, issues = strict_native(skill.path, "cursor", value, CursorSkillNative)
         diagnostics.extend(issues)
@@ -454,10 +476,14 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.extend(issues)
             trees.append(_tree(skill, skills_root, meta))
     for command in sources.commands:
+        if not applies_to(command, "cursor"):
+            continue
         value = block(command, "cursor")
         diagnostics.extend(unhandled_target_block(command.path, "cursor", value))
         diagnostics.extend(omissions(command.path, "cursor", value, {"command"}))
     for agent in sources.agents:
+        if not applies_to(agent, "cursor"):
+            continue
         value = block(agent, "cursor")
         diagnostics.extend(unhandled_target_block(agent.path, "cursor", value))
         diagnostics.extend(omissions(agent.path, "cursor", value, {"agent"}))

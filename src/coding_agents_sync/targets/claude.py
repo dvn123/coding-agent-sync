@@ -19,6 +19,7 @@ from .permissions import (
     tool_patterns,
 )
 from .support import (
+    applies_to,
     block,
     frontmatter,
     markdown,
@@ -221,13 +222,30 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     diagnostics = []
     if sources.globals:
         global_source = sources.globals[0]
-        value = block(global_source, "claude")
-        diagnostics.extend(unhandled_target_block(global_source.path, "claude", value))
-        diagnostics.extend(omissions(global_source.path, "claude", value, set()))
-        files.append(
-            OwnedFile(root / "CLAUDE.md", (global_source.body.rstrip() + "\n").encode())
-        )
+        if applies_to(global_source, "claude"):
+            value = block(global_source, "claude")
+            diagnostics.extend(
+                unhandled_target_block(global_source.path, "claude", value)
+            )
+            diagnostics.extend(omissions(global_source.path, "claude", value, set()))
+            files.append(
+                OwnedFile(
+                    root / "CLAUDE.md",
+                    (global_source.body.rstrip() + "\n").encode(),
+                )
+            )
+        else:
+            # Drop a previously emitted global when `only` excludes this host.
+            files.append(
+                OwnedFile(
+                    root / "CLAUDE.md",
+                    None,
+                    retire_if=(global_source.body.rstrip() + "\n").encode(),
+                )
+            )
     for rule in sources.rules:
+        if not applies_to(rule, "claude"):
+            continue
         value = block(rule, "claude")
         diagnostics.extend(unhandled_target_block(rule.path, "claude", value))
         diagnostics.extend(omissions(rule.path, "claude", value, set()))
@@ -239,6 +257,8 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
         )
     for skill in sources.skills:
+        if not applies_to(skill, "claude"):
+            continue
         value = block(skill, "claude")
         native, issues = strict_native(skill.path, "claude", value, ClaudeSkillNative)
         diagnostics.extend(issues)
@@ -272,6 +292,8 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.extend(issues)
             trees.append(_tree(skill, root / "skills", meta))
     for command in sources.commands:
+        if not applies_to(command, "claude"):
+            continue
         value = block(command, "claude")
         native, issues = strict_native(
             command.path, "claude", value, ClaudeCommandNative
@@ -294,6 +316,8 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 )
             )
     for agent in sources.agents:
+        if not applies_to(agent, "claude"):
+            continue
         value = block(agent, "claude")
         native, issues = strict_native(agent.path, "claude", value, ClaudeAgentNative)
         diagnostics.extend(issues)

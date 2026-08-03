@@ -68,24 +68,31 @@ def source_doc(
             else:
                 meta[key] = value
     if kind == "command":
-        target_blocks.setdefault("codex", {}).setdefault("omit", {})["command"] = (
-            "Codex has no native command delivery."
-        )
-        target_blocks.setdefault("cursor", {}).setdefault("omit", {})["command"] = (
-            "Cursor has no user command delivery."
-        )
+        only = set(meta.get("only") or ())
+        if not only or "codex" in only:
+            target_blocks.setdefault("codex", {}).setdefault("omit", {})["command"] = (
+                "Codex has no native command delivery."
+            )
+        if not only or "cursor" in only:
+            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["command"] = (
+                "Cursor has no user command delivery."
+            )
     if kind == "agent":
-        target_blocks.setdefault("cursor", {}).setdefault("omit", {})["agent"] = (
-            "Cursor Agent does not load user agents."
-        )
+        only = set(meta.get("only") or ())
+        if not only or "cursor" in only:
+            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["agent"] = (
+                "Cursor Agent does not load user agents."
+            )
         if meta.get("background"):
-            target_blocks.setdefault("codex", {}).setdefault("omit", {})[
-                "background"
-            ] = "Codex agents have no background field."
-            target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
-                "background"
-            ] = "OpenCode agents have no background field."
-        if meta.get("color"):
+            if not only or "codex" in only:
+                target_blocks.setdefault("codex", {}).setdefault("omit", {})[
+                    "background"
+                ] = "Codex agents have no background field."
+            if not only or "opencode" in only:
+                target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
+                    "background"
+                ] = "OpenCode agents have no background field."
+        if meta.get("color") and (not only or "codex" in only):
             target_blocks.setdefault("codex", {}).setdefault("omit", {})["color"] = (
                 "Codex agents have no color field."
             )
@@ -95,31 +102,38 @@ def source_doc(
         if activation.get("globs"):
             native["globs"] = activation["globs"]
     if kind == "skill":
+        only = set(meta.get("only") or ())
         if meta.get("license"):
-            target_blocks.setdefault("claude", {}).setdefault("omit", {})["license"] = (
-                "Claude skills have no license field."
-            )
-            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["license"] = (
-                "Cursor skills have no license field."
-            )
-        if meta.get("metadata"):
+            if not only or "claude" in only:
+                target_blocks.setdefault("claude", {}).setdefault("omit", {})[
+                    "license"
+                ] = "Claude skills have no license field."
+            if not only or "cursor" in only:
+                target_blocks.setdefault("cursor", {}).setdefault("omit", {})[
+                    "license"
+                ] = "Cursor skills have no license field."
+        if meta.get("metadata") and (not only or "claude" in only):
             target_blocks.setdefault("claude", {}).setdefault("omit", {})[
                 "metadata"
             ] = "Claude skills have no metadata field."
         if meta.get("paths"):
-            target_blocks.setdefault("codex", {}).setdefault("omit", {})["paths"] = (
-                "Codex skills have no path activation."
-            )
-            target_blocks.setdefault("opencode", {}).setdefault("omit", {})["paths"] = (
-                "OpenCode skills have no path activation."
-            )
+            if not only or "codex" in only:
+                target_blocks.setdefault("codex", {}).setdefault("omit", {})[
+                    "paths"
+                ] = "Codex skills have no path activation."
+            if not only or "opencode" in only:
+                target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
+                    "paths"
+                ] = "OpenCode skills have no path activation."
         if meta.get("disable_model_invocation"):
-            target_blocks.setdefault("codex", {}).setdefault("omit", {})[
-                "disable_model_invocation"
-            ] = "Codex skills have no invocation toggle."
-            target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
-                "disable_model_invocation"
-            ] = "OpenCode skills have no invocation toggle."
+            if not only or "codex" in only:
+                target_blocks.setdefault("codex", {}).setdefault("omit", {})[
+                    "disable_model_invocation"
+                ] = "Codex skills have no invocation toggle."
+            if not only or "opencode" in only:
+                target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
+                    "disable_model_invocation"
+                ] = "OpenCode skills have no invocation toggle."
     if target_blocks:
         meta["targets"] = target_blocks
     yaml_text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
@@ -2758,6 +2772,130 @@ body
 
             with self.assertRaisesRegex(ValueError, "missing or invalid schema"):
                 run_sync(config_root=config_root, home=home)
+
+    def test_only_unknown_target_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "rules" / "scoped.md",
+                source_doc(
+                    "rule",
+                    "scoped",
+                    "scoped",
+                    "body\n",
+                    extra={"only": ["cursor", "nope"]},
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "unknown only targets"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_only_rejects_targets_outside_the_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "rules" / "scoped.md",
+                source_doc(
+                    "rule",
+                    "scoped",
+                    "scoped",
+                    "body\n",
+                    extra={
+                        "only": ["cursor"],
+                        "claude": {"future": True},
+                    },
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "targets outside only"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_only_restricts_emission_and_skips_foreign_omits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "global" / "AGENTS.md",
+                source_doc("global", "global", "global", "Shared global\n"),
+            )
+            write(
+                config_root / "rules" / "cursor-shell.md",
+                source_doc(
+                    "rule",
+                    "cursor-shell",
+                    "cursor-shell",
+                    "Cursor-only body\n",
+                    description="Cursor shell guidance",
+                    extra={
+                        "only": ["cursor"],
+                        "activation": {"always": True},
+                    },
+                ),
+            )
+            write(
+                config_root / "commands" / "claude-only.md",
+                source_doc(
+                    "command",
+                    "claude-only",
+                    "claude-only",
+                    "Run me\n",
+                    description="Claude only",
+                    extra={
+                        "only": ["claude"],
+                        "claude": {"description": "Claude only"},
+                    },
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cursor_rule = home / ".cursor" / "rules" / "cursor-shell.mdc"
+            self.assertTrue(cursor_rule.exists())
+            self.assertIn("Cursor-only body", cursor_rule.read_text(encoding="utf-8"))
+            self.assertFalse((home / ".claude" / "rules" / "cursor-shell.md").exists())
+            self.assertNotIn(
+                "Cursor-only body",
+                (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"),
+            )
+            self.assertTrue((home / ".claude" / "commands" / "claude-only.md").exists())
+            self.assertFalse(
+                (home / ".config" / "opencode" / "commands" / "claude-only.md").exists()
+            )
+
+    def test_only_on_global_retires_excluded_host_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "global" / "AGENTS.md",
+                source_doc("global", "global", "global", "Shared global\n"),
+            )
+            run_sync(config_root=config_root, home=home)
+            self.assertEqual(
+                (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8"),
+                "Shared global\n",
+            )
+            self.assertEqual(
+                (home / ".config" / "opencode" / "AGENTS.md").read_text(
+                    encoding="utf-8"
+                ),
+                "Shared global\n",
+            )
+
+            write(
+                config_root / "global" / "AGENTS.md",
+                source_doc(
+                    "global",
+                    "global",
+                    "global",
+                    "Shared global\n",
+                    extra={"only": ["cursor"]},
+                ),
+            )
+            run_sync(config_root=config_root, home=home)
+
+            self.assertFalse((home / ".claude" / "CLAUDE.md").exists())
+            self.assertFalse((home / ".config" / "opencode" / "AGENTS.md").exists())
+            self.assertFalse((home / ".codex" / "AGENTS.md").exists())
+            self.assertTrue(
+                (home / ".cursor" / "rules" / "coding-agents-global.mdc").exists()
+            )
 
     def test_invalid_sources_reports_all_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
