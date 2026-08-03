@@ -21,6 +21,7 @@ from ..sources import AgentSource, SkillSource, SourceBundle, StrictModel
 from .support import (
     applies_to,
     block,
+    bundled_files,
     frontmatter,
     native_patch,
     omissions,
@@ -67,16 +68,17 @@ class CodexAgentNative(StrictModel):
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
-    files = {
-        path.relative_to(skill.source_dir): path.read_bytes()
-        for path in skill.source_dir.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    }
+    files, executables = bundled_files(skill.source_dir)
     import yaml
 
     header = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
     files[Path("SKILL.md")] = f"---\n{header}\n---\n\n{skill.body.rstrip()}\n".encode()
-    return OwnedTree(root / skill.source_dir.name, tuple(sorted(files.items())), root)
+    return OwnedTree(
+        root / skill.source_dir.name,
+        tuple(sorted(files.items())),
+        root,
+        executables=executables,
+    )
 
 
 def _rule_text(rules: list[tuple[str, CodexPrefixRule]]) -> bytes | None:

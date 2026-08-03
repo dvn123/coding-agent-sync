@@ -26,6 +26,7 @@ class OwnedTree:
     manifest_mode: ManifestMode = "dir"
     declaration: bool = False
     retired: bool = False
+    executables: frozenset[Path] = frozenset()
 
 
 @dataclass(frozen=True)
