@@ -145,7 +145,10 @@ provider, so unknown keys there are passthrough by design.
 ### Permissions
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
-`ask`, or `deny`. `workspace.allow` and `.ask` contain `/`-absolute or `~/`
+`ask`, or `deny`. Claude has no rule that matches Write alone — its Edit rules
+cover every file-editing tool — so `edit` and `write` fold onto one `Edit(**)`
+pattern there, and a split decision narrows to the stricter side with a
+warning. `workspace.allow` and `.ask` contain `/`-absolute or `~/`
 roots. Command rules use portable literal argv tokens. A token may start with
 `~` to match the home-relative command text agents type; every target matches
 it literally and never expands it.

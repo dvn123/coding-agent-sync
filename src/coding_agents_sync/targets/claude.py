@@ -15,7 +15,15 @@ from pydantic import (
 
 from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
-from ..plan import ManifestMode, NativePatch, NativeValue, OwnedFile, OwnedTree, Plan
+from ..plan import (
+    Diagnostic,
+    ManifestMode,
+    NativePatch,
+    NativeValue,
+    OwnedFile,
+    OwnedTree,
+    Plan,
+)
 from ..sources import (
     EFFORT_LEVELS,
     AgentSource,
@@ -27,6 +35,7 @@ from .permissions import (
     CLAUDE_RESOLVED_WRAPPERS,
     CLAUDE_TOOL_PATTERNS,
     bucket_patterns,
+    fold_claude_tools,
     glob_variants,
     literal_directories,
     secret_name_variants,
@@ -260,6 +269,9 @@ def _permission_values(
         lambda wrapper: f"{wrapper} *",
         CLAUDE_RESOLVED_WRAPPERS,
     )
+    # Folded first, so edit and write cannot put the shared Edit pattern into
+    # two buckets at once.
+    tools = fold_claude_tools(permissions.tools)[0]
     ask = buckets["ask"] + list(secret_name_variants(permissions.secret_names))
     deny = [f"Bash({pattern})" for pattern in buckets["deny"]] + [
         f"{operation}({path})"
@@ -270,15 +282,15 @@ def _permission_values(
         (
             ("permissions", "allow"),
             [f"Bash({pattern})" for pattern in buckets["allow"]]
-            + list(tool_patterns(permissions.tools, CLAUDE_TOOL_PATTERNS, "allow")),
+            + list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "allow")),
         ),
         (
             ("permissions", "ask"),
             [f"Bash({pattern})" for pattern in ask]
-            + list(tool_patterns(permissions.tools, CLAUDE_TOOL_PATTERNS, "ask")),
+            + list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "ask")),
         ),
     ]
-    deny += list(tool_patterns(permissions.tools, CLAUDE_TOOL_PATTERNS, "deny"))
+    deny += list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "deny"))
     if deny:
         values.append((("permissions", "deny"), deny))
     if directories := literal_directories(permissions.workspace):
@@ -443,6 +455,8 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 {"workspace.ask"} if permissions.workspace.ask else set(),
             )
         )
+        if note := fold_claude_tools(permissions.tools)[1]:
+            diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         for path, targets, _ in permissions.command_targets:
             value = targets.root.get("claude", type(value)())
             diagnostics.extend(unhandled_target_block(path, "claude", value))
