@@ -66,13 +66,24 @@ Permission documents use the same common fields in YAML, without frontmatter.
 
 | Kind | Fields |
 | --- | --- |
-| Global | No additional fields. |
-| Rule | No additional fields. |
-| Skill | `paths`, `disable_model_invocation`, `license`, `metadata`. |
-| Command | `execution.agent`, `execution.subtask`. |
-| Agent | `effort`, `background`, `color`. |
+| Global | `only`. |
+| Rule | `only`. |
+| Skill | `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
+| Command | `only`, `execution.agent`, `execution.subtask`. |
+| Agent | `only`, `effort`, `background`, `color`. |
 | Permission policy | `wrappers`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `options`, `allow`, `ask`, `deny`. |
+
+`only` is an optional list of target names (`claude`, `cursor`, `codex`,
+`opencode`). Absent or empty means every target that supports the kind receives
+the artifact. A non-empty list restricts emission to those targets: compilers
+skip emit and omit checks for every other target, and any `targets.<name>`
+block outside the list is an error. Prefer `only` when guidance is
+intentionally host-specific; keep `omit` for unavoidable field loss on a
+target that still receives the artifact. When a global is excluded by `only`,
+compilers retire the previously generated host file (`CLAUDE.md`,
+`AGENTS.md`, or Cursor's manifested global MDC) rather than leaving stale
+policy in place.
 
 The compiler projects a canonical field only where its semantics match. For
 example, skill `paths` and `disable_model_invocation` require omissions for
@@ -84,7 +95,9 @@ acknowledgment (Desktop has no deny channel), so a permission-rule fragment
 containing deny rules must acknowledge
 `targets.cursor.omit.commands.deny`. Codex has no command-policy
 projection, so every non-empty fragment must acknowledge
-`targets.codex.omit.commands`.
+`targets.codex.omit.commands`. Commands and agents that intentionally never
+reach Cursor or Codex can set `only: [claude, opencode]` instead of repeating
+those surface omissions.
 
 ### Skills
 
@@ -97,8 +110,10 @@ from another target for one of these values.
 
 `execution.agent` asks Claude and OpenCode to invoke a named subagent.
 `execution.subtask: true` asks each to run the command as an isolated subtask.
-Cursor and Codex require `omit.command`, because neither has this generated
-user-command surface.
+Cursor and Codex require `omit.command` when they remain in the emit set,
+because neither has this generated user-command surface. Prefer
+`only: [claude, opencode]` when the command is never meant for those hosts
+instead of repeating the omissions.
 
 ### Agents
 

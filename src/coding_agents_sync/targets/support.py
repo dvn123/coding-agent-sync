@@ -14,6 +14,12 @@ from ..plan import Diagnostic, NativePatch, OwnedFile, OwnedTree
 from ..sources import TargetBlock
 
 
+def applies_to(source: Any, target: str) -> bool:
+    """Whether this portable artifact should emit (and owe omits) on `target`."""
+    only = getattr(source, "only", ())
+    return not only or target in only
+
+
 def block(source: Any, target: str) -> TargetBlock:
     return source.targets.root.get(target, TargetBlock())
 

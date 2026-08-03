@@ -19,6 +19,7 @@ from ..plan import (
 )
 from ..sources import AgentSource, SkillSource, SourceBundle, StrictModel
 from .support import (
+    applies_to,
     block,
     frontmatter,
     native_patch,
@@ -141,21 +142,27 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         for name, mode in managed_roots
     ]
     diagnostics: list[Diagnostic] = []
-    if sources.globals or sources.rules:
-        if sources.globals:
-            global_source = sources.globals[0]
+    globals_ = [item for item in sources.globals if applies_to(item, "codex")]
+    rules_ = [item for item in sources.rules if applies_to(item, "codex")]
+    if globals_ or rules_:
+        if globals_:
+            global_source = globals_[0]
             value = block(global_source, "codex")
             diagnostics.extend(
                 unhandled_target_block(global_source.path, "codex", value)
             )
             diagnostics.extend(omissions(global_source.path, "codex", value, set()))
-        parts = [sources.globals[0].body.rstrip()] if sources.globals else []
-        parts.extend(rule.body.rstrip() for rule in sources.rules)
+        parts = [globals_[0].body.rstrip()] if globals_ else []
+        parts.extend(rule.body.rstrip() for rule in rules_)
         files.append(
             OwnedFile(root / "AGENTS.md", ("\n\n".join(parts) + "\n").encode())
         )
+    elif sources.globals or sources.rules:
+        # Every global/rule was filtered by `only`. This host file is compiler-
+        # owned whenever those sources exist, so retire it unconditionally.
+        files.append(OwnedFile(root / "AGENTS.md", None))
     rules: list[tuple[str, CodexPrefixRule]] = []
-    for rule in sources.rules:
+    for rule in rules_:
         value = block(rule, "codex")
         native, issues = strict_native(rule.path, "codex", value, CodexRuleNative)
         diagnostics.extend(issues)
@@ -172,6 +179,8 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         )
     skill_paths: list[str] = []
     for skill in sources.skills:
+        if not applies_to(skill, "codex"):
+            continue
         value = block(skill, "codex")
         native, issues = strict_native(skill.path, "codex", value, CodexSkillNative)
         diagnostics.extend(issues)
@@ -206,11 +215,15 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             trees.append(_tree(skill, root / "skills", meta))
             skill_paths.append(f"~/.codex/skills/{skill.source_dir.name}")
     for command in sources.commands:
+        if not applies_to(command, "codex"):
+            continue
         value = block(command, "codex")
         diagnostics.extend(unhandled_target_block(command.path, "codex", value))
         diagnostics.extend(omissions(command.path, "codex", value, {"command"}))
     agents = []
     for agent in sources.agents:
+        if not applies_to(agent, "codex"):
+            continue
         value = block(agent, "codex")
         native, issues = strict_native(agent.path, "codex", value, CodexAgentNative)
         diagnostics.extend(issues)

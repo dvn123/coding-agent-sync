@@ -32,6 +32,7 @@ from .permissions import (
     secret_name_variants,
 )
 from .support import (
+    applies_to,
     block,
     frontmatter,
     markdown,
@@ -199,16 +200,30 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
     diagnostics = []
     if sources.globals:
         global_source = sources.globals[0]
-        value = block(global_source, "opencode")
-        diagnostics.extend(
-            unhandled_target_block(global_source.path, "opencode", value)
-        )
-        diagnostics.extend(omissions(global_source.path, "opencode", value, set()))
-        files.append(
-            OwnedFile(root / "AGENTS.md", (global_source.body.rstrip() + "\n").encode())
-        )
+        if applies_to(global_source, "opencode"):
+            value = block(global_source, "opencode")
+            diagnostics.extend(
+                unhandled_target_block(global_source.path, "opencode", value)
+            )
+            diagnostics.extend(omissions(global_source.path, "opencode", value, set()))
+            files.append(
+                OwnedFile(
+                    root / "AGENTS.md",
+                    (global_source.body.rstrip() + "\n").encode(),
+                )
+            )
+        else:
+            files.append(
+                OwnedFile(
+                    root / "AGENTS.md",
+                    None,
+                    retire_if=(global_source.body.rstrip() + "\n").encode(),
+                )
+            )
     instructions = []
     for rule in sources.rules:
+        if not applies_to(rule, "opencode"):
+            continue
         value = block(rule, "opencode")
         native, issues = strict_native(rule.path, "opencode", value, OpenCodeRuleNative)
         diagnostics.extend(issues)
@@ -220,6 +235,8 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         if native:
             instructions.append(_instruction(rule, ctx.home, native))
     for skill in sources.skills:
+        if not applies_to(skill, "opencode"):
+            continue
         value = block(skill, "opencode")
         native, issues = strict_native(
             skill.path, "opencode", value, OpenCodeSkillNative
@@ -255,6 +272,8 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.extend(issues)
             trees.append(_tree(skill, root / "skills", meta))
     for command in sources.commands:
+        if not applies_to(command, "opencode"):
+            continue
         value = block(command, "opencode")
         native, issues = strict_native(
             command.path, "opencode", value, OpenCodeCommandNative
@@ -277,6 +296,8 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 )
             )
     for agent in sources.agents:
+        if not applies_to(agent, "opencode"):
+            continue
         value = block(agent, "opencode")
         native, issues = strict_native(
             agent.path, "opencode", value, OpenCodeAgentNative
