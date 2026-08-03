@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ from ..sources import RuleSource, SkillSource, SourceBundle, StrictModel
 from .permissions import (
     bucket_patterns,
     external_directory_map,
+    fold_edit_write,
     glob_variants,
     secret_name_variants,
 )
@@ -160,7 +161,9 @@ def _instruction(rule: RuleSource, home: Path, native: OpenCodeRuleNative) -> st
         return str(rule.path)
 
 
-def _permissions(sources: SourceBundle, config: Path) -> tuple[NativeValue, ...]:
+def _permissions(
+    sources: SourceBundle, config: Path, tools: Mapping[str, str]
+) -> tuple[NativeValue, ...]:
     if not (permissions := sources.permissions):
         return ()
     buckets = bucket_patterns(
@@ -180,8 +183,11 @@ def _permissions(sources: SourceBundle, config: Path) -> tuple[NativeValue, ...]
     append(secret_name_variants(permissions.secret_names), "ask")
     append(buckets["deny"], "deny")
     values = [NativeValue("opencode", config, ("permission", "bash"), bash)]
-    for tool in ("read", "edit", "write"):
-        decision = permissions.tools.get(tool)
+    # No `write` key: OpenCode's write tool asks for its `edit` permission, so
+    # a `permission.write` entry would parse into the schema's rest record and
+    # never be consulted.
+    for tool in ("read", "edit"):
+        decision = tools.get(tool)
         if decision is not None or permissions.secret_paths:
             values.append(
                 NativeValue(
@@ -387,19 +393,24 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     root / "agents",
                 )
             )
+    folded = fold_edit_write(
+        sources.permissions.tools if sources.permissions else {}, "OpenCode"
+    )
     if permissions := sources.permissions:
         value = block(permissions, "opencode")
         diagnostics.extend(
             unhandled_target_block(permissions.paths[0], "opencode", value)
         )
         diagnostics.extend(omissions(permissions.paths[0], "opencode", value, set()))
+        if note := folded[1]:
+            diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         for path, targets, _ in permissions.command_targets:
             value = targets.root.get("opencode", type(value)())
             diagnostics.extend(unhandled_target_block(path, "opencode", value))
             diagnostics.extend(omissions(path, "opencode", value, set()))
     native_values = (
         NativeValue("opencode", config, ("instructions",), instructions),
-        *_permissions(sources, config),
+        *_permissions(sources, config, folded[0]),
     )
     patch, issues = native_patch(
         config_root=ctx.config_root,

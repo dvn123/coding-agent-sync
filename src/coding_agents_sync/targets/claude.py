@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ from .permissions import (
     CLAUDE_RESOLVED_WRAPPERS,
     CLAUDE_TOOL_PATTERNS,
     bucket_patterns,
-    fold_claude_tools,
+    fold_edit_write,
     glob_variants,
     literal_directories,
     secret_name_variants,
@@ -259,7 +260,7 @@ def _agent_meta(agent: AgentSource, native: ClaudeAgentNative) -> dict[str, Any]
 
 
 def _permission_values(
-    sources: SourceBundle,
+    sources: SourceBundle, tools: Mapping[str, str]
 ) -> tuple[tuple[tuple[str, ...], Any], ...]:
     if not (permissions := sources.permissions):
         return ()
@@ -269,9 +270,6 @@ def _permission_values(
         lambda wrapper: f"{wrapper} *",
         CLAUDE_RESOLVED_WRAPPERS,
     )
-    # Folded first, so edit and write cannot put the shared Edit pattern into
-    # two buckets at once.
-    tools = fold_claude_tools(permissions.tools)[0]
     ask = buckets["ask"] + list(secret_name_variants(permissions.secret_names))
     deny = [f"Bash({pattern})" for pattern in buckets["deny"]] + [
         f"{operation}({path})"
@@ -442,6 +440,9 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     root / "agents",
                 )
             )
+    folded = fold_edit_write(
+        sources.permissions.tools if sources.permissions else {}, "Claude"
+    )
     if permissions := sources.permissions:
         value = block(permissions, "claude")
         diagnostics.extend(
@@ -455,7 +456,7 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 {"workspace.ask"} if permissions.workspace.ask else set(),
             )
         )
-        if note := fold_claude_tools(permissions.tools)[1]:
+        if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         for path, targets, _ in permissions.command_targets:
             value = targets.root.get("claude", type(value)())
@@ -463,7 +464,7 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.extend(omissions(path, "claude", value, set()))
     permission_values = tuple(
         NativeValue("claude", root / "settings.json", pointer, value)
-        for pointer, value in _permission_values(sources)
+        for pointer, value in _permission_values(sources, folded[0])
     )
     patches = []
     for target, path, patch_name in (

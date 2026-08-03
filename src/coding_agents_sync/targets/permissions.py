@@ -17,26 +17,29 @@ CLAUDE_TOOL_PATTERNS = {
     "webfetch": "WebFetch(*)",
     "websearch": "WebSearch(*)",
 }
-# Portable tool classes that collapse onto one Claude pattern, so they cannot
-# carry different decisions there. Strictest first.
-CLAUDE_FOLDED_TOOLS = ("edit", "write")
+# Portable tool classes that collapse onto one gate on Claude and OpenCode, so
+# they cannot carry different decisions there. Strictest first.
+FOLDED_TOOLS = ("edit", "write")
 DECISION_STRICTNESS = ("deny", "ask", "allow")
 
 
-def fold_claude_tools(tools: Mapping[str, str]) -> tuple[dict[str, str], str | None]:
+def fold_edit_write(
+    tools: Mapping[str, str], target: str
+) -> tuple[dict[str, str], str | None]:
     """Resolve `edit` and `write` onto one decision, keeping the stricter one.
 
-    Claude has no rule that matches Write alone, so the two classes cannot
-    diverge there. Returns the resolved map and a note when it had to narrow.
+    Neither Claude nor OpenCode has a gate for writing alone: Claude's Edit
+    rules cover every file-editing tool, and OpenCode's write tool asks for its
+    `edit` permission. Returns the resolved map, and a note when it narrowed.
     """
-    folded = {tool: tools[tool] for tool in CLAUDE_FOLDED_TOOLS if tool in tools}
+    folded = {tool: tools[tool] for tool in FOLDED_TOOLS if tool in tools}
     if len(set(folded.values())) <= 1:
         return dict(tools), None
     strictest = min(folded.values(), key=DECISION_STRICTNESS.index)
     spelled = ", ".join(f"{tool}: {value}" for tool, value in folded.items())
     return {**tools, **dict.fromkeys(folded, strictest)}, (
-        f"Claude folds {spelled} onto one Edit rule, which covers every "
-        f"file-editing tool; applying the stricter {strictest}"
+        f"{target} has no gate for writing alone, so {spelled} fold onto one "
+        f"edit decision; applying the stricter {strictest}"
     )
 
 

@@ -2389,6 +2389,21 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("Edit(**)", permissions["allow"])
             self.assertNotIn("Write(**)", str(permissions))
 
+    def test_opencode_folds_write_onto_the_edit_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, tools={"edit": "allow", "write": "deny"})
+
+            run_sync(config_root=config_root, home=home)
+
+            permission = json.loads(
+                (home / ".config/opencode/opencode.json").read_text()
+            )["permission"]
+            # OpenCode's write tool asks for `edit`, so a `write` key would
+            # never be consulted; the stricter decision lands on `edit`.
+            self.assertNotIn("write", permission)
+            self.assertEqual(permission["edit"], {"*": "deny"})
+
     def test_portable_color_must_be_an_opencode_color(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
