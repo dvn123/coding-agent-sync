@@ -69,6 +69,9 @@ V4_NATIVE_CHANGED = {
     # Write(**) rule that never matched.
     "home/.claude/settings.json",
     "home/.codex/config.toml",
+    # OpenCode's write tool asks for its `edit` permission, so the baseline's
+    # permission.write entry was never consulted.
+    "home/.config/opencode/opencode.json",
     "home/.cursor/cli-config.json",
     "home/.cursor/permissions.json",
 }
