@@ -14,6 +14,13 @@ from ..plan import Diagnostic, NativePatch, OwnedFile, OwnedTree
 from ..sources import TargetBlock
 
 
+def one_of(field: str, value: str | None, allowed: frozenset[str]) -> str | None:
+    """Reject a value outside a target's closed vocabulary for `field`."""
+    if value is not None and value not in allowed:
+        raise ValueError(f"{field} must be one of {sorted(allowed)}, got {value!r}")
+    return value
+
+
 def bundled_files(source_dir: Path) -> tuple[dict[Path, bytes], frozenset[Path]]:
     """Bundled skill files by relative path, plus the owner-executable subset."""
     paths = [
