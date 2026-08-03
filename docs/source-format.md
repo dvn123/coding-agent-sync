@@ -88,7 +88,8 @@ policy in place.
 The compiler projects a canonical field only where its semantics match. For
 example, skill `paths` and `disable_model_invocation` require omissions for
 Codex and OpenCode; agent `background` requires omissions for Codex and
-OpenCode; agent `color` requires an omission for Codex; and `effort: max`
+OpenCode; agent `color` requires an omission for Codex and a native override
+for OpenCode unless its value is already an OpenCode color; and `effort: max`
 requires one for Codex. Cursor projects command allow and deny rules to its
 CLI and Desktop surfaces; only the deny side requires an omission
 acknowledgment (Desktop has no deny channel), so a permission-rule fragment
@@ -130,9 +131,16 @@ tools or MCP patterns — omit `tools` to inherit the pool, because a list that
 resolves to nothing makes Claude refuse to spawn the agent, which
 `claude.agent-tools` pins against the installed binary.
 
-Fields whose accepted set is genuinely open stay unchecked: any `model` ID,
-Codex `model_reasoning_effort` (its enum ends in a catch-all for
-model-defined values), and OpenCode `color`.
+OpenCode accepts only `#RRGGBB` or one of its theme names as a `color`, and it
+rejects the whole agent file otherwise, so a portable `color` that OpenCode
+cannot express needs a native override there. That value is checked after the
+merge, because a portable `color` reaches OpenCode's frontmatter too.
+
+Fields whose accepted set is genuinely open stay unchecked: any `model` ID and
+Codex `model_reasoning_effort`, whose enum ends in a catch-all for
+model-defined values. OpenCode agent frontmatter also hoists every key it does
+not know into `options`, which is how a top-level `reasoningEffort` reaches the
+provider, so unknown keys there are passthrough by design.
 
 ### Permissions
 

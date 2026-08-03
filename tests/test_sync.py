@@ -2358,6 +2358,51 @@ class SyncTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     run_sync(config_root=config_root, home=home)
 
+    def test_portable_color_must_be_an_opencode_color(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "agents" / "reviewer.md",
+                source_doc(
+                    "agent",
+                    "reviewer",
+                    "reviewer",
+                    "body\n",
+                    description="Reviewer agent",
+                    # Valid for Claude, but OpenCode takes #RRGGBB or a theme
+                    # name, and nothing overrides it there.
+                    extra={"color": "blue"},
+                ),
+            )
+
+            with self.assertRaisesRegex(ValueError, "is not an OpenCode color"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_opencode_native_color_overrides_a_portable_color(self) -> None:
+        for color in ("info", "#ff5733"):
+            with self.subTest(color=color), tempfile.TemporaryDirectory() as tmp:
+                config_root, home = config_root_home(tmp)
+                write(
+                    config_root / "agents" / "reviewer.md",
+                    source_doc(
+                        "agent",
+                        "reviewer",
+                        "reviewer",
+                        "body\n",
+                        description="Reviewer agent",
+                        extra={"color": "blue", "opencode": {"color": color}},
+                    ),
+                )
+
+                run_sync(config_root=config_root, home=home)
+
+                agent = (home / ".config/opencode/agents/reviewer.md").read_text()
+                # A hex code is quoted, since `#` would otherwise start a
+                # YAML comment.
+                self.assertIn(color, yaml.safe_load(agent.split("---")[1])["color"])
+                claude = (home / ".claude/agents/reviewer.md").read_text()
+                self.assertIn("color: blue", claude)
+
     def test_agent_native_vocabularies_accept_documented_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)

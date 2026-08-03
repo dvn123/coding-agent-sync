@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -70,11 +71,24 @@ class OpenCodeCommandNative(StrictModel):
     model: str | None = None
 
 
-# Agent Info in packages/opencode/src/agent/agent.ts. `color` is a free string
-# there, so it has no closed set. Permission effects are allow/ask/deny, nested
-# under a resource map for path-scoped rules.
+# Agent frontmatter is parsed against ConfigAgentV1 in
+# packages/core/src/v1/config/agent.ts, not the looser runtime Agent.Info.
+# Its rest record hoists every unknown key into `options`, which is how a
+# top-level `reasoningEffort` reaches the provider, so unknown keys stay
+# unvalidated by design. `mode` and permission actions are closed sets, and
+# `color` is a hex code or a theme name rather than a free string.
 OPENCODE_AGENT_MODES = frozenset({"subagent", "primary", "all"})
 OPENCODE_PERMISSION_EFFECTS = frozenset({"allow", "ask", "deny"})
+OPENCODE_THEME_COLORS = frozenset(
+    {"primary", "secondary", "accent", "success", "warning", "error", "info"}
+)
+OPENCODE_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _opencode_color(value: object) -> bool:
+    return isinstance(value, str) and (
+        value in OPENCODE_THEME_COLORS or bool(OPENCODE_HEX_COLOR.fullmatch(value))
+    )
 
 
 def _permission_effects(value: Any, path: str) -> None:
@@ -355,6 +369,17 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 agent_meta["color"] = agent.color
             meta, issues = frontmatter(agent.path, agent_meta, native, value.raw)
             diagnostics.extend(issues)
+            # Checked after the merge because a portable `color` reaches this
+            # frontmatter too, and only a native override replaces it.
+            if (color := meta.get("color")) is not None and not _opencode_color(color):
+                diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        f"agent color {color!r} is not an OpenCode color; use "
+                        f"#RRGGBB or one of {sorted(OPENCODE_THEME_COLORS)}",
+                        agent.path,
+                    )
+                )
             files.append(
                 OwnedFile(
                     root / "agents" / agent.path.name,
