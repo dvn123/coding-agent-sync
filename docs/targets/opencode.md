@@ -27,11 +27,12 @@ OpenCode receives the exact portable permission policy. Its ordered
 portable permission values lower only to semantically matching V1 surfaces.
 
 `patches/opencode.yaml` targets
-`<home>/.config/opencode/opencode.json`. Patches preserve unnamed fields but
-must not overlap generated pointers. They cannot contribute command policy and
-may only add deny entries to generated read, edit, or external-directory
-maps. Raw files below `target-config/opencode/raw/` mirror below the OpenCode
-root; `opencode.json` is reserved for pointer reconciliation.
+`<home>/.config/opencode/opencode.json`. Patches preserve unnamed fields and
+may contribute to a generated pointer where the contribution does not clash,
+including overlaying read, edit, or external-directory maps. They cannot
+contribute command policy. Raw files below `target-config/opencode/raw/`
+mirror below the OpenCode root; `opencode.json` is reserved for pointer
+reconciliation.
 
 Generated files use portable manifests; generated native values use pointer
 plus semantic-hash ownership in `config_root/.coding-agents-native.json`.

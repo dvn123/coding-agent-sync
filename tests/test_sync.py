@@ -1453,7 +1453,12 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("permissions", cursor_cli)
             self.assertFalse((home / ".cursor/permissions.json").exists())
 
-    def test_user_permission_patch_overlap_is_rejected(self) -> None:
+    def test_a_patch_may_add_non_command_grants_to_generated_permissions(self) -> None:
+        """Tool and MCP grants have no portable schema, so a patch owns them.
+
+        The generated Bash(...) entries must survive alongside them: extending
+        contributes to the compiler's list rather than replacing it.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write_permissions(config_root, allow=[["git", "status"]])
@@ -1461,17 +1466,60 @@ class SyncTests(unittest.TestCase):
                 config_root / "patches/claude-settings.yaml",
                 "schema: coding-agents/patch/v1\n"
                 "extend:\n"
-                "  /permissions/allow: [WebFetch(*)]\n",
+                "  /permissions/allow: [WebFetch(*), mcp__github__get_me]\n",
             )
 
-            with self.assertRaisesRegex(ValueError, "Overlapping native pointers"):
-                run_sync(config_root=config_root, home=home)
+            run_sync(config_root=config_root, home=home)
 
-    def test_a_patch_may_only_tighten_the_generated_workspace_roots(self) -> None:
-        """The portable workspace block owns which roots the agent may reach.
+            settings = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn("Bash(git status *)", settings["permissions"]["allow"])
+            self.assertIn("WebFetch(*)", settings["permissions"]["allow"])
+            self.assertIn("mcp__github__get_me", settings["permissions"]["allow"])
 
-        A machine-local patch still needs somewhere to deny a credential path,
-        so an overlay of denials is accepted while a widening one is not.
+    def test_a_patch_may_add_command_denials_to_claude(self) -> None:
+        """A patch contributes freely where it does not clash.
+
+        The compiler emits no Bash denies, so this adds rather than contends.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, allow=[["git", "status"]])
+            write(
+                config_root / "patches/claude-settings.yaml",
+                "schema: coding-agents/patch/v1\n"
+                "extend:\n"
+                "  /permissions/deny: [Bash(cat ~/.netrc)]\n",
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            settings = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn("Bash(cat ~/.netrc)", settings["permissions"]["deny"])
+
+    def test_a_patch_may_add_mcp_grants_to_cursor_cli(self) -> None:
+        """Per-server Mcp() grants have no portable schema, so a patch owns them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, allow=[["git", "status"]])
+            write(
+                config_root / "patches/cursor-cli-config.yaml",
+                "schema: coding-agents/patch/v1\n"
+                "extend:\n"
+                "  /permissions/allow: [Mcp(looker-mcp:get_*)]\n",
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertIn("Shell(git:status)", cli["permissions"]["allow"])
+            self.assertIn("Mcp(looker-mcp:get_*)", cli["permissions"]["allow"])
+
+    def test_a_patch_may_overlay_the_generated_workspace_roots(self) -> None:
+        """A patch adds keys the portable workspace block cannot express.
+
+        The decision is the patch author's: a machine-local credential path can
+        be denied, and a machine-local root can be granted. The generated
+        entries survive either way, because an overlay adds rather than clashes.
         """
         for decision in ("deny", "allow"):
             with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp:
@@ -1493,16 +1541,15 @@ class SyncTests(unittest.TestCase):
                         sort_keys=False,
                     ),
                 )
-                if decision == "deny":
-                    with self.assertRaisesRegex(
-                        ValueError, "Overlapping native pointers"
-                    ):
-                        run_sync(config_root=config_root, home=home)
-                else:
-                    with self.assertRaisesRegex(
-                        PatchError, "may only add deny entries"
-                    ):
-                        run_sync(config_root=config_root, home=home)
+
+                run_sync(config_root=config_root, home=home)
+
+                config = json.loads(
+                    (home / ".config/opencode/opencode.json").read_text()
+                )
+                external = config["permission"]["external_directory"]
+                self.assertEqual(external["~/.netrc"], decision)
+                self.assertEqual(external["~/Developer/**"], "allow")
 
     def test_a_stricter_rule_may_narrow_a_looser_one(self) -> None:
         """Containment is legal downward: allow > ask > deny."""
