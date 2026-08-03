@@ -89,7 +89,7 @@ def _write_owned_tree(tree: OwnedTree, destination: Path | None = None) -> None:
     target.mkdir(parents=True, exist_ok=True)
     files = _tree_files(tree)
     for relative, content in files.items():
-        write_bytes(target / relative, content)
+        write_bytes(target / relative, content, executable=relative in tree.executables)
     _prune_tree(target, set(files))
 
 
