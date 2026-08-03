@@ -14,6 +14,23 @@ from ..plan import Diagnostic, NativePatch, OwnedFile, OwnedTree
 from ..sources import TargetBlock
 
 
+def bundled_files(source_dir: Path) -> tuple[dict[Path, bytes], frozenset[Path]]:
+    """Bundled skill files by relative path, plus the owner-executable subset."""
+    paths = [
+        path
+        for path in source_dir.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    ]
+    return (
+        {path.relative_to(source_dir): path.read_bytes() for path in paths},
+        frozenset(
+            path.relative_to(source_dir)
+            for path in paths
+            if path.stat().st_mode & stat.S_IXUSR
+        ),
+    )
+
+
 def applies_to(source: Any, target: str) -> bool:
     """Whether this portable artifact should emit (and owe omits) on `target`."""
     only = getattr(source, "only", ())

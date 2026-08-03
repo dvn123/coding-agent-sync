@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -36,11 +37,25 @@ def write_text(path: Path, content: str) -> None:
             os.unlink(temporary)
 
 
-def write_bytes(path: Path, content: bytes) -> None:
+def owner_execute_mode(path: Path, executable: bool) -> int:
+    """Deployed mode for `path`, tracking the source's owner-execute bit only.
+
+    Group and world bits are never widened: an executable script deploys 0700.
+    """
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    return mode | stat.S_IXUSR if executable else mode & ~stat.S_IXUSR
+
+
+def write_bytes(path: Path, content: bytes, *, executable: bool = False) -> None:
     if path.exists() and path.is_file() and path.read_bytes() == content:
+        # Content is already correct, but the mode may still be stale.
+        if (desired := owner_execute_mode(path, executable)) != (
+            path.stat().st_mode & 0o777
+        ):
+            os.chmod(path, desired)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    mode = owner_execute_mode(path, executable)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:

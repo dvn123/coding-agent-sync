@@ -5,6 +5,7 @@ import io
 import json
 import re
 import shutil
+import stat
 import tempfile
 import tomllib
 import unittest
@@ -2269,6 +2270,52 @@ class SyncTests(unittest.TestCase):
 
             with self.assertRaisesRegex(SourceSchemaError, "tools"):
                 run_sync(config_root=config_root, home=home)
+
+    def _runner_skill(self, config_root: Path) -> Path:
+        write(
+            config_root / "skills" / "runner" / "SKILL.md",
+            source_doc(
+                "skill", "runner", "runner", "Skill body\n", description="runner"
+            ),
+        )
+        script = config_root / "skills" / "runner" / "scripts" / "poll.sh"
+        write(script, "#!/usr/bin/env bash\necho hi\n")
+        script.chmod(0o755)
+        write(config_root / "skills" / "runner" / "references" / "notes.md", "notes\n")
+        return script
+
+    def test_bundled_skill_scripts_keep_owner_execute_bit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            self._runner_skill(config_root)
+
+            run_sync(config_root=config_root, home=home)
+
+            for root in (
+                home / ".claude/skills/runner",
+                home / ".codex/skills/runner",
+                home / ".cursor/skills/runner",
+                home / ".config/opencode/skills/runner",
+            ):
+                with self.subTest(root=root):
+                    script = root / "scripts/poll.sh"
+                    self.assertEqual(stat.S_IMODE(script.stat().st_mode), 0o700)
+                    notes = root / "references/notes.md"
+                    self.assertEqual(stat.S_IMODE(notes.stat().st_mode), 0o600)
+
+    def test_resync_repairs_stale_script_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            self._runner_skill(config_root)
+            run_sync(config_root=config_root, home=home)
+            deployed = home / ".claude/skills/runner/scripts/poll.sh"
+            deployed.chmod(0o600)
+
+            # Content is unchanged, so this only passes if the writer reconciles
+            # mode independently of the content-equality short circuit.
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(stat.S_IMODE(deployed.stat().st_mode), 0o700)
 
     def test_codex_rules_reject_unknown_typed_fields(
         self,

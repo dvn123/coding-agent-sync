@@ -21,6 +21,7 @@ from .permissions import (
 from .support import (
     applies_to,
     block,
+    bundled_files,
     frontmatter,
     markdown,
     native_patch,
@@ -103,6 +104,7 @@ class ClaudeAgentNative(StrictModel):
         serialization_alias="disallowedTools",
         validation_alias=AliasChoices("disallowedTools", "disallowed_tools"),
     )
+
     effort: str | None = None
     background: bool | None = None
     color: str | None = None
@@ -128,16 +130,13 @@ class ClaudeAgentNative(StrictModel):
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
-    files = {
-        path.relative_to(skill.source_dir): path.read_bytes()
-        for path in skill.source_dir.rglob("*")
-        if path.is_file() and not path.is_symlink()
-    }
+    files, executables = bundled_files(skill.source_dir)
     files[Path("SKILL.md")] = markdown(meta, skill.body)
     return OwnedTree(
         root / skill.source_dir.name,
         tuple(sorted(files.items(), key=lambda item: item[0].as_posix())),
         root,
+        executables=executables,
     )
 
 
