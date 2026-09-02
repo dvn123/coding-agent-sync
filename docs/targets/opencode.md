@@ -22,9 +22,21 @@ provider, mode, sampling, and visibility settings. Unknown fields are errors.
 Accepted raw frontmatter is visibly unvalidated and cannot shadow typed or
 canonical output.
 
-OpenCode receives the exact portable permission policy. Its ordered
-`/permission/bash` map preserves allow, ask, and deny precedence, while other
-portable permission values lower only to semantically matching V1 surfaces.
+OpenCode's ordered `/permission/bash` map preserves allow, ask, and deny
+precedence, while other portable permission values lower only to semantically
+matching V1 surfaces.
+
+The one departure from the portable policy is that the deny bucket lands as
+`ask`, so the map never contains a bash `deny`. OpenCode answers a denial with
+`PermissionDeniedError`, whose message embeds the serialized ruleset filtered
+only by permission *type* — every bash rule reaches the model on every denial.
+Against a real corpus that is roughly 1.3 MB, or ~324k tokens, per denial, and
+it has ended sessions outright with `ContextOverflowError`. Guards still bind
+and still sit last, so they beat both the allow bucket and the blanket wrapper
+allows; they prompt instead of blocking. Every other target keeps its deny
+channel. Secret-path denies on `/permission/read` and `/permission/edit` are
+unaffected: those denials serialize only rules matching their own permission
+type, which is a handful of entries.
 
 `patches/opencode.yaml` targets
 `<home>/.config/opencode/opencode.json`. Patches preserve unnamed fields and
