@@ -611,7 +611,12 @@ class SyncTests(unittest.TestCase):
             )
 
     def test_a_deny_reaches_every_target_that_has_a_deny_channel(self) -> None:
-        """Cursor Desktop's shipped schema has no deny key, so it degrades."""
+        """Two targets degrade, for unrelated reasons.
+
+        Cursor Desktop's shipped schema has no deny key. OpenCode has one but
+        must not be given it: a denial there serializes the entire bash
+        ruleset into the model-visible error, so guards land as `ask`.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write_permissions(
@@ -636,8 +641,8 @@ class SyncTests(unittest.TestCase):
             bash = opencode["permission"]["bash"]
             for command, decision in {
                 "kubectl get pods": "allow",
-                "kubectl apply -f x.yaml": "deny",
-                "kubectl --context prod apply -f x.yaml": "deny",
+                "kubectl apply -f x.yaml": "ask",
+                "kubectl --context prod apply -f x.yaml": "ask",
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
@@ -1073,7 +1078,10 @@ class SyncTests(unittest.TestCase):
         """Insertion order is the whole precedence contract on this target.
 
         `Permission.evaluate` applies the last matching key, so a stricter
-        decision must sit after every looser pattern it has to beat.
+        decision must sit after every looser pattern it has to beat. Guards
+        land as `ask` rather than `deny` here, so order carries the guarantee
+        alone: the deny bucket's patterns still have to sit last to beat the
+        allow bucket and the blanket wrapper allows.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -1095,7 +1103,53 @@ class SyncTests(unittest.TestCase):
             )
             self.assertEqual(
                 [bash[key] for key in bash],
-                ["ask", "allow", "ask", "ask", "deny"],
+                ["ask", "allow", "ask", "ask", "ask"],
+            )
+            self.assertNotIn("deny", bash.values())
+
+    def test_opencode_never_emits_a_bash_deny(self) -> None:
+        """A bash deny is unaffordable on this target, not merely undesirable.
+
+        OpenCode answers a denial with `PermissionDeniedError`, whose message
+        embeds `JSON.stringify(ruleset)` filtered only by permission *type* --
+        so every bash rule ships to the model on every denial. Against a real
+        corpus that is ~1.3 MB (~324k tokens) per denial, which has ended
+        sessions outright with ContextOverflowError. Emitting no bash deny
+        makes that error unreachable.
+
+        Guards must still bind, so they land as `ask` and must still sit last
+        to beat both the allow bucket and the blanket wrapper allows.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["gcloud", "config"], ["git", "checkout"]],
+                deny=[
+                    ["gcloud", "auth", "print-access-token"],
+                    {"command": "git", "subcommand": ["checkout"], "tail": ["--force"]},
+                ],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            bash = opencode["permission"]["bash"]
+            self.assertNotIn("deny", bash.values())
+            for command in (
+                "gcloud auth print-access-token",
+                "timeout 5 gcloud auth print-access-token",
+                "git checkout --force main",
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), "ask")
+            self.assertEqual(resolve_opencode_bash(bash, "git checkout main"), "allow")
+
+            # The guarantee is target-local: Claude still hard-blocks.
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn(
+                "Bash(gcloud auth print-access-token *)",
+                claude["permissions"]["deny"],
             )
 
     def test_wrapper_guards_bind_where_the_target_cannot_peel_the_wrapper(self) -> None:
@@ -1278,7 +1332,8 @@ class SyncTests(unittest.TestCase):
                 "local-tool status": "allow",
                 "local-tool --profile fixture status": "allow",
                 "local-tool status --destroy": "ask",
-                "local-tool wipe": "deny",
+                # Guards reach OpenCode as `ask`; Claude below keeps the deny.
+                "local-tool wipe": "ask",
                 "git status": "allow",
             }.items():
                 with self.subTest(command=command):
@@ -1584,7 +1639,9 @@ class SyncTests(unittest.TestCase):
             for command, decision in {
                 "git push": "allow",
                 "git push --force-with-lease": "ask",
-                "git push --force": "deny",
+                # Deny still narrows the allow on OpenCode, it just lands as
+                # `ask`; see `_permissions` in targets/opencode.py.
+                "git push --force": "ask",
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
