@@ -181,7 +181,15 @@ def _permissions(
     append(buckets["allow"], "allow")
     append(buckets["ask"], "ask")
     append(secret_name_variants(permissions.secret_names), "ask")
-    append(buckets["deny"], "deny")
+    # Guards land as `ask`, so this map never holds a bash `deny`. OpenCode's
+    # PermissionDeniedError embeds the serialized ruleset filtered only by
+    # permission *type*, so a single bash denial ships every bash rule to the
+    # model -- 1.3 MB against a real corpus. Ordering still binds the guards
+    # above the blanket wrapper allows. See docs/targets/opencode.md; upstream
+    # is anomalyco/opencode packages/core/src/v1/permission.ts:21-27 (dev) and
+    # packages/opencode/src/permission/index.ts:97-103 (2.0), both unfixed at
+    # 1.18.26.
+    append(buckets["deny"], "ask")
     values = [NativeValue("opencode", config, ("permission", "bash"), bash)]
     # No `write` key: OpenCode's write tool asks for its `edit` permission, so
     # a `permission.write` entry would parse into the schema's rest record and
