@@ -31,11 +31,11 @@ def snapshot(root: Path) -> dict[Path, tuple[bytes, int, int, int]]:
 
 
 def test_xdg_default_discovery_check_and_idempotence(
-    monkeypatch, tmp_path: Path
+    monkeypatch, set_home, tmp_path: Path
 ) -> None:
     home = tmp_path / "home"
     config_root = copy_config_root(tmp_path / "xdg/coding-agents")
-    monkeypatch.setenv("HOME", str(home))
+    set_home(home)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_root.parent))
     runner = CliRunner()
 
@@ -64,10 +64,10 @@ def test_xdg_default_discovery_check_and_idempotence(
     assert runner.invoke(main, ["--check"]).exit_code == 0
 
 
-def test_empty_xdg_uses_home_fallback(monkeypatch, tmp_path: Path) -> None:
+def test_empty_xdg_uses_home_fallback(monkeypatch, set_home, tmp_path: Path) -> None:
     home = tmp_path / "home"
     copy_config_root(home / ".config/coding-agents")
-    monkeypatch.setenv("HOME", str(home))
+    set_home(home)
     monkeypatch.setenv("XDG_CONFIG_HOME", "")
 
     result = CliRunner().invoke(main)
@@ -77,10 +77,10 @@ def test_empty_xdg_uses_home_fallback(monkeypatch, tmp_path: Path) -> None:
     assert (home / ".config/coding-agents/.coding-agents-native.json").is_file()
 
 
-def test_explicit_roots(monkeypatch, tmp_path: Path) -> None:
+def test_explicit_roots(monkeypatch, set_home, tmp_path: Path) -> None:
     explicit_home = tmp_path / "explicit-home"
     config_root = copy_config_root(tmp_path / "explicit-config")
-    monkeypatch.setenv("HOME", str(tmp_path / "ignored-home"))
+    set_home(tmp_path / "ignored-home")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "ignored-xdg"))
     runner = CliRunner()
 
