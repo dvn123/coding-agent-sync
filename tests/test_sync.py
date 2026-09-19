@@ -1091,7 +1091,7 @@ class SyncTests(unittest.TestCase):
                 allow=[["git", "status"]],
                 ask=[["rmdir"]],
                 deny=[["shred"]],
-                secret_names=["TFE_TOKEN"],
+                secret_names=["EXAMPLE_TOKEN"],
             )
 
             run_sync(config_root=config_root, home=home)
@@ -1100,7 +1100,7 @@ class SyncTests(unittest.TestCase):
             bash = opencode["permission"]["bash"]
             self.assertEqual(
                 list(bash),
-                ["*", "git status *", "rmdir *", "*TFE_TOKEN*", "shred *"],
+                ["*", "git status *", "rmdir *", "*EXAMPLE_TOKEN*", "shred *"],
             )
             self.assertEqual(
                 [bash[key] for key in bash],
@@ -1272,7 +1272,7 @@ class SyncTests(unittest.TestCase):
                 ],
                 wrappers=["env"],
                 secret_paths=["**/.env"],
-                secret_names=["TFE_TOKEN"],
+                secret_names=["EXAMPLE_TOKEN"],
             )
             write(
                 config_root / "rules" / "python.md",
@@ -1302,7 +1302,7 @@ class SyncTests(unittest.TestCase):
             ):
                 with self.subTest(present=present):
                     self.assertIn(present, codex_rules)
-            for absent in ("git", "rmdir", "rg", "ls", "TFE_TOKEN", ".env"):
+            for absent in ("git", "rmdir", "rg", "ls", "EXAMPLE_TOKEN", ".env"):
                 with self.subTest(absent=absent):
                     self.assertNotIn(f'"{absent}"', codex_rules)
             self.assertIn("omitted deny rg ~--pre", stderr.getvalue())
