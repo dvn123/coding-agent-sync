@@ -17,7 +17,14 @@ from ..plan import (
     OwnedTree,
     Plan,
 )
-from ..sources import AgentSource, SkillSource, SourceBundle, StrictModel
+from ..sources import (
+    AgentSource,
+    PermissionSource,
+    SkillSource,
+    SourceBundle,
+    StrictModel,
+    describe_rule,
+)
 from .support import (
     applies_to,
     block,
@@ -103,13 +110,54 @@ def _rule_text(rules: list[tuple[str, CodexPrefixRule]]) -> bytes | None:
     def quoted(value: str) -> str:
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    for _, rule in sorted(rules):
+    for _, rule in sorted(rules, key=lambda item: (item[0], item[1].pattern)):
         pattern = "[" + ", ".join(quoted(item) for item in rule.pattern) + "]"
         args = [f"pattern={pattern}", f"decision={quoted(rule.decision)}"]
         if rule.justification:
             args.append(f"justification={quoted(rule.justification)}")
         lines.append(f"prefix_rule({', '.join(args)})")
     return ("\n".join(lines) + "\n").encode()
+
+
+def _deny_rules(
+    permissions: PermissionSource | None,
+) -> tuple[list[tuple[str, CodexPrefixRule]], list[Diagnostic]]:
+    """Lower the deny bucket to `forbidden` prefix rules.
+
+    Codex matches one flat argv by literal prefix, with no wildcard, so a rule
+    projects as its head and each tail appended directly, bare and behind each
+    declared wrapper. The option-hole and tail-after-arguments spellings fall to
+    Codex's own approval flow. Text and exact predicates have no prefix form.
+    Allow and ask never project: an allow would skip Codex's sandbox approval
+    and an ask would add prompts the sandbox does not need.
+    """
+    if permissions is None:
+        return [], []
+    rules: list[tuple[str, CodexPrefixRule]] = []
+    diagnostics: list[Diagnostic] = []
+    for rule in permissions.commands.deny:
+        if rule.text or rule.exact:
+            predicate = "a text predicate" if rule.text else "an exact match"
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    f"omitted deny {describe_rule(rule)}: Codex prefix rules "
+                    f"cannot hold {predicate}",
+                    permissions.paths[0],
+                )
+            )
+            continue
+        head = (rule.command, *rule.subcommand)
+        patterns = [(*head, *sequence) for sequence in sorted(rule.tail)] or [head]
+        rules.extend(
+            (
+                "permissions",
+                CodexPrefixRule(pattern=[*lead, *pattern], decision="forbidden"),
+            )
+            for pattern in patterns
+            for lead in ((), *((wrapper,) for wrapper in permissions.wrappers))
+        )
+    return rules, diagnostics
 
 
 def _agent_toml(
@@ -189,6 +237,9 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(omissions(rule.path, "codex", value, set()))
         if native:
             rules.extend((rule.path.name, item) for item in native.rules)
+    deny_rules, issues = _deny_rules(sources.permissions)
+    rules.extend(deny_rules)
+    diagnostics.extend(issues)
     if content := _rule_text(rules):
         files.append(
             OwnedFile(root / "rules" / "coding-agents.rules", content, root / "rules")
@@ -299,7 +350,12 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             value = targets.root.get("codex", type(value)())
             diagnostics.extend(unhandled_target_block(path, "codex", value))
             diagnostics.extend(
-                omissions(path, "codex", value, {"commands"} if intent else set())
+                omissions(
+                    path,
+                    "codex",
+                    value,
+                    {f"commands.{bucket}" for bucket in intent & {"allow", "ask"}},
+                )
             )
     native_values = [
         NativeValue(

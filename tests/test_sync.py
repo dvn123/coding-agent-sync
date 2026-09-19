@@ -225,10 +225,11 @@ def permission_rules_doc(
     if extra:
         source.update(extra)
     targets: dict[str, dict[str, Any]] = {}
-    if source["allow"] or source["ask"] or source["deny"]:
-        targets["codex"] = {
-            "omit": {"commands": "Codex has no portable command policy."}
-        }
+    for bucket in ("allow", "ask"):
+        if source[bucket]:
+            targets.setdefault("codex", {}).setdefault("omit", {})[
+                f"commands.{bucket}"
+            ] = f"Codex projects only deny rules; {bucket} stays with its sandbox."
     if source["deny"]:
         targets["cursor"] = {
             "omit": {"commands.deny": "Cursor Desktop has no deny channel."}
@@ -1249,11 +1250,13 @@ class SyncTests(unittest.TestCase):
                 ],
             )
 
-    def test_codex_receives_no_user_command_permissions(self) -> None:
-        """Its rules file carries only hand-authored Starlark.
+    def test_codex_receives_only_deny_rules_as_forbidden(self) -> None:
+        """Denies land as forbidden prefixes beside the hand-authored Starlark.
 
         Codex exec policy has no wildcards and lapses entirely on any `$VAR`
-        or substitution, so it is not a containment boundary.
+        or substitution, so it is not a containment boundary; a forbidden
+        prefix still stops the plain spelling. Allow and ask stay with the
+        sandbox, and predicates with no prefix form are dropped with a warning.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -1261,7 +1264,13 @@ class SyncTests(unittest.TestCase):
                 config_root,
                 allow=[["git", "status"]],
                 ask=[["rmdir"]],
-                deny=[["shred"]],
+                deny=[
+                    ["shred"],
+                    {"command": "gh", "subcommand": ["auth", "status"], "tail": ["-t"]},
+                    {"command": "rg", "text": "--pre"},
+                    {"command": "ls", "exact": True},
+                ],
+                wrappers=["env"],
                 secret_paths=["**/.env"],
                 secret_names=["TFE_TOKEN"],
             )
@@ -1280,13 +1289,24 @@ class SyncTests(unittest.TestCase):
                 ),
             )
 
-            run_sync(config_root=config_root, home=home)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                run_sync(config_root=config_root, home=home)
 
             codex_rules = (home / ".codex/rules/coding-agents.rules").read_text()
             self.assertIn('pattern=["python"]', codex_rules)
-            for absent in ("git", "rmdir", "shred", "TFE_TOKEN", ".env"):
+            for present in (
+                'prefix_rule(pattern=["shred"], decision="forbidden")',
+                'prefix_rule(pattern=["env", "shred"], decision="forbidden")',
+                'pattern=["gh", "auth", "status", "-t"], decision="forbidden"',
+            ):
+                with self.subTest(present=present):
+                    self.assertIn(present, codex_rules)
+            for absent in ("git", "rmdir", "rg", "ls", "TFE_TOKEN", ".env"):
                 with self.subTest(absent=absent):
-                    self.assertNotIn(absent, codex_rules)
+                    self.assertNotIn(f'"{absent}"', codex_rules)
+            self.assertIn("omitted deny rg ~--pre", stderr.getvalue())
+            self.assertIn("omitted deny ls", stderr.getvalue())
 
     def test_local_command_fragments_merge_and_are_validated(self) -> None:
         """Work-specific commands stay out of committed sources.
@@ -1321,7 +1341,8 @@ class SyncTests(unittest.TestCase):
                 "      commands.deny: Cursor Desktop has no deny channel.\n"
                 "  codex:\n"
                 "    omit:\n"
-                "      commands: Codex has no portable command policy.\n",
+                "      commands.allow: Codex allow rules would skip its sandbox.\n"
+                "      commands.ask: Codex prompts by sandbox, not by rule.\n",
             )
 
             run_sync(config_root=config_root, home=home)
@@ -1424,7 +1445,8 @@ class SyncTests(unittest.TestCase):
     def test_command_fragment_omissions_track_each_targets_projection_gap(
         self,
     ) -> None:
-        # Cursor projects allows losslessly, so only Codex owes an omission.
+        # Cursor projects allows losslessly, so only Codex owes an omission,
+        # and only for the allow bucket it does not project.
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
@@ -1437,11 +1459,14 @@ class SyncTests(unittest.TestCase):
                 "allow: [[git, status]]\n",
             )
 
-            with self.assertRaisesRegex(ValueError, "commands is unsupported on codex"):
+            with self.assertRaisesRegex(
+                ValueError, "commands.allow is unsupported on codex"
+            ):
                 run_sync(config_root=config_root, home=home)
 
         # Desktop has no deny channel, so a deny fragment owes the Cursor
-        # commands.deny omission even though the CLI projects it.
+        # commands.deny omission even though the CLI projects it. Codex
+        # projects the deny, so it owes nothing.
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
@@ -1451,11 +1476,7 @@ class SyncTests(unittest.TestCase):
                 "kind: permission-rules\n"
                 "id: nonempty\n"
                 "name: Nonempty\n"
-                "deny: [[git, push]]\n"
-                "targets:\n"
-                "  codex:\n"
-                "    omit:\n"
-                "      commands: Codex has no portable command policy.\n",
+                "deny: [[git, push]]\n",
             )
 
             with self.assertRaisesRegex(
