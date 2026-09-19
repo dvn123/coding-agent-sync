@@ -20,7 +20,8 @@ deny:
 targets:
   codex:
     omit:
-      commands: Codex exec policy cannot represent portable command predicates.
+      commands.allow: Codex allow rules would skip its sandbox approval.
+      commands.ask: Codex prompts by sandbox, not by rule.
   cursor:
     omit:
       commands.deny: Cursor Desktop has no deny channel; the CLI projects it.

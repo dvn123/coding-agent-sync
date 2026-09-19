@@ -94,9 +94,10 @@ requires one for Codex. Cursor projects command allow and deny rules to its
 CLI and Desktop surfaces; only the deny side requires an omission
 acknowledgment (Desktop has no deny channel), so a permission-rule fragment
 containing deny rules must acknowledge
-`targets.cursor.omit.commands.deny`. Codex has no command-policy
-projection, so every non-empty fragment must acknowledge
-`targets.codex.omit.commands`. Commands and agents that intentionally never
+`targets.cursor.omit.commands.deny`. Codex projects only deny rules, as
+`forbidden` prefix rules, so a fragment containing allow or ask rules must
+acknowledge `targets.codex.omit.commands.allow` or
+`targets.codex.omit.commands.ask`. Commands and agents that intentionally never
 reach Cursor or Codex can set `only: [claude, opencode]` instead of repeating
 those surface omissions.
 
@@ -178,7 +179,8 @@ targets:
       commands.deny: Cursor Desktop has no deny channel; the CLI projects it.
   codex:
     omit:
-      commands: Codex has no portable command policy.
+      commands.allow: Codex allow rules would skip its sandbox approval.
+      commands.ask: Codex prompts by sandbox, not by rule.
 ```
 
 Fragments are merged before validation. Duplicate rules, contradictory
