@@ -15,7 +15,22 @@ Global and rule bodies concatenate into `AGENTS.md`. A rule may separately use
 strict `targets.codex.native.rules` entries containing a non-empty literal
 `pattern`, `decision` (`allow`, `prompt`, or `forbidden`), and optional
 `justification`. Unknown values are errors. Codex does not receive portable
-commands or command permissions; sources must explicitly omit them.
+commands; sources must explicitly omit them.
+
+## Command permission projection
+
+Portable deny rules land in the same rules file as `forbidden` prefix rules.
+Codex matches one flat argv by literal prefix and has no wildcard, so a rule
+projects as its head and each tail appended directly, bare and once per
+declared wrapper (`security find-generic-password`, `env security
+find-generic-password`). The option-hole heads and the tail-after-arguments
+spellings have no prefix form and fall to Codex's own approval flow; a deny
+with a text predicate or an exact match is dropped with a warning. Allow and
+ask rules never project: an allow would skip the sandbox approval Codex
+already applies, and an ask would add prompts the sandbox does not need, so
+fragments carrying them acknowledge `targets.codex.omit.commands.allow` and
+`targets.codex.omit.commands.ask`. Secret paths and names still have no
+projection.
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,
