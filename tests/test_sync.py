@@ -197,6 +197,16 @@ def permission_policy_doc(
         targets.setdefault("claude", {}).setdefault("omit", {})["workspace.ask"] = (
             "Claude has no workspace ask channel."
         )
+    if source.get("unmatched", "ask") != "ask":
+        targets.setdefault("claude", {}).setdefault("omit", {})["unmatched"] = (
+            "Claude gates unmatched commands by permission mode."
+        )
+        targets.setdefault("codex", {}).setdefault("omit", {})["unmatched"] = (
+            "Codex gates unmatched commands by sandbox."
+        )
+        targets.setdefault("cursor", {}).setdefault("omit", {})["unmatched"] = (
+            "Cursor Desktop has no deny channel; the CLI projects it."
+        )
     if targets:
         source["targets"] = targets
     return yaml.safe_dump(source, sort_keys=False)
@@ -251,12 +261,15 @@ def write_permissions(
     secret_names: list[str] | None = None,
     tools: dict[str, str] | None = None,
     workspace: dict[str, list[str]] | None = None,
+    unmatched: str | None = None,
 ) -> None:
     extra: dict[str, Any] = {}
     if tools is not None:
         extra["tools"] = tools
     if workspace is not None:
         extra["workspace"] = workspace
+    if unmatched is not None:
+        extra["unmatched"] = unmatched
     write(
         config_root / "permissions" / "policy.yaml",
         permission_policy_doc(
@@ -683,6 +696,64 @@ class SyncTests(unittest.TestCase):
                     "kubectl:--context * get *",
                 ],
             )
+
+    def test_unmatched_allow_lands_only_where_the_guards_outrank_it(self) -> None:
+        """Three surfaces owe an omit, and Cursor Desktop is one of them.
+
+        OpenCode writes every rule after the `*` entry and the Cursor CLI's
+        deny list survives `unrestricted`, so the guards still bind on both.
+        Desktop has no deny channel, and `unrestricted` there auto-runs
+        everything, so it keeps `allowlist` and prompts for a guarded command
+        exactly as before.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["kubectl", "get"]],
+                deny=[["kubectl", "apply"]],
+                unmatched="allow",
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            bash = opencode["permission"]["bash"]
+            self.assertEqual(bash["*"], "allow")
+            for command, decision in {
+                "anything at all": "allow",
+                "kubectl get pods": "allow",
+                "kubectl apply -f x.yaml": "ask",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
+
+            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
+            self.assertEqual(cursor_cli["approvalMode"], "unrestricted")
+            self.assertIn("Shell(kubectl:apply)", cursor_cli["permissions"]["deny"])
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(desktop["approvalMode"], "allowlist")
+            self.assertNotIn("kubectl:apply", desktop["terminalAllowlist"])
+
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertNotIn("defaultMode", claude["permissions"])
+
+    def test_unmatched_allow_without_an_omission_fails_the_three_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "permissions/policy.yaml",
+                "schema: coding-agents/v4\n"
+                "kind: permission-policy\n"
+                "id: user\n"
+                "name: User\n"
+                "unmatched: allow\n",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "unmatched is unsupported on (claude|codex|cursor)"
+            ):
+                run_sync(config_root=config_root, home=home)
 
     def test_a_bare_exact_rule_projects_the_exact_bare_form(self) -> None:
         """`prog:` is the exact-bare shape: the program with no arguments.

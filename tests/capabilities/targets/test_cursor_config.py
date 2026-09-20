@@ -66,11 +66,14 @@ def runtime(
     return value
 
 
-def invoke(runtime: Runtime, approval_mode: str) -> tuple[str, bool]:
+def invoke(
+    runtime: Runtime, approval_mode: str, deny: list[str] | None = None
+) -> tuple[str, bool]:
     runtime.marker.unlink(missing_ok=True)
-    (runtime.config / "cli-config.json").write_text(
-        json.dumps({"version": 1, "approvalMode": approval_mode})
-    )
+    config: dict[str, object] = {"version": 1, "approvalMode": approval_mode}
+    if deny is not None:
+        config["permissions"] = {"deny": deny}
+    (runtime.config / "cli-config.json").write_text(json.dumps(config))
     process = run_probe(
         run,
         *runtime.seatbelt.command(
@@ -108,3 +111,17 @@ def test_cursor_cli_config_approval_mode_changes_shell_behavior(
 
     assert allowlist == ("rejected", False)
     assert unrestricted == ("success", True)
+
+
+@pytest.mark.capability_case("cursor-agent.config")
+@pytest.mark.capability_live
+def test_cursor_cli_config_deny_binds_under_unrestricted(runtime: Runtime) -> None:
+    """`unrestricted` waives the allowlist, not the deny list.
+
+    The compiler projects `unmatched: allow` as `unrestricted`, which only
+    holds as a policy if the guard rules it emits alongside still stop the
+    commands they name.
+    """
+    denied = invoke(runtime, "unrestricted", deny=[f"Shell({COMMAND})"])
+
+    assert denied == ("permissionDenied", False)
