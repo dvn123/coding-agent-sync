@@ -343,6 +343,7 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     ),
                     *({"secret_paths"} if permissions.secret_paths else set()),
                     *({"secret_names"} if permissions.secret_names else set()),
+                    *({"unmatched"} if permissions.unmatched != "ask" else set()),
                 },
             )
         )

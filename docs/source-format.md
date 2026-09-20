@@ -71,7 +71,7 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Skill | `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `only`, `effort`, `background`, `color`. |
-| Permission policy | `wrappers`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
+| Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `options`, `allow`, `ask`, `deny`. |
 
 `only` is an optional list of target names (`claude`, `cursor`, `codex`,
@@ -144,6 +144,16 @@ not know into `options`, which is how a top-level `reasoningEffort` reaches the
 provider, so unknown keys there are passthrough by design.
 
 ### Permissions
+
+`unmatched` is the decision for a shell command no rule matches: `ask`, the
+default, or `allow`. It lands only where the guard rules still outrank it:
+OpenCode's `*` bash entry, which every rule is written after, and the Cursor
+CLI's `approvalMode`, whose deny list survives `unrestricted`. Cursor Desktop,
+Claude, and Codex each need an omit for `unmatched: allow` — Desktop has no
+deny channel to keep the guards binding, Claude gates an unmatched command by
+permission mode, and Codex by sandbox, and neither mode is a portable
+allow/ask. There is no `deny` value: a blanket command denial is not a policy
+any target can run under.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it

@@ -22,6 +22,7 @@ from ..sources import (
     describe_rule,
 )
 from .permissions import (
+    CURSOR_APPROVAL_MODES,
     CURSOR_TOOL_FLAGS,
     CURSOR_TOOL_PATTERNS,
     cursor_shell_variants,
@@ -136,9 +137,11 @@ def _permission_values(
     policy_omit = block(permissions, "cursor").omit
     tools_omitted = "tools" in policy_omit
     secrets_omitted = "secret_paths" in policy_omit
+    unmatched = permissions.unmatched
+    approval_mode = CURSOR_APPROVAL_MODES[unmatched]
     commands = permissions.commands
     has_rules = bool(commands.allow or commands.ask or commands.deny)
-    if not has_rules and tools_omitted and secrets_omitted:
+    if not has_rules and tools_omitted and secrets_omitted and unmatched == "ask":
         return (), ()
 
     diagnostics: list[Diagnostic] = []
@@ -225,7 +228,7 @@ def _permission_values(
 
     cli: list[NativeValue] = [
         NativeValue(
-            "cursor-cli", root / "cli-config.json", ("approvalMode",), "allowlist"
+            "cursor-cli", root / "cli-config.json", ("approvalMode",), approval_mode
         )
     ]
     if allowed := [f"Shell({pattern})" for pattern in allow]:
@@ -292,6 +295,11 @@ def _permission_values(
         tuple(
             (
                 *cli,
+                # Always `allowlist`, never the CLI's mode. Desktop has no
+                # deny channel, so its only answer to a guarded command is to
+                # withhold it from the allowlist and prompt; `unrestricted`
+                # returns true from getModeFullAutoRun unconditionally and
+                # would run every guard without asking.
                 NativeValue(
                     "cursor-desktop",
                     root / "permissions.json",
@@ -499,6 +507,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             ),
             *({"secret_paths"} if permissions.secret_paths else set()),
             *({"secret_names"} if permissions.secret_names else set()),
+            *({"unmatched"} if permissions.unmatched != "ask" else set()),
         }
         diagnostics.extend(omissions(permissions.paths[0], "cursor", value, required))
         for path, targets, intent in permissions.command_targets:

@@ -30,7 +30,9 @@ ask rules never project: an allow would skip the sandbox approval Codex
 already applies, and an ask would add prompts the sandbox does not need, so
 fragments carrying them acknowledge `targets.codex.omit.commands.allow` and
 `targets.codex.omit.commands.ask`. Secret paths and names still have no
-projection.
+projection, and neither does the policy's `unmatched` decision: Codex gates an
+unmatched command by sandbox and approval policy, not by an allowlist, so a
+non-default value needs an omit here too.
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,

@@ -45,6 +45,10 @@ def fold_edit_write(
 
 CURSOR_TOOL_PATTERNS = {"read": "Read(**)", "write": "Write(**)"}
 CURSOR_TOOL_FLAGS = {"websearch": "autoAcceptWebSearch"}
+# The CLI's approvalMode, which is the only one `unmatched` reaches; Desktop
+# is pinned to `allowlist` because it has no deny channel. The enum's third
+# value, `manual`, prompts for everything and no portable value asks for it.
+CURSOR_APPROVAL_MODES = {"ask": "allowlist", "allow": "unrestricted"}
 
 
 def _wrapper_prefixes(wrapper: str | None) -> tuple[str, ...]:

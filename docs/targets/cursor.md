@@ -23,10 +23,23 @@ acknowledge `omit.command` and `omit.agent` as applicable.
 ## Command permission projection
 
 Command rules project to two native surfaces. The CLI receives
-`approvalMode: allowlist`, `permissions.allow`, and `permissions.deny` in
-`cli-config.json`; Desktop receives `approvalMode: allowlist` and
-`terminalAllowlist` in `permissions.json`. Both files are merged with
-hand-authored native content under pointer ownership.
+`approvalMode`, `permissions.allow`, and `permissions.deny` in
+`cli-config.json`; Desktop receives `approvalMode` and `terminalAllowlist` in
+`permissions.json`. Both files are merged with hand-authored native content
+under pointer ownership.
+
+The CLI's `approvalMode` carries the policy's `unmatched` decision:
+`allowlist` for `ask`, `unrestricted` for `allow`. The third enum value,
+`manual`, prompts for everything and has no portable spelling. `unrestricted`
+waives the allowlist but not `permissions.deny`, which the
+`cursor-agent.config` probe pins, so the CLI's guards keep binding.
+
+Desktop stays on `allowlist` whatever the policy says, so `unmatched: allow`
+requires `targets.cursor.omit.unmatched`. Desktop has no deny channel: its
+only answer to a guarded command is to withhold it from `terminalAllowlist`
+and prompt. `unrestricted` there returns true from `getModeFullAutoRun`
+unconditionally, which would run every guarded command without asking, so the
+mode the CLI takes is not one Desktop can be given.
 
 - Allow and deny rules lower to `Shell(...)` entries with the program before
   the colon and the token pattern after it. A bare exact rule (`command:

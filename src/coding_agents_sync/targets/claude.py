@@ -453,7 +453,10 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 permissions.paths[0],
                 "claude",
                 value,
-                {"workspace.ask"} if permissions.workspace.ask else set(),
+                {
+                    *({"workspace.ask"} if permissions.workspace.ask else set()),
+                    *({"unmatched"} if permissions.unmatched != "ask" else set()),
+                },
             )
         )
         if note := folded[1]:

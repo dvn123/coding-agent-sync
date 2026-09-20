@@ -18,7 +18,10 @@ unvalidated and produces a source-located warning.
 
 Claude receives portable command, tool, workspace, secret-path, and
 secret-name permissions in `settings.json`. It is one of the two targets with
-an exact portable command-policy projection. Generated pointers are semantic
+an exact portable command-policy projection. It has no projection for the
+policy's `unmatched` decision: `permissions.defaultMode` is the only surface
+for it, and its modes are not allow/ask, so a non-default `unmatched` needs an
+omit and the mode stays a patch's to set. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
 
