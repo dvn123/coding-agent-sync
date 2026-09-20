@@ -374,6 +374,7 @@ class PermissionPolicyDocument(StrictModel):
     name: str
     description: str = ""
     wrappers: tuple[str, ...] = ()
+    unmatched: Literal["ask", "allow"] = "ask"
     tools: dict[str, str] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
     secret_paths: tuple[str, ...] = ()
@@ -548,6 +549,7 @@ class PermissionSource(BaseModel):
     name: str
     description: str
     wrappers: tuple[str, ...]
+    unmatched: str
     tools: dict[str, str]
     workspace: WorkspacePermissions
     secret_paths: tuple[str, ...]
@@ -850,6 +852,7 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         name=policy.name,
         description=policy.description,
         wrappers=policy.wrappers,
+        unmatched=policy.unmatched,
         tools=policy.tools,
         workspace=policy.workspace,
         secret_paths=policy.secret_paths,

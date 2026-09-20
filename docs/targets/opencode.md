@@ -24,7 +24,8 @@ canonical output.
 
 OpenCode's ordered `/permission/bash` map preserves allow, ask, and deny
 precedence, while other portable permission values lower only to semantically
-matching V1 surfaces.
+matching V1 surfaces. Its leading `*` entry carries the policy's `unmatched`
+decision; every rule is written after it, so the guards still outrank it.
 
 The one departure from the portable policy is that the deny bucket lands as
 `ask`, so the map never contains a bash `deny`. OpenCode answers a denial with

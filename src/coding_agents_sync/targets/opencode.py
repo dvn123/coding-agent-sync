@@ -171,7 +171,7 @@ def _permissions(
         functools.partial(glob_variants, optional_trailing=True),
         lambda wrapper: f"{wrapper} *",
     )
-    bash: dict[str, str] = {"*": "ask"}
+    bash: dict[str, str] = {"*": permissions.unmatched}
 
     def append(patterns: Iterable[str], decision: str) -> None:
         for pattern in patterns:
