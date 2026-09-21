@@ -31,6 +31,7 @@ from ..sources import (
     SkillSource,
     SourceBundle,
     StrictModel,
+    resolve_model_policy,
 )
 from .permissions import (
     CLAUDE_RESOLVED_WRAPPERS,
@@ -244,13 +245,17 @@ def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
     )
 
 
-def _agent_meta(agent: AgentSource, native: ClaudeAgentNative) -> dict[str, Any]:
+def _agent_meta(
+    agent: AgentSource,
+    native: ClaudeAgentNative,
+    policy: object | None = None,
+) -> dict[str, Any]:
     meta: dict[str, Any] = {"name": agent.name, "description": agent.description}
     if native.tools is not None:
         meta["tools"] = native.tools
     if native.disallowed_tools is not None:
         meta["disallowedTools"] = native.disallowed_tools
-    if agent.effort:
+    if agent.effort and policy is None:
         meta["effort"] = agent.effort
     if agent.background:
         meta["background"] = True
@@ -425,10 +430,35 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         native, issues = strict_native(agent.path, "claude", value, ClaudeAgentNative)
         diagnostics.extend(issues)
         diagnostics.extend(omissions(agent.path, "claude", value, set()))
+        policy = resolve_model_policy(sources, agent, "claude")
+        if policy is not None:
+            conflicts = {
+                key
+                for key in ("model", "effort")
+                if key in value.native or key in value.raw
+            }
+            if agent.effort:
+                conflicts.add("effort")
+            if conflicts:
+                diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        "model policy owns Claude fields: "
+                        + ", ".join(sorted(conflicts)),
+                        agent.path,
+                    )
+                )
+            if native:
+                native = native.model_copy(
+                    update={
+                        "model": policy.model or "inherit",
+                        "effort": policy.effort,
+                    }
+                )
         if native:
             meta, issues = frontmatter(
                 agent.path,
-                _agent_meta(agent, native),
+                _agent_meta(agent, native, policy),
                 native,
                 value.raw,
             )

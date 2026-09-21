@@ -27,6 +27,10 @@ precedence, while other portable permission values lower only to semantically
 matching V1 surfaces. Its leading `*` entry carries the policy's `unmatched`
 decision; every rule is written after it, so the guards still outrank it.
 
+Named agents resolve `model_policy` before rendering. The `sweet-spot` profile
+emits its model and `reasoningEffort`; `inherit` emits neither, so the agent
+inherits the invoking primary agent's model and effort.
+
 The one departure from the portable policy is that the deny bucket lands as
 `ask`, so the map never contains a bash `deny`. OpenCode answers a denial with
 `PermissionDeniedError`, whose message embeds the serialized ruleset filtered

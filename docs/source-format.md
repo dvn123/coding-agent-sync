@@ -18,6 +18,7 @@ reasoned `omit` entry.
 ## Source tree
 
 ```text
+model-policy.yaml
 global/AGENTS.md
 rules/*.md
 skills/*/SKILL.md
@@ -70,9 +71,19 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Rule | `only`. |
 | Skill | `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `only`, `execution.agent`, `execution.subtask`. |
-| Agent | `only`, `effort`, `background`, `color`. |
+| Agent | `only`, `model_policy`, `effort`, `background`, `color`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `options`, `allow`, `ask`, `deny`. |
+
+`model-policy.yaml` is a strict compiler input with schema
+`coding-agents/model-policy/v1`. It contains a non-`inherit` `default` profile
+and named target profiles. Each profile may set only `model` and `effort` for
+`claude`, `opencode`, and `cursor`. A named agent selects a profile with
+`model_policy`; an omitted selector uses `default`. The `inherit` profile emits
+no model or effort pin, except Claude emits its explicit native `model: inherit`
+marker so it follows the parent conversation rather than Claude's model-order
+fallback. Cursor validates the profile but emits no agent because that target
+has no generated user-agent surface.
 
 `only` is an optional list of target names (`claude`, `cursor`, `codex`,
 `opencode`). Absent or empty means every target that supports the kind receives

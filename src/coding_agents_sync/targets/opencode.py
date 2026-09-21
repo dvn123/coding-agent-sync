@@ -25,7 +25,13 @@ from ..plan import (
     OwnedTree,
     Plan,
 )
-from ..sources import RuleSource, SkillSource, SourceBundle, StrictModel
+from ..sources import (
+    RuleSource,
+    SkillSource,
+    SourceBundle,
+    StrictModel,
+    resolve_model_policy,
+)
 from .permissions import (
     bucket_patterns,
     external_directory_map,
@@ -372,12 +378,37 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 {"background"} if agent.background else set(),
             )
         )
+        policy = resolve_model_policy(sources, agent, "opencode")
+        if policy is not None:
+            conflicts = {
+                key
+                for key in ("model", "provider", "reasoningEffort", "reasoning_effort")
+                if key in value.native or key in value.raw
+            }
+            if agent.effort:
+                conflicts.add("reasoningEffort")
+            if conflicts:
+                diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        "model policy owns OpenCode fields: "
+                        + ", ".join(sorted(conflicts)),
+                        agent.path,
+                    )
+                )
+            if native:
+                native = native.model_copy(
+                    update={
+                        "model": policy.model,
+                        "reasoning_effort": policy.effort,
+                    }
+                )
         if native:
             agent_meta: dict[str, Any] = {
                 "name": agent.name,
                 "description": agent.description,
             }
-            if agent.effort:
+            if agent.effort and policy is None:
                 agent_meta["reasoningEffort"] = agent.effort
             if agent.color:
                 agent_meta["color"] = agent.color
