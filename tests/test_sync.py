@@ -290,6 +290,186 @@ def config_root_home(tmp: str) -> tuple[Path, Path]:
     return root / "coding-agents", root / "home"
 
 
+def model_policy_doc(
+    *, default: str = "sweet-spot", sweet_model: str = "claude-sonnet-5"
+) -> str:
+    return yaml.safe_dump(
+        {
+            "schema": "coding-agents/model-policy/v1",
+            "default": default,
+            "profiles": {
+                "sweet-spot": {
+                    "claude": {"model": sweet_model, "effort": "xhigh"},
+                    "opencode": {
+                        "model": "amazon-bedrock/global.openai.gpt-5.6-luna",
+                        "effort": "xhigh",
+                    },
+                    "cursor": {"model": "GPT-5.6 Luna", "effort": "xhigh"},
+                },
+                "inherit": {},
+            },
+        },
+        sort_keys=False,
+    )
+
+
+class ModelPolicyTests(unittest.TestCase):
+    def test_model_policy_lowers_named_agents_without_touching_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "model-policy.yaml", model_policy_doc())
+            write(
+                config_root / "agents" / "cheap.md",
+                source_doc(
+                    "agent",
+                    "cheap",
+                    "cheap",
+                    "Cheap body\n",
+                    extra={
+                        "opencode:mode": "subagent",
+                        "codex:model": "gpt-5",
+                        "codex:model_reasoning_effort": "high",
+                    },
+                ),
+            )
+            write(
+                config_root / "agents" / "open.md",
+                source_doc(
+                    "agent",
+                    "open",
+                    "open",
+                    "Open body\n",
+                    extra={
+                        "model_policy": "inherit",
+                        "opencode:mode": "subagent",
+                    },
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            claude_cheap = (home / ".claude/agents/cheap.md").read_text()
+            claude_open = (home / ".claude/agents/open.md").read_text()
+            opencode_cheap = (home / ".config/opencode/agents/cheap.md").read_text()
+            opencode_open = (home / ".config/opencode/agents/open.md").read_text()
+            codex_cheap = (home / ".codex/agents/cheap.toml").read_text()
+
+            self.assertIn("model: claude-sonnet-5", claude_cheap)
+            self.assertIn("effort: xhigh", claude_cheap)
+            self.assertIn("model: inherit", claude_open)
+            self.assertNotIn("effort:", claude_open)
+            self.assertIn(
+                "model: amazon-bedrock/global.openai.gpt-5.6-luna", opencode_cheap
+            )
+            self.assertIn("reasoningEffort: xhigh", opencode_cheap)
+            self.assertNotIn("model:", opencode_open)
+            self.assertNotIn("reasoningEffort:", opencode_open)
+            self.assertIn('model = "gpt-5"', codex_cheap)
+            self.assertIn('model_reasoning_effort = "high"', codex_cheap)
+            self.assertFalse((home / ".cursor/agents").exists())
+
+    def test_model_policy_rejects_unknown_profiles_and_fable_sweet_spot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "model-policy.yaml", model_policy_doc())
+            write(
+                config_root / "agents" / "unknown.md",
+                source_doc(
+                    "agent",
+                    "unknown",
+                    "unknown",
+                    "body\n",
+                    extra={"model_policy": "missing"},
+                ),
+            )
+            with self.assertRaisesRegex(SourceSchemaError, "unknown model policy"):
+                run_sync(config_root=config_root, home=home)
+
+            write(
+                config_root / "model-policy.yaml",
+                model_policy_doc(sweet_model="claude-fable-5-1"),
+            )
+            (config_root / "agents" / "unknown.md").unlink()
+            with self.assertRaisesRegex(SourceSchemaError, "Fable 5.1"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_model_policy_rejects_native_model_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "model-policy.yaml", model_policy_doc())
+            write(
+                config_root / "agents" / "conflict.md",
+                source_doc(
+                    "agent",
+                    "conflict",
+                    "conflict",
+                    "body\n",
+                    extra={
+                        "model_policy": "sweet-spot",
+                        "claude:model": "opus",
+                    },
+                ),
+            )
+            with self.assertRaisesRegex(ValueError, "model policy owns Claude fields"):
+                run_sync(config_root=config_root, home=home)
+
+    def test_model_policy_rejects_opencode_model_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "model-policy.yaml", model_policy_doc())
+            write(
+                config_root / "agents" / "conflict.md",
+                source_doc(
+                    "agent",
+                    "conflict",
+                    "conflict",
+                    "body\n",
+                    extra={
+                        "model_policy": "sweet-spot",
+                        "opencode:model": "other/model",
+                    },
+                ),
+            )
+            with self.assertRaisesRegex(
+                ValueError, "model policy owns OpenCode fields"
+            ):
+                run_sync(config_root=config_root, home=home)
+
+    def test_sweet_spot_fact_finder_keeps_read_only_tool_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "model-policy.yaml", model_policy_doc())
+            write(
+                config_root / "agents" / "fact-finder.md",
+                source_doc(
+                    "agent",
+                    "fact-finder",
+                    "fact-finder",
+                    "Find facts.\n",
+                    extra={
+                        "model_policy": "sweet-spot",
+                        "claude": {"disallowedTools": ["Edit", "Write", "Agent"]},
+                        "opencode": {
+                            "mode": "subagent",
+                            "permission": {"edit": "deny", "task": "deny"},
+                        },
+                        "codex": {"sandbox_mode": "read-only"},
+                    },
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            claude = (home / ".claude/agents/fact-finder.md").read_text()
+            opencode = (home / ".config/opencode/agents/fact-finder.md").read_text()
+            codex = (home / ".codex/agents/fact-finder.toml").read_text()
+            self.assertIn("disallowedTools:", claude)
+            self.assertIn("model: claude-sonnet-5", claude)
+            self.assertIn("edit: deny", opencode)
+            self.assertIn("task: deny", opencode)
+            self.assertIn('sandbox_mode = "read-only"', codex)
+
+
 class ManifestTests(unittest.TestCase):
     def test_prunes_unchanged_stale_entry_and_preserves_unmanifested_sibling(
         self,

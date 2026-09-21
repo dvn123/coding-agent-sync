@@ -16,6 +16,10 @@ canonical values plus strict `targets.claude.native` frontmatter. Unknown
 native fields are errors; accepted `targets.claude.raw` frontmatter remains
 unvalidated and produces a source-located warning.
 
+Named agents resolve `model_policy` before rendering. The `sweet-spot` profile
+emits its model and `effort`; `inherit` emits `model: inherit` and no effort,
+so the subagent follows the parent conversation deliberately.
+
 Claude receives portable command, tool, workspace, secret-path, and
 secret-name permissions in `settings.json`. It is one of the two targets with
 an exact portable command-policy projection. It has no projection for the

@@ -32,7 +32,7 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = true
-exclude-newer = "1 week"
+exclude-newer = "3 days"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/coding_agents_sync"]

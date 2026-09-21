@@ -486,6 +486,7 @@ EFFORT_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh", "ma
 
 
 class AgentExtra(StrictModel):
+    model_policy: str | None = None
     effort: str | None = None
     background: bool = False
     color: str | None = None
@@ -536,9 +537,64 @@ class CommandSource(SourceModel):
 
 
 class AgentSource(SourceModel):
+    model_policy: str | None = None
     effort: str | None = None
     background: bool = False
     color: str | None = None
+
+
+class ModelPolicyTarget(StrictModel):
+    model: str | None = None
+    effort: str | None = None
+
+    @field_validator("effort")
+    @classmethod
+    def _validate_effort(cls, value: str | None) -> str | None:
+        if value is not None and value not in EFFORT_LEVELS:
+            raise ValueError(f"effort must be one of {sorted(EFFORT_LEVELS)}")
+        return value
+
+
+class ModelPolicyProfile(StrictModel):
+    claude: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
+    cursor: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
+    opencode: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
+
+
+class ModelPolicyDocument(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    schema_: Literal["coding-agents/model-policy/v1"] = Field(
+        validation_alias="schema", serialization_alias="schema"
+    )
+    default: str
+    profiles: dict[str, ModelPolicyProfile]
+
+    @model_validator(mode="after")
+    def _validate_profiles(self) -> ModelPolicyDocument:
+        if not self.profiles:
+            raise ValueError("profiles must not be empty")
+        if self.default not in self.profiles:
+            raise ValueError(f"default profile {self.default!r} is not defined")
+        if self.default == "inherit":
+            raise ValueError("default profile must pin a model")
+        if "sweet-spot" not in self.profiles:
+            raise ValueError("profiles must define `sweet-spot`")
+        if "inherit" not in self.profiles:
+            raise ValueError("profiles must define `inherit`")
+        inherit = self.profiles["inherit"]
+        if any(
+            target.model or target.effort
+            for target in (inherit.claude, inherit.cursor, inherit.opencode)
+        ):
+            raise ValueError("inherit profile must not pin a model or effort")
+        sweet = self.profiles["sweet-spot"]
+        if any(
+            target.model and re.search(r"fable[\s._-]*5[\s._-]*1", target.model, re.I)
+            for target in (sweet.claude, sweet.cursor, sweet.opencode)
+        ):
+            raise ValueError("sweet-spot must not select Claude Fable 5.1")
+        return self
 
 
 class PermissionSource(BaseModel):
@@ -567,6 +623,7 @@ class SourceBundle(BaseModel):
     skills: tuple[SkillSource, ...] = ()
     commands: tuple[CommandSource, ...] = ()
     agents: tuple[AgentSource, ...] = ()
+    model_policy: ModelPolicyDocument | None = None
     permissions: PermissionSource | None = None
 
 
@@ -726,6 +783,7 @@ def load_agent(path: Path) -> AgentSource:
         path=path,
         targets=targets,
         body=body,
+        model_policy=extra.model_policy,
         effort=extra.effort,
         background=extra.background,
         color=extra.color,
@@ -746,7 +804,7 @@ def _snake_source_keys(value: Any) -> Any:
     return value
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
+def _load_yaml(path: Path, *, normalize_keys: bool = True) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
         node = yaml.compose(text, Loader=yaml.SafeLoader)
@@ -758,7 +816,26 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise SourceSchemaError(f"{path}: source must be a mapping")
     _reject_normalized_yaml_key_collisions(path, parsed)
-    return _snake_source_keys(parsed)
+    return _snake_source_keys(parsed) if normalize_keys else parsed
+
+
+def load_model_policy(path: Path) -> ModelPolicyDocument:
+    try:
+        return ModelPolicyDocument.model_validate(
+            _load_yaml(path, normalize_keys=False)
+        )
+    except ValidationError as exc:
+        raise _model_error(path, exc) from exc
+
+
+def resolve_model_policy(
+    sources: SourceBundle, agent: AgentSource, target: str
+) -> ModelPolicyTarget | None:
+    if sources.model_policy is None:
+        return None
+    profile_name = agent.model_policy or sources.model_policy.default
+    profile = sources.model_policy.profiles[profile_name]
+    return getattr(profile, target)
 
 
 def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSource:
@@ -888,6 +965,14 @@ def _load_many[T](
 
 
 def load_sources(config_root: Path) -> SourceBundle:
+    model_policy_path = config_root / "model-policy.yaml"
+    model_policy: ModelPolicyDocument | None = None
+    model_policy_errors: list[str] = []
+    if model_policy_path.exists():
+        try:
+            model_policy = load_model_policy(model_policy_path)
+        except SourceSchemaError as exc:
+            model_policy_errors.append(str(exc))
     global_paths = (
         [config_root / "global" / "AGENTS.md"]
         if (config_root / "global" / "AGENTS.md").exists()
@@ -904,6 +989,17 @@ def load_sources(config_root: Path) -> SourceBundle:
     agents, agent_errors = _load_many(
         sorted(config_root.glob("agents/*.md")), load_agent
     )
+    if model_policy is not None:
+        for agent in agents:
+            profile_name = agent.model_policy or model_policy.default
+            if profile_name not in model_policy.profiles:
+                model_policy_errors.append(
+                    f"{agent.path}: unknown model policy {profile_name!r}"
+                )
+    elif any(agent.model_policy for agent in agents):
+        model_policy_errors.append(
+            f"{config_root / 'model-policy.yaml'}: required by an agent model_policy"
+        )
     permission_root = config_root / "permissions"
     permission_errors: list[str] = []
     permissions: list[PermissionSource] = []
@@ -918,7 +1014,8 @@ def load_sources(config_root: Path) -> SourceBundle:
         except SourceSchemaError as exc:
             permission_errors.append(str(exc))
     errors = (
-        global_errors
+        model_policy_errors
+        + global_errors
         + rule_errors
         + skill_errors
         + command_errors
@@ -934,5 +1031,6 @@ def load_sources(config_root: Path) -> SourceBundle:
         skills=tuple(skills),
         commands=tuple(commands),
         agents=tuple(agents),
+        model_policy=model_policy,
         permissions=permissions[0] if permissions else None,
     )
