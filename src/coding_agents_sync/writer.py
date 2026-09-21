@@ -28,7 +28,12 @@ def _pointers_overlap(pointer: Pointer, other: Pointer) -> bool:
 
 
 def _validate_structured(path: Path) -> None:
-    content = path.read_text()
+    try:
+        content = path.read_text()
+    except UnicodeDecodeError as exc:
+        raise ManagedEntryConflict(
+            f"Invalid generated file encoding: {path}: {exc}"
+        ) from None
     try:
         if path.suffix == ".json":
             parsed = json.loads(content)

@@ -20,6 +20,10 @@ fields are `name`, `description`, `paths`, `disable-model-invocation`, and
 Cursor does not receive portable user commands or user agents. Sources must
 acknowledge `omit.command` and `omit.agent` as applicable.
 
+Cursor validates `model_policy` metadata but emits no agent configuration. A
+skill fallback may use the symbolic policy as guidance only; the target has no
+compiler-owned per-subagent model or effort surface.
+
 ## Command permission projection
 
 Command rules project to two native surfaces. The CLI receives
