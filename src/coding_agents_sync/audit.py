@@ -26,7 +26,7 @@ import typer
 
 from .sources import CommandPermission, PermissionSource, SourceBundle, load_sources
 from .targets import claude, opencode
-from .targets.permissions import PROGRAM_DIRECTORIES, fold_edit_write
+from .targets.permissions import fold_edit_write
 
 UNMATCHED = ("ask", "allow")
 BUCKETS = ("deny", "ask", "allow")
@@ -63,6 +63,15 @@ WRAPPER_SPELLINGS = {
     "stdbuf": ("stdbuf -oL",),
 }
 EXTRA_PREFIXES = ("FOO=1", "sudo", "> /dev/null", "2>&1")
+# Directories a probe runs a program from.
+PROGRAM_DIRECTORIES = (
+    "/bin/",
+    "/usr/bin/",
+    "/usr/local/bin/",
+    "/opt/homebrew/bin/",
+    "/sbin/",
+    "/usr/sbin/",
+)
 
 
 # Matchers

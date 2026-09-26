@@ -19,6 +19,10 @@ from capabilities.protocols.anthropic import AnthropicRequest, AnthropicResponde
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.claude import environment
+from coding_agents_sync.targets.permissions import (
+    CLAUDE_OPAQUE_COMMANDS,
+    CLAUDE_PROGRAM_PATH,
+)
 
 COMMAND = "permission-blackbox-probe"
 UNLISTED_MARKER = "unlisted"
@@ -313,6 +317,48 @@ SCENARIOS = {
             ("redirect-fd", f"2>&1 {COMMAND} arg"),
         )
     },
+    # The compiled guards: every deny also lands behind `/*/`, and a command
+    # that starts with a redirect or runs a peeled wrapper by path is denied.
+    # A redirect elsewhere and another program run by path are not.
+    **{
+        f"compiled-guard-{name}": Scenario(
+            "Bash",
+            {"command": command},
+            {
+                "allow": ("Bash",),
+                "deny": tuple(
+                    f"Bash({pattern})"
+                    for pattern in (
+                        f"{COMMAND} *",
+                        f"{CLAUDE_PROGRAM_PATH}{COMMAND} *",
+                        f"{CLAUDE_PROGRAM_PATH}{COMMAND}",
+                        f"{OPT} push *",
+                        f"{CLAUDE_PROGRAM_PATH}{OPT} push *",
+                        f"{CLAUDE_PROGRAM_PATH}{OPT} push",
+                        *CLAUDE_OPAQUE_COMMANDS,
+                    )
+                ),
+            },
+        )
+        for name, command in (
+            ("path", f"{{bin}}/{COMMAND} arg"),
+            ("path-bare", f"{{bin}}/{COMMAND}"),
+            ("path-subcommand", f"{{bin}}/{OPT} push arg"),
+            ("env-path", f"/usr/bin/env {COMMAND} arg"),
+            ("nice-path", f"/usr/bin/nice -n 5 {COMMAND} arg"),
+            ("other-path", "/bin/echo x"),
+            ("fd-dup", f"2>&1 {COMMAND} arg"),
+            ("stdout", f"> /dev/null {COMMAND} arg"),
+            ("attached", f">/dev/null {COMMAND} arg"),
+            ("append", f">> log {COMMAND} arg"),
+            ("stdin", f"< /dev/null {COMMAND} arg"),
+            ("both", f"&> /dev/null {COMMAND} arg"),
+            ("fd", f"3>/dev/null {COMMAND} arg"),
+            ("trailing", "echo x 2>&1"),
+            ("inner", "echo a > /dev/null"),
+            ("quoted", 'echo "a -> b"'),
+        )
+    },
 }
 EXPECTED = {
     "allow-exact": {"exit-zero": True, "executed": True, "result-error": False},
@@ -464,6 +510,27 @@ EXPECTED = {
             ("quoted", True),
             ("redirect", False),
             ("redirect-fd", False),
+        )
+    },
+    **{
+        f"compiled-guard-{name}": {"exit-zero": True, "denied": denied}
+        for name, denied in (
+            ("path", True),
+            ("path-bare", True),
+            ("path-subcommand", True),
+            ("env-path", True),
+            ("nice-path", True),
+            ("other-path", False),
+            ("fd-dup", True),
+            ("stdout", True),
+            ("attached", True),
+            ("append", True),
+            ("stdin", True),
+            ("both", True),
+            ("fd", True),
+            ("trailing", False),
+            ("inner", False),
+            ("quoted", False),
         )
     },
 }
