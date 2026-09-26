@@ -20,8 +20,9 @@ from capabilities.protocols.openai import ToolResponder
 from capabilities.protocols.opencode import OpenCodeRequest
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
+from capabilities.sources import source_document
 from capabilities.targets.opencode import config as opencode_config
-from capabilities.targets.opencode import environment, supported
+from capabilities.targets.opencode import environment, isolate_service, settled
 from coding_agents_sync import run_sync
 
 GLOBAL_INSTRUCTIONS = "OPENCODE_GLOBAL_AGENTS_SENTINEL"
@@ -51,33 +52,25 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value))
 
 
-def source_document(
-    kind: str, identifier: str, body: str, description: str = ""
-) -> str:
-    return (
-        "---\n"
-        "schema: coding-agents/v4\n"
-        f"kind: {kind}\n"
-        f"id: {identifier}\n"
-        f"name: {identifier}\n"
-        f"description: {description}\n"
-        "---\n"
-        f"{body}\n"
-    )
-
-
 def compiler_sources(root: Path) -> None:
     (root / "global").mkdir(parents=True)
     (root / "rules").mkdir()
     (root / "agents").mkdir()
     (root / "global" / "AGENTS.md").write_text(
-        source_document("global", "global", COMPILER_GLOBAL)
+        source_document("global", "global", "global", "", COMPILER_GLOBAL)
     )
     (root / "rules" / "rule.md").write_text(
-        source_document("rule", "rule", COMPILER_RULE)
+        source_document("rule", "rule", "rule", "", COMPILER_RULE)
     )
     (root / "agents" / f"{COMPILER_AGENT}.md").write_text(
-        source_document("agent", COMPILER_AGENT, "compiler agent", "compiler agent")
+        source_document(
+            "agent",
+            COMPILER_AGENT,
+            COMPILER_AGENT,
+            "compiler agent",
+            "compiler agent",
+            "targets:\n  cursor:\n    omit:\n      agent: Cursor has no user agents.\n",
+        )
     )
 
 
@@ -136,6 +129,7 @@ def runtime(
         config_path,
     )
     require_containment(value.seatbelt, stub, paths, env)
+    isolate_service(request, value)
     return value
 
 
@@ -162,7 +156,7 @@ def root_request(runtime: Runtime) -> OpenCodeRequest:
         "Reply with the rules probe complete.",
         "--title",
         "capability rules probe",
-        "--pure",
+        "--standalone",
         "--format",
         "json",
         "--model",
@@ -188,7 +182,14 @@ def compiler(runtime: Runtime) -> CheckResult:
         paths,
         runtime.stub,
         runtime.state,
-        environment(paths, config_path, "/usr/bin:/bin:/usr/sbin:/sbin"),
+        # The compiler targets `~/.config/opencode`, the global directory
+        # OpenCode resolves when XDG_CONFIG_HOME is left at its default.
+        environment(
+            paths,
+            config_path,
+            "/usr/bin:/bin:/usr/sbin:/sbin",
+            XDG_CONFIG_HOME=str(paths.home / ".config"),
+        ),
         config_path,
     )
     compiled_runtime.state.enabled = False
@@ -201,7 +202,7 @@ def compiler(runtime: Runtime) -> CheckResult:
             "Reply with the rules probe complete.",
             "--title",
             "capability compiler probe",
-            "--pure",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -211,25 +212,25 @@ def compiler(runtime: Runtime) -> CheckResult:
         env=compiled_runtime.env,
         timeout=30,
     )
-    request = (
-        OpenCodeRequest.decode(compiled_runtime.stub.requests[-1])
-        if compiled_runtime.stub.requests
-        else None
+    payload = (
+        OpenCodeRequest.decode(compiled_runtime.stub.requests[-1]).text()
+        if process.returncode == 0 and compiled_runtime.stub.requests
+        else ""
     )
     return CheckResult(
         {
             "compiler-files": all(
                 path.is_file() for path in (instructions_path, agent_path, config_path)
             ),
+            # 2.x accepts `instructions` but never loads it, so rules join the
+            # global AGENTS.md and the config carries no list.
             "compiler-content": COMPILER_GLOBAL in instructions_path.read_text()
-            and str(sources / "rules" / "rule.md") in config["instructions"],
-            "compiler-runtime": process.returncode == 0
-            and request is not None
-            and all(
-                value in request.text() for value in (COMPILER_GLOBAL, COMPILER_RULE)
-            ),
+            and COMPILER_RULE in instructions_path.read_text()
+            and "instructions" not in config,
+            "compiler-runtime": COMPILER_GLOBAL in payload,
+            "compiler-rules-runtime": COMPILER_RULE in payload,
         },
-        process.stderr or process.stdout,
+        payload or process.stderr or process.stdout,
     )
 
 
@@ -237,31 +238,28 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
     if name == "compiler":
         return compiler(runtime)
     if name == "agents":
-        process = supported(
-            "the `debug agent` inspector",
-            run,
-            *runtime.seatbelt.command(
-                runtime.executable, "debug", "agent", FILE_AGENT, "--pure"
-            ),
-            cwd=runtime.paths.work,
-            env=runtime.env,
-            timeout=30,
+        agents = settled(
+            runtime,
+            ("debug", "agents"),
+            lambda value: any(item["id"] == FILE_AGENT for item in value),
         )
+        agent = next((item for item in agents if item["id"] == FILE_AGENT), None)
         return CheckResult(
             {
-                "agent-file-discovered": all(
-                    value in process.stdout
-                    for value in (FILE_AGENT, FILE_AGENT_DESCRIPTION, FILE_AGENT_BODY)
-                )
+                "agent-file-discovered": agent is not None
+                and agent["description"] == FILE_AGENT_DESCRIPTION
+                and agent["mode"] == "subagent"
+                and FILE_AGENT_BODY in agent["system"]
             },
-            process.stdout,
+            json.dumps(agents),
         )
     payload = root_request(runtime).text()
     return CheckResult(
         {
             "global-agents-visible": GLOBAL_INSTRUCTIONS in payload,
             "project-agents-visible": PROJECT_INSTRUCTIONS in payload,
-            "config-instructions-visible": CONFIG_INSTRUCTIONS in payload,
+            # 2.x documents `instructions` as accepted but not yet loaded.
+            "config-instructions-ignored": CONFIG_INSTRUCTIONS not in payload,
             "agents-order": payload.find(GLOBAL_INSTRUCTIONS)
             < payload.find(PROJECT_INSTRUCTIONS),
         },
@@ -281,7 +279,6 @@ observation = cached_scenario_fixture(observe)
         for check in (
             "global-agents-visible",
             "project-agents-visible",
-            "config-instructions-visible",
             "agents-order",
         )
     ),
@@ -289,6 +286,18 @@ observation = cached_scenario_fixture(observe)
     scope="module",
 )
 def test_opencode_instructions(observation: CheckResult, check: str) -> None:
+    assert observation.checks[check], observation.detail
+
+
+@pytest.mark.capability_case("opencode.instructions-config")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(
+    ("observation", "check"),
+    (pytest.param("instructions", "config-instructions-ignored"),),
+    indirect=("observation",),
+    scope="module",
+)
+def test_opencode_instructions_config(observation: CheckResult, check: str) -> None:
     assert observation.checks[check], observation.detail
 
 
@@ -305,7 +314,12 @@ def test_opencode_agents(runtime: Runtime) -> None:
     ("observation", "check"),
     tuple(
         pytest.param("compiler", check)
-        for check in ("compiler-files", "compiler-content", "compiler-runtime")
+        for check in (
+            "compiler-files",
+            "compiler-content",
+            "compiler-runtime",
+            "compiler-rules-runtime",
+        )
     ),
     indirect=("observation",),
     scope="module",

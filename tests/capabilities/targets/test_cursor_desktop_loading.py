@@ -22,8 +22,8 @@ def test_desktop_registers_a_custom_subagent_provider() -> None:
     bundle = read(AGENT_EXEC_BUNDLE)
 
     assert re.search(
-        r"\.map\([\w$]+=>new [\w$]+\.Vz\([\w$]+,[\w$]+,\"workspace\","
-        r"[\w$]+\)\),[\w$]+=new [\w$]+\.Vz\([\w$]+\.homedir\(\),[\w$]+,"
+        r"\.map\([\w$]+=>new [\w$]+\.([\w$]+)\([\w$]+,[\w$]+,\"workspace\","
+        r"[\w$]+\)\),[\w$]+=new [\w$]+\.\1\([\w$]+\.homedir\(\),[\w$]+,"
         r"\"user\",[\w$]+\)",
         bundle,
     )
@@ -61,11 +61,11 @@ def test_desktop_wires_plugin_services_to_workspace_and_user_home() -> None:
     bundle = read(AGENT_EXEC_BUNDLE)
 
     assert re.search(
-        r"er\(\{workspacePaths:[\w$]+,getThirdPartyExtensibilityEnabled:[\w$]+,"
+        r"[\w$]+\(\{workspacePaths:[\w$]+,getThirdPartyExtensibilityEnabled:[\w$]+,"
         r"getAllowUserLocalPluginImports:[\w$]+",
         bundle,
     )
-    assert "userHomeDirectory:we.homedir()" in bundle
+    assert re.search(r"userHomeDirectory:[\w$]+\.homedir\(\)", bundle)
     assert "pluginsService:" in bundle
     assert "refreshPluginHooks:" in bundle
 

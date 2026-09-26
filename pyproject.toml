@@ -22,6 +22,7 @@ dev = [
 ]
 
 [project.scripts]
+coding-agents-audit = "coding_agents_sync.audit:main"
 coding-agents-check = "coding_agents_sync.cli:check"
 coding-agents-cursor-desktop-probe = "coding_agents_sync.probes.cursor_desktop:main"
 coding-agents-sync = "coding_agents_sync.cli:main"

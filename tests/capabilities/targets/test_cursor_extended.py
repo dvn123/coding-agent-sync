@@ -1,55 +1,16 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from capabilities.harness import Paths, require_command, run_probe, sanitized_env
-from capabilities.runtime import run
+from capabilities.targets.cursor import help_output
 from capabilities.targets.cursor_desktop_static import (
     AGENT_EXEC_BUNDLE,
+    DESKTOP_BUNDLE,
     read,
     require_installed,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class Runtime:
-    cursor: str
-    paths: Paths
-    env: dict[str, str]
-
-
-@pytest.fixture(scope="module")
-def runtime(tmp_path_factory: pytest.TempPathFactory) -> Runtime:
-    paths = Paths.create(tmp_path_factory.mktemp("cursor-extended").resolve())
-    return Runtime(
-        require_command("cursor-agent"),
-        paths,
-        sanitized_env(
-            {
-                "HOME": str(paths.home),
-                "CURSOR_CONFIG_DIR": str(paths.config),
-                "TMPDIR": str(paths.tmp),
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            }
-        ),
-    )
-
-
-def help_output(runtime: Runtime, *arguments: str) -> str:
-    result = run_probe(
-        run,
-        runtime.cursor,
-        *arguments,
-        cwd=runtime.paths.work,
-        env=runtime.env,
-        timeout=15,
-    )
-    assert result.returncode == 0, result.stderr
-    return result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
@@ -71,9 +32,9 @@ def help_output(runtime: Runtime, *arguments: str) -> str:
 )
 @pytest.mark.capability_live
 def test_cursor_agent_native_help_exposes_extended_surface(
-    runtime: Runtime, arguments: tuple[str, ...], tokens: tuple[str, ...]
+    arguments: tuple[str, ...], tokens: tuple[str, ...]
 ) -> None:
-    output = help_output(runtime, *arguments)
+    output = help_output(*arguments)
 
     assert all(token in output for token in tokens)
 
@@ -82,8 +43,13 @@ def test_cursor_agent_native_help_exposes_extended_surface(
     ("bundle_path", "tokens"),
     [
         pytest.param(
-            AGENT_EXEC_BUNDLE,
-            ("commandHandlers", "commandHistory", "commandNames"),
+            DESKTOP_BUNDLE,
+            (
+                "discoverCommandsDirs",
+                "loadCommandsFromDirectory",
+                '".cursor","commands"',
+                '".claude","commands"',
+            ),
             marks=pytest.mark.capability_case("cursor-desktop.commands"),
             id="commands",
         ),

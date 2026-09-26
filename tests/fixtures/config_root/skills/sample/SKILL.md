@@ -10,10 +10,6 @@ license: See asset.txt
 metadata:
   fixture: "true"
 targets:
-  claude:
-    omit:
-      license: Claude skill frontmatter has no license field.
-      metadata: Claude skill frontmatter has no metadata field.
   cursor:
     omit:
       license: Cursor skill frontmatter has no license field.

@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import re
 import shutil
 import stat
 import tempfile
@@ -16,6 +15,7 @@ import yaml
 from typer.testing import CliRunner
 
 from coding_agents_sync import run_sync
+from coding_agents_sync.audit import OpenCodeRules
 from coding_agents_sync.cli import main
 from coding_agents_sync.io import (
     MANAGED_MANIFEST,
@@ -25,6 +25,7 @@ from coding_agents_sync.io import (
 from coding_agents_sync.patches import PatchError
 from coding_agents_sync.runtime_config import NativeConfigError
 from coding_agents_sync.sources import SourceSchemaError, load_permissions
+from coding_agents_sync.targets.opencode import UNWRAP_PLUGIN
 
 
 def write(path: Path, content: str) -> None:
@@ -104,19 +105,10 @@ def source_doc(
             native["globs"] = activation["globs"]
     if kind == "skill":
         only = set(meta.get("only") or ())
-        if meta.get("license"):
-            if not only or "claude" in only:
-                target_blocks.setdefault("claude", {}).setdefault("omit", {})[
-                    "license"
-                ] = "Claude skills have no license field."
-            if not only or "cursor" in only:
-                target_blocks.setdefault("cursor", {}).setdefault("omit", {})[
-                    "license"
-                ] = "Cursor skills have no license field."
-        if meta.get("metadata") and (not only or "claude" in only):
-            target_blocks.setdefault("claude", {}).setdefault("omit", {})[
-                "metadata"
-            ] = "Claude skills have no metadata field."
+        if meta.get("license") and (not only or "cursor" in only):
+            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["license"] = (
+                "Cursor skills have no license field."
+            )
         if meta.get("paths"):
             if not only or "codex" in only:
                 target_blocks.setdefault("codex", {}).setdefault("omit", {})[
@@ -172,13 +164,19 @@ def permission_policy_doc(
             "Codex has no portable permission surface."
         )
     workspace = source.get("workspace", {})
-    if workspace.get("allow") or workspace.get("ask"):
+    if workspace.get("allow") or workspace.get("ask") or workspace.get("deny"):
         targets.setdefault("cursor", {}).setdefault("omit", {})["workspace"] = (
             "Cursor lacks one shared workspace permission surface."
         )
-        targets.setdefault("codex", {}).setdefault("omit", {})["workspace"] = (
-            "Codex has no portable workspace permission surface."
-        )
+    for key in ("ask", "deny"):
+        if workspace.get(key):
+            targets.setdefault("codex", {}).setdefault("omit", {})[
+                f"workspace.{key}"
+            ] = f"Codex has no workspace {key} channel."
+    if workspace.get("unmatched", "ask") != "ask":
+        targets.setdefault("codex", {}).setdefault("omit", {})[
+            "workspace.unmatched"
+        ] = "Codex has no unmatched-directory channel."
     if source["secret_paths"]:
         targets.setdefault("cursor", {}).setdefault("omit", {})["secret_paths"] = (
             "Cursor lacks a shared secret-path channel."
@@ -198,9 +196,6 @@ def permission_policy_doc(
             "Claude has no workspace ask channel."
         )
     if source.get("unmatched", "ask") != "ask":
-        targets.setdefault("claude", {}).setdefault("omit", {})["unmatched"] = (
-            "Claude gates unmatched commands by permission mode."
-        )
         targets.setdefault("codex", {}).setdefault("omit", {})["unmatched"] = (
             "Codex gates unmatched commands by sandbox."
         )
@@ -260,7 +255,7 @@ def write_permissions(
     secret_paths: list[str] | None = None,
     secret_names: list[str] | None = None,
     tools: dict[str, str] | None = None,
-    workspace: dict[str, list[str]] | None = None,
+    workspace: dict[str, Any] | None = None,
     unmatched: str | None = None,
 ) -> None:
     extra: dict[str, Any] = {}
@@ -451,7 +446,10 @@ class ModelPolicyTests(unittest.TestCase):
                         "claude": {"disallowedTools": ["Edit", "Write", "Agent"]},
                         "opencode": {
                             "mode": "subagent",
-                            "permission": {"edit": "deny", "task": "deny"},
+                            "permissions": [
+                                {"action": "edit", "effect": "deny"},
+                                {"action": "subagent", "effect": "deny"},
+                            ],
                         },
                         "codex": {"sandbox_mode": "read-only"},
                     },
@@ -465,8 +463,8 @@ class ModelPolicyTests(unittest.TestCase):
             codex = (home / ".codex/agents/fact-finder.toml").read_text()
             self.assertIn("disallowedTools:", claude)
             self.assertIn("model: claude-sonnet-5", claude)
-            self.assertIn("edit: deny", opencode)
-            self.assertIn("task: deny", opencode)
+            self.assertIn("action: edit", opencode)
+            self.assertIn("action: subagent", opencode)
             self.assertIn('sandbox_mode = "read-only"', codex)
 
 
@@ -525,22 +523,22 @@ class ManifestTests(unittest.TestCase):
             )
 
 
-def resolve_opencode_bash(patterns: dict[str, str], command: str) -> str:
-    """Resolve one command against an OpenCode `permission.bash` map.
+def opencode_rules(config: dict[str, Any], action: str) -> dict[str, str]:
+    """One action's native rules as an ordered resource map.
 
-    Ports OpenCode v1.18.4 `Wildcard.match` and `Permission.evaluate`: patterns
-    become anchored dotall regexes, a trailing " *" is optional, and the last
-    matching entry in insertion order wins with "ask" as the default.
+    Re-inserting a repeated resource keeps it at its last position, so the map
+    resolves exactly as OpenCode's last-match evaluation of the list does.
     """
-    result = "ask"
-    for pattern, action in patterns.items():
-        escaped = re.sub(r"[.+^${}()|\[\]\\]", lambda m: "\\" + m.group(0), pattern)
-        escaped = escaped.replace("*", ".*").replace("?", ".")
-        if escaped.endswith(" .*"):
-            escaped = escaped[:-3] + "( .*)?"
-        if re.fullmatch(escaped, command, re.S):
-            result = action
-    return result
+    rules: dict[str, str] = {}
+    for rule in config["permissions"]:
+        if rule["action"] == action:
+            rules.pop(rule["resource"], None)
+            rules[rule["resource"]] = rule["effect"]
+    return rules
+
+
+def resolve_opencode_bash(patterns: dict[str, str], command: str) -> str:
+    return OpenCodeRules(list(patterns.items())).decision(command)
 
 
 class SyncTests(unittest.TestCase):
@@ -601,7 +599,7 @@ class SyncTests(unittest.TestCase):
             self.assertIn("Bash(terraform show -json *)", claude["permissions"]["ask"])
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             self.assertEqual(
                 [key for key in bash if key.startswith("fd")],
                 ["fd *", "fd --exec *", "fd * --exec *", "fd -x *", "fd * -x *"],
@@ -678,13 +676,14 @@ class SyncTests(unittest.TestCase):
                     },
                     {"command": "othertool", "text": ["--check"]},
                 ],
+                deny=[{"command": "othertool", "text": [" -T", " --user "]}],
             )
 
             run_sync(config_root=config_root, home=home)
 
             claude = json.loads((home / ".claude/settings.json").read_text())
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
 
             self.assertIn(
                 "Bash(mytool run --dry-run *)", claude["permissions"]["allow"]
@@ -704,6 +703,20 @@ class SyncTests(unittest.TestCase):
             self.assertIn("Bash(othertool*--check*)", claude["permissions"]["allow"])
             self.assertEqual(resolve_opencode_bash(bash, "othertool --check"), "allow")
             self.assertEqual(resolve_opencode_bash(bash, "othertool --write"), "ask")
+            # A leading space anchors the substring to a token boundary.
+            self.assertIn("Bash(othertool* -T*)", claude["permissions"]["deny"])
+            # A trailing space also lands bare-ended for Claude, whose final
+            # ` *` matches an empty end only as the sole wildcard.
+            self.assertIn("Bash(othertool* --user)", claude["permissions"]["deny"])
+            for command, decision in {
+                "othertool --check -T f": "deny",
+                "othertool --check -Tf": "deny",
+                "othertool --check -H Content-Type": "allow",
+                "othertool --check --user x": "deny",
+                "othertool --check --user-agent x": "allow",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
             cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
             self.assertEqual(
                 cursor_cli["permissions"]["allow"],
@@ -755,7 +768,7 @@ class SyncTests(unittest.TestCase):
                 ],
             )
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             self.assertEqual(
                 [key for key in bash if key.startswith("git")],
                 ["git status *", "git -C* status *", "git --no-pager* status *"],
@@ -832,11 +845,11 @@ class SyncTests(unittest.TestCase):
                 ],
             )
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             for command, decision in {
                 "kubectl get pods": "allow",
-                "kubectl apply -f x.yaml": "ask",
-                "kubectl --context prod apply -f x.yaml": "ask",
+                "kubectl apply -f x.yaml": "deny",
+                "kubectl --context prod apply -f x.yaml": "deny",
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
@@ -878,13 +891,13 @@ class SyncTests(unittest.TestCase):
             )
 
     def test_unmatched_allow_lands_only_where_the_guards_outrank_it(self) -> None:
-        """Three surfaces owe an omit, and Cursor Desktop is one of them.
+        """Codex and Cursor Desktop owe an omit.
 
-        OpenCode writes every rule after the `*` entry and the Cursor CLI's
-        deny list survives `unrestricted`, so the guards still bind on both.
-        Desktop has no deny channel, and `unrestricted` there auto-runs
-        everything, so it keeps `allowlist` and prompts for a guarded command
-        exactly as before.
+        OpenCode writes every rule after the `*` entry, Claude's deny rules
+        outrank its bare `Bash` allow, and the Cursor CLI's deny list survives
+        `unrestricted`, so the guards still bind on all three. Desktop has no
+        deny channel, and `unrestricted` there auto-runs everything, so it
+        keeps `allowlist` and prompts for a guarded command exactly as before.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -898,12 +911,12 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             self.assertEqual(bash["*"], "allow")
             for command, decision in {
                 "anything at all": "allow",
                 "kubectl get pods": "allow",
-                "kubectl apply -f x.yaml": "ask",
+                "kubectl apply -f x.yaml": "deny",
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
@@ -917,6 +930,10 @@ class SyncTests(unittest.TestCase):
 
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertNotIn("defaultMode", claude["permissions"])
+            # The blanket allow leaves every narrower allow dead.
+            self.assertEqual(claude["permissions"]["allow"], ["Bash"])
+            self.assertNotIn("kubectl get *", bash)
+            self.assertIn("Bash(kubectl apply *)", claude["permissions"]["deny"])
 
     def test_unmatched_allow_without_an_omission_fails_the_three_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1113,7 +1130,7 @@ class SyncTests(unittest.TestCase):
             )
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             for command, decision in {
                 "kubectl get pods": "allow",
                 "kubectl get secret db -o yaml": "ask",
@@ -1330,10 +1347,8 @@ class SyncTests(unittest.TestCase):
         """Insertion order is the whole precedence contract on this target.
 
         `Permission.evaluate` applies the last matching key, so a stricter
-        decision must sit after every looser pattern it has to beat. Guards
-        land as `ask` rather than `deny` here, so order carries the guarantee
-        alone: the deny bucket's patterns still have to sit last to beat the
-        allow bucket and the blanket wrapper allows.
+        decision must sit after every looser pattern it has to beat, including
+        the blanket wrapper allows.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -1341,42 +1356,140 @@ class SyncTests(unittest.TestCase):
                 config_root,
                 allow=[["git", "status"]],
                 ask=[["rmdir"]],
-                deny=[["shred"]],
+                deny=[["shred"], ["git", "push"]],
                 secret_names=["EXAMPLE_TOKEN"],
+                workspace={"allow": ["~/Developer"], "deny": ["~/.ssh"]},
             )
 
             run_sync(config_root=config_root, home=home)
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             self.assertEqual(
-                list(bash),
-                ["*", "git status *", "rmdir *", "*EXAMPLE_TOKEN*", "shred *"],
+                bash,
+                {
+                    "*": "ask",
+                    "git status *": "allow",
+                    "rmdir *": "ask",
+                    "shred *": "deny",
+                    "git push *": "deny",
+                    "*EXAMPLE_TOKEN*": "deny",
+                },
             )
+            self.assertEqual(list(bash)[-1], "*EXAMPLE_TOKEN*")
+            for command, decision in {
+                "shred f": "deny",
+                # The bundled opencode-unwrap plugin peels program paths,
+                # assignments, and wrappers before judging a deny, so the
+                # rules carry no copies; a mention in arguments is not peeled.
+                "/usr/bin/shred f": "deny",
+                "/usr/bin/git push": "deny",
+                "ls /usr/bin/shred": "ask",
+                "git push": "deny",
+                "GIT_TRACE=1 git push": "deny",
+                "A=1 B=2 timeout 5 git push origin": "deny",
+                'git commit -m "retries=3 and shred it"': "ask",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
             self.assertEqual(
-                [bash[key] for key in bash],
-                ["ask", "allow", "ask", "ask", "ask"],
+                (home / ".config/opencode/plugins/opencode-unwrap.js").read_bytes(),
+                UNWRAP_PLUGIN.read_bytes(),
             )
-            self.assertNotIn("deny", bash.values())
+            # No `*`: OpenCode's own ask default precedes its built-in allows.
+            self.assertEqual(
+                opencode_rules(opencode, "external_directory"),
+                {"~/Developer/**": "allow", "~/.ssh/**": "deny"},
+            )
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn("Bash(*EXAMPLE_TOKEN*)", claude["permissions"]["deny"])
+            self.assertIn("Bash(/usr/bin/shred *)", claude["permissions"]["deny"])
+            self.assertNotIn("Bash(/usr/bin/git push *)", claude["permissions"]["deny"])
+            self.assertEqual(
+                claude["permissions"]["additionalDirectories"], ["~/Developer"]
+            )
+            self.assertIn("Read(~/.ssh/**)", claude["permissions"]["deny"])
 
-    def test_opencode_never_emits_a_bash_deny(self) -> None:
-        """A bash deny is unaffordable on this target, not merely undesirable.
+    def test_denied_paths_reach_every_anchor_each_target_checks(self) -> None:
+        """Claude anchors a bare pattern at the cwd, so `**/x` goes root
+        absolute. OpenCode checks files inside the session directory by their
+        relative path, which neither `**/x` nor an expanded `~/x` matches."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                tools={"read": "allow", "edit": "allow"},
+                secret_paths=["**/.env", "~/.aws/credentials"],
+                workspace={"allow": ["~/Developer"], "deny": ["~/.ssh"]},
+            )
 
-        OpenCode answers a denial with `PermissionDeniedError`, whose message
-        embeds `JSON.stringify(ruleset)` filtered only by permission *type* --
-        so every bash rule ships to the model on every denial. Against a real
-        corpus that is ~1.3 MB (~324k tokens) per denial, which has ended
-        sessions outright with ContextOverflowError. Emitting no bash deny
-        makes that error unreachable.
+            run_sync(config_root=config_root, home=home)
 
-        Guards must still bind, so they land as `ask` and must still sit last
-        to beat both the allow bucket and the blanket wrapper allows.
-        """
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            deny = claude["permissions"]["deny"]
+            for rule in (
+                "Read(//**/.env)",
+                "Edit(//**/.env)",
+                "Read(~/.aws/credentials)",
+                "Edit(~/.ssh/**)",
+            ):
+                with self.subTest(rule=rule):
+                    self.assertIn(rule, deny)
+            self.assertIn("Edit(~/Developer/**)", claude["permissions"]["allow"])
+            self.assertNotIn("Read(//**)", claude["permissions"]["allow"])
+            # Codex takes the allowed directories as absolute sandbox roots.
+            codex = tomllib.loads((home / ".codex/config.toml").read_text())
+            self.assertEqual(
+                codex["sandbox_workspace_write"]["writable_roots"],
+                [str(home / "Developer")],
+            )
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            read = opencode_rules(opencode, "read")
+            for resource, decision in {
+                ".env": "deny",
+                "app/.env": "deny",
+                "/Users/x/Developer/app/.env": "deny",
+                ".aws/credentials": "deny",
+                ".ssh/id_work": "deny",
+                "src/main.py": "allow",
+            }.items():
+                with self.subTest(resource=resource):
+                    self.assertEqual(resolve_opencode_bash(read, resource), decision)
+
+    def test_workspace_unmatched_allow_opens_every_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                tools={"read": "allow", "edit": "allow"},
+                workspace={"unmatched": "allow", "deny": ["~/.ssh"]},
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            allow = claude["permissions"]["allow"]
+            self.assertIn("Read(//**)", allow)
+            self.assertIn("Edit(//**)", allow)
+            self.assertIn("Read(~/.ssh/**)", claude["permissions"]["deny"])
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            self.assertEqual(
+                opencode_rules(opencode, "external_directory"),
+                {"*": "allow", "~/.ssh/**": "deny"},
+            )
+
+    def test_opencode_guards_deny_over_narrower_allows(self) -> None:
+        """OpenCode 2.0 reports a bash denial without the ruleset, so guards
+        land as `deny` and beat the allow bucket and the wrapper allows."""
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write_permissions(
                 config_root,
                 allow=[["gcloud", "config"], ["git", "checkout"]],
+                wrappers=["timeout"],
                 deny=[
                     ["gcloud", "auth", "print-access-token"],
                     {"command": "git", "subcommand": ["checkout"], "tail": ["--force"]},
@@ -1386,18 +1499,16 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
-            self.assertNotIn("deny", bash.values())
+            bash = opencode_rules(opencode, "shell")
             for command in (
                 "gcloud auth print-access-token",
                 "timeout 5 gcloud auth print-access-token",
                 "git checkout --force main",
             ):
                 with self.subTest(command=command):
-                    self.assertEqual(resolve_opencode_bash(bash, command), "ask")
+                    self.assertEqual(resolve_opencode_bash(bash, command), "deny")
             self.assertEqual(resolve_opencode_bash(bash, "git checkout main"), "allow")
 
-            # The guarantee is target-local: Claude still hard-blocks.
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertIn(
                 "Bash(gcloud auth print-access-token *)",
@@ -1405,15 +1516,14 @@ class SyncTests(unittest.TestCase):
             )
 
     def test_wrapper_guards_bind_where_the_target_cannot_peel_the_wrapper(self) -> None:
-        """One blanket allow per wrapper, plus a wrapped copy of every guard.
+        """A wrapped copy of every guard, and no blanket wrapper allow.
 
-        Claude Code resolves `timeout` to its payload and takes the strictest
-        verdict across both forms, so it needs neither; emitting a blanket
-        allow there would widen every wrapped command that has no rule. It
-        does not resolve `env`, so it receives both for that one. Cursor's
-        token matcher cannot peel a wrapper either, but a bare `Shell(env)`
-        allow would match any payload the wrapper carries, so Cursor receives
-        only rule-attached wrapper forms and no blanket.
+        Claude Code peels `timeout` and `env` before matching a guard, so it
+        needs no copy for them, and retries a guard behind a bare `xargs`, so
+        it receives only the `xargs` copy that carries options. A blanket
+        `env *` allow would match any payload the wrapper carries, so a wrapped
+        allowed command falls to `unmatched` on the glob targets, while Cursor
+        receives rule-attached wrapper allows.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -1421,47 +1531,39 @@ class SyncTests(unittest.TestCase):
                 config_root,
                 allow=[["git", "status"]],
                 ask=[["rmdir"]],
-                wrappers=["timeout", "env"],
+                wrappers=["timeout", "env", "xargs"],
             )
 
             run_sync(config_root=config_root, home=home)
 
             claude = json.loads((home / ".claude/settings.json").read_text())
-            self.assertEqual(
-                claude["permissions"]["allow"], ["Bash(env *)", "Bash(git status *)"]
-            )
+            self.assertEqual(claude["permissions"]["allow"], ["Bash(git status *)"])
             self.assertEqual(
                 claude["permissions"]["ask"],
-                [
-                    "Bash(rmdir *)",
-                    "Bash(env rmdir *)",
-                    "Bash(env * rmdir *)",
-                    "Bash(env * rmdir)",
-                ],
+                ["Bash(rmdir *)", "Bash(xargs * rmdir *)", "Bash(xargs * rmdir)"],
             )
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             self.assertEqual(
                 list(bash),
                 [
                     "*",
-                    "timeout *",
-                    "env *",
                     "git status *",
                     "rmdir *",
                     "timeout rmdir *",
                     "timeout * rmdir *",
                     "env rmdir *",
                     "env * rmdir *",
+                    "xargs rmdir *",
+                    "xargs * rmdir *",
                 ],
             )
             for command, decision in {
-                "timeout 5 git status": "allow",
+                "git status": "allow",
+                "timeout 5 git status": "ask",
                 "timeout 5 rmdir build": "ask",
                 "env FOO=1 rmdir build": "ask",
-                # The wrapper may sit directly before its payload, and the
-                # blanket allow covers that shape, so the guard must too.
                 "env rmdir build": "ask",
                 "timeout rmdir build": "ask",
             }.items():
@@ -1482,6 +1584,10 @@ class SyncTests(unittest.TestCase):
                     "Shell(env:git status *)",
                     "Shell(env:* git status)",
                     "Shell(env:* git status *)",
+                    "Shell(xargs:git status)",
+                    "Shell(xargs:git status *)",
+                    "Shell(xargs:* git status)",
+                    "Shell(xargs:* git status *)",
                 ],
             )
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
@@ -1498,6 +1604,10 @@ class SyncTests(unittest.TestCase):
                     "env:git status *",
                     "env:* git status",
                     "env:* git status *",
+                    "xargs:git status",
+                    "xargs:git status *",
+                    "xargs:* git status",
+                    "xargs:* git status *",
                 ],
             )
 
@@ -1599,13 +1709,12 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             for command, decision in {
                 "local-tool status": "allow",
                 "local-tool --profile fixture status": "allow",
                 "local-tool status --destroy": "ask",
-                # Guards reach OpenCode as `ask`; Claude below keeps the deny.
-                "local-tool wipe": "ask",
+                "local-tool wipe": "deny",
                 "git status": "allow",
             }.items():
                 with self.subTest(command=command):
@@ -1740,19 +1849,33 @@ class SyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write_permissions(config_root, allow=[["kubectl", "get"]])
-            write(
-                config_root / "patches/opencode.yaml",
-                "schema: coding-agents/patch/v1\n"
-                "overlay:\n"
-                "  /permission/bash:\n"
-                "    'kubectl get secret*yaml*': ask\n",
-            )
-
-            with self.assertRaisesRegex(
-                PatchError, "cannot contribute command permissions"
+            for patch, error in (
+                (
+                    "extend:\n"
+                    "  /permissions:\n"
+                    "  - {action: shell, resource: 'kubectl *', effect: deny}\n",
+                    "never with shell rules",
+                ),
+                # A wildcard action matches `shell` too, and would land last.
+                (
+                    "extend:\n"
+                    "  /permissions:\n"
+                    "  - {action: '*', resource: '*', effect: allow}\n",
+                    "never with shell rules",
+                ),
+                (
+                    "overlay:\n  /permission/bash:\n    'kubectl get secret*': ask\n",
+                    "only delete the legacy",
+                ),
             ):
-                run_sync(config_root=config_root, home=home)
-            self.assertFalse((home / ".config/opencode/opencode.json").exists())
+                with self.subTest(patch=patch):
+                    write(
+                        config_root / "patches/opencode.yaml",
+                        f"schema: coding-agents/patch/v1\n{patch}",
+                    )
+                    with self.assertRaisesRegex(PatchError, error):
+                        run_sync(config_root=config_root, home=home)
+                    self.assertFalse((home / ".config/opencode/opencode.json").exists())
 
     def test_secret_output_formats_are_expressible_in_the_source(self) -> None:
         """`text` covers -o yaml, -oyaml, and --output=yaml alike.
@@ -1777,7 +1900,7 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             for command, decision in {
                 "kubectl get pods": "allow",
                 "kubectl get secret db": "allow",
@@ -1876,8 +1999,14 @@ class SyncTests(unittest.TestCase):
                     yaml.safe_dump(
                         {
                             "schema": "coding-agents/patch/v1",
-                            "overlay": {
-                                "/permission/external_directory": {"~/.netrc": decision}
+                            "extend": {
+                                "/permissions": [
+                                    {
+                                        "action": "external_directory",
+                                        "resource": "~/.netrc",
+                                        "effect": decision,
+                                    }
+                                ]
                             },
                         },
                         sort_keys=False,
@@ -1889,7 +2018,7 @@ class SyncTests(unittest.TestCase):
                 config = json.loads(
                     (home / ".config/opencode/opencode.json").read_text()
                 )
-                external = config["permission"]["external_directory"]
+                external = opencode_rules(config, "external_directory")
                 self.assertEqual(external["~/.netrc"], decision)
                 self.assertEqual(external["~/Developer/**"], "allow")
 
@@ -1907,19 +2036,24 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
-            bash = opencode["permission"]["bash"]
+            bash = opencode_rules(opencode, "shell")
             for command, decision in {
                 "git push": "allow",
                 "git push --force-with-lease": "ask",
-                # Deny still narrows the allow on OpenCode, it just lands as
-                # `ask`; see `_permissions` in targets/opencode.py.
-                "git push --force": "ask",
+                "git push --force": "deny",
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
     def test_permission_composition_and_unsupported_intent_fail(self) -> None:
-        for secret_paths in (["**/.env", "**/.env"], ["path with spaces"]):
+        for secret_paths in (
+            ["**/.env", "**/.env"],
+            ["path with spaces"],
+            # Claude reads `/x` as settings-relative, and bare paths as
+            # cwd-relative, so neither means the same thing on every target.
+            ["/etc/secret"],
+            [".env"],
+        ):
             with (
                 self.subTest(secret_paths=secret_paths),
                 tempfile.TemporaryDirectory() as tmp,
@@ -1930,6 +2064,21 @@ class SyncTests(unittest.TestCase):
                     permission_policy_doc(secret_paths=secret_paths),
                 )
                 with self.assertRaises(SourceSchemaError):
+                    run_sync(config_root=config_root, home=home)
+
+        # One space may anchor a token boundary; anything else at the edge
+        # (a YAML block scalar's newline, a double space) never matches.
+        for text in (" -T\n", "  -T", " ", ""):
+            with (
+                self.subTest(text=text),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                config_root, home = config_root_home(tmp)
+                with self.assertRaises(SourceSchemaError):
+                    write_permissions(
+                        config_root,
+                        deny=[{"command": "curl", "text": [text]}],
+                    )
                     run_sync(config_root=config_root, home=home)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2033,9 +2182,6 @@ class SyncTests(unittest.TestCase):
                                 "justification": "Python scripts need review.",
                             }
                         ],
-                        "opencode:instructions": (
-                            "~/.config/coding-agents/rules/overridden-python.md"
-                        ),
                     },
                 ),
             )
@@ -2063,9 +2209,9 @@ class SyncTests(unittest.TestCase):
                         "color": "blue",
                         "claude:model": "claude-override",
                         "opencode:mode": "subagent",
-                        "opencode:permission": {"bash": "ask"},
+                        "opencode:permissions": [{"action": "shell", "effect": "ask"}],
                         "opencode:model": "opencode-model",
-                        "opencode:color": "info",
+                        "opencode:color": "#06b6d4",
                         "codex:model": "gpt-5",
                         "codex:nickname_candidates": ["Ada"],
                     },
@@ -2164,20 +2310,20 @@ class SyncTests(unittest.TestCase):
             self.assertIn("color: blue", claude_agent)
             self.assertFalse((home / ".cursor" / "agents" / "reviewer.md").exists())
             self.assertIn("mode: subagent", opencode_agent)
-            self.assertIn("bash: ask", opencode_agent)
+            self.assertIn("action: shell", opencode_agent)
             self.assertIn("model: opencode-model", opencode_agent)
-            self.assertIn("color: info", opencode_agent)
+            self.assertIn("#06b6d4", opencode_agent)
             self.assertNotIn("model: claude-override", opencode_agent)
 
             opencode_command = (
                 home / ".config" / "opencode" / "commands" / "review-pr.md"
             ).read_text(encoding="utf-8")
-            claude_command = (home / ".claude" / "commands" / "review-pr.md").read_text(
-                encoding="utf-8"
-            )
+            claude_command = (
+                home / ".claude" / "skills" / "review-pr" / "SKILL.md"
+            ).read_text(encoding="utf-8")
             self.assertIn("description: Review a pull request", opencode_command)
             self.assertIn("agent: reviewer", opencode_command)
-            self.assertIn("subtask: true", opencode_command)
+            self.assertIn("subagent: true", opencode_command)
             self.assertIn("model: gpt-5", opencode_command)
             self.assertIn("Review pull request $ARGUMENTS.", opencode_command)
             self.assertIn("description: Review a pull request", claude_command)
@@ -2185,7 +2331,7 @@ class SyncTests(unittest.TestCase):
             self.assertIn("context: fork", claude_command)
             self.assertIn("model: opus", claude_command)
             self.assertNotIn("gpt-5", claude_command)
-            self.assertNotIn("subtask:", claude_command)
+            self.assertNotIn("subagent:", claude_command)
             self.assertIn("Review pull request $ARGUMENTS.", claude_command)
 
             codex_cfg = home / ".codex" / "config.toml"
@@ -2496,7 +2642,9 @@ class SyncTests(unittest.TestCase):
                     "native",
                     "native",
                     "Agent body\n",
-                    extra={"opencode": {"reasoningEffort": "high"}},
+                    extra={
+                        "opencode": {"request": {"body": {"reasoningEffort": "high"}}}
+                    },
                 ),
             )
 
@@ -2669,12 +2817,13 @@ class SyncTests(unittest.TestCase):
             # config.toml rejects this SandboxModeRequirement-only value.
             ("codex", {"sandbox_mode": "external-sandbox"}, "sandbox_mode must be one"),
             ("opencode", {"mode": "sub-agent"}, "mode must be one of"),
-            ("opencode", {"permission": {"edit": "reject"}}, "permission .edit must"),
             (
                 "opencode",
-                {"permission": {"bash": {"git push *": "prompt"}}},
-                "permission .bash.git push \\* must be",
+                {"permissions": [{"action": "edit", "effect": "reject"}]},
+                "permissions.0.effect",
             ),
+            # The v1 map would send the file through OpenCode's migration.
+            ("opencode", {"permission": {"edit": "deny"}}, "permission\n"),
         )
         for target, native, message in cases:
             with (
@@ -2725,13 +2874,11 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            permission = json.loads(
-                (home / ".config/opencode/opencode.json").read_text()
-            )["permission"]
-            # OpenCode's write tool asks for `edit`, so a `write` key would
+            config = json.loads((home / ".config/opencode/opencode.json").read_text())
+            # OpenCode's write tool asks for `edit`, so a `write` rule would
             # never be consulted; the stricter decision lands on `edit`.
-            self.assertNotIn("write", permission)
-            self.assertEqual(permission["edit"], {"*": "deny"})
+            self.assertEqual(opencode_rules(config, "write"), {})
+            self.assertEqual(opencode_rules(config, "edit"), {"*": "deny"})
 
     def test_portable_color_must_be_an_opencode_color(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2746,16 +2893,18 @@ class SyncTests(unittest.TestCase):
                     description="Reviewer agent",
                     # Valid for Claude, but OpenCode takes #RRGGBB or a theme
                     # name, and nothing overrides it there.
-                    extra={"color": "blue"},
+                    extra={"color": "chartreuse"},
                 ),
             )
 
             with self.assertRaisesRegex(ValueError, "is not an OpenCode color"):
                 run_sync(config_root=config_root, home=home)
 
-    def test_opencode_native_color_overrides_a_portable_color(self) -> None:
-        for color in ("info", "#ff5733"):
-            with self.subTest(color=color), tempfile.TemporaryDirectory() as tmp:
+    def test_opencode_takes_a_portable_color_as_hex(self) -> None:
+        """OpenCode 2 accepts only hex, so a Claude color name maps to one and
+        a native hex override still wins."""
+        for override, expected in ((None, "#3b82f6"), ("#ff5733", "#ff5733")):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as tmp:
                 config_root, home = config_root_home(tmp)
                 write(
                     config_root / "agents" / "reviewer.md",
@@ -2765,16 +2914,19 @@ class SyncTests(unittest.TestCase):
                         "reviewer",
                         "body\n",
                         description="Reviewer agent",
-                        extra={"color": "blue", "opencode": {"color": color}},
+                        extra={
+                            "color": "blue",
+                            **({"opencode": {"color": override}} if override else {}),
+                        },
                     ),
                 )
 
                 run_sync(config_root=config_root, home=home)
 
                 agent = (home / ".config/opencode/agents/reviewer.md").read_text()
-                # A hex code is quoted, since `#` would otherwise start a
-                # YAML comment.
-                self.assertIn(color, yaml.safe_load(agent.split("---")[1])["color"])
+                self.assertEqual(
+                    yaml.safe_load(agent.split("---")[1])["color"], expected
+                )
                 claude = (home / ".claude/agents/reviewer.md").read_text()
                 self.assertIn("color: blue", claude)
 
@@ -2802,9 +2954,19 @@ class SyncTests(unittest.TestCase):
                         "codex": {"sandbox_mode": "workspace-write"},
                         "opencode": {
                             "mode": "subagent",
-                            "permission": {"edit": "deny", "bash": {"ls": "allow"}},
-                            # Left unvalidated: ReasoningEffort is an open set.
-                            "reasoningEffort": "model-specific-effort",
+                            "permissions": [
+                                {"action": "edit", "effect": "deny"},
+                                {
+                                    "action": "shell",
+                                    "resource": "ls",
+                                    "effect": "allow",
+                                },
+                            ],
+                            # Left unvalidated: the request body is the
+                            # provider's, and ReasoningEffort is an open set.
+                            "request": {
+                                "body": {"reasoningEffort": "model-specific-effort"}
+                            },
                         },
                     },
                 ),
@@ -3007,16 +3169,21 @@ class SyncTests(unittest.TestCase):
                     "Agent body\n",
                     description="Review code",
                     extra={
+                        "effort": "high",
                         "opencode:mode": "subagent",
-                        "opencode:temperature": 0.1,
-                        "opencode:top_p": 0.9,
+                        "opencode:request": {"body": {"temperature": 0.1}},
                         "opencode:steps": 5,
                         "opencode:hidden": True,
-                        "opencode:disable": False,
-                        "opencode:permission": {
-                            "bash": {"*": "ask", "git diff*": "allow"},
-                            "task": {"*": "deny", "explore": "allow"},
-                        },
+                        "opencode:disabled": False,
+                        "opencode:permissions": [
+                            {"action": "shell", "effect": "ask"},
+                            {
+                                "action": "shell",
+                                "resource": "git diff*",
+                                "effect": "allow",
+                            },
+                            {"action": "subagent", "effect": "deny"},
+                        ],
                     },
                 ),
             )
@@ -3026,14 +3193,33 @@ class SyncTests(unittest.TestCase):
             opencode_agent = (
                 home / ".config" / "opencode" / "agents" / "reviewer.md"
             ).read_text(encoding="utf-8")
-            self.assertIn("mode: subagent", opencode_agent)
-            self.assertIn("permission:", opencode_agent)
-            self.assertIn("git diff*: allow", opencode_agent)
-            self.assertIn("temperature: 0.1", opencode_agent)
-            self.assertIn("top_p: 0.9", opencode_agent)
-            self.assertIn("steps: 5", opencode_agent)
-            self.assertIn("hidden: true", opencode_agent)
-            self.assertIn("disable: false", opencode_agent)
+            meta = yaml.safe_load(opencode_agent.split("---")[1])
+            # Only native ConfigAgent.Info keys, so OpenCode skips its v1
+            # migration; the id comes from the file name.
+            self.assertEqual(
+                set(meta),
+                {
+                    "description",
+                    "mode",
+                    "request",
+                    "steps",
+                    "hidden",
+                    "disabled",
+                    "permissions",
+                },
+            )
+            self.assertEqual(
+                meta["request"],
+                {"body": {"reasoningEffort": "high", "temperature": 0.1}},
+            )
+            self.assertEqual(
+                meta["permissions"][1],
+                {"action": "shell", "resource": "git diff*", "effect": "allow"},
+            )
+            self.assertEqual(
+                meta["permissions"][2],
+                {"action": "subagent", "resource": "*", "effect": "deny"},
+            )
 
     def test_opencode_skill_preserves_only_native_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3085,7 +3271,7 @@ class SyncTests(unittest.TestCase):
                         "execution": {"agent": "reviewer", "subtask": False},
                         "opencode:description": "OpenCode description",
                         "opencode:agent": "explore",
-                        "opencode:subtask": True,
+                        "opencode:subagent": True,
                         "opencode:model": "opencode/model",
                     },
                 ),
@@ -3098,7 +3284,7 @@ class SyncTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn("description: OpenCode description", opencode_command)
             self.assertIn("agent: explore", opencode_command)
-            self.assertIn("subtask: true", opencode_command)
+            self.assertIn("subagent: true", opencode_command)
             self.assertIn("model: opencode/model", opencode_command)
             self.assertIn("Review $ARGUMENTS and @src/file.py.", opencode_command)
 
@@ -3111,18 +3297,14 @@ class SyncTests(unittest.TestCase):
                     "rule",
                     "a",
                     "a",
-                    "Rule body\n",
-                    extra={
-                        "opencode:instructions": (
-                            "~/.config/coding-agents/rules/a-override.md"
-                        )
-                    },
+                    "Rule A\n",
                 ),
             )
             write(
                 config_root / "rules" / "b.md",
-                source_doc("rule", "b", "b", "Rule body\n"),
+                source_doc("rule", "b", "b", "Rule B\n"),
             )
+            write_permissions(config_root, allow=[["git", "status"]])
 
             write(
                 home / ".config" / "opencode" / "opencode.json",
@@ -3145,21 +3327,18 @@ class SyncTests(unittest.TestCase):
             config = json.loads(opencode_json.read_text(encoding="utf-8"))
             self.assertEqual(config["$schema"], "https://opencode.ai/config.json")
             self.assertEqual(config["share"], "disabled")
+            # OpenCode 2 never resolves `instructions`, so rules join the
+            # global AGENTS.md and a hand-written list is left alone.
+            self.assertEqual(config["instructions"], ["old-rule"])
             self.assertEqual(
-                config["instructions"],
-                [
-                    "~/.config/coding-agents/rules/a-override.md",
-                    str(config_root / "rules" / "b.md"),
-                ],
+                (home / ".config/opencode/AGENTS.md").read_text(),
+                "Rule A\n\nRule B\n",
             )
 
     def test_invalid_opencode_json_fails_without_modification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
-            write(
-                config_root / "rules" / "a.md",
-                source_doc("rule", "a", "a", "Rule body\n"),
-            )
+            write_permissions(config_root, allow=[["git", "status"]])
             broken = home / ".config" / "opencode" / "opencode.json"
             write(broken, "{ broken json")
 
@@ -3170,10 +3349,7 @@ class SyncTests(unittest.TestCase):
     def test_opencode_sync_preserves_static_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
-            write(
-                config_root / "rules" / "a.md",
-                source_doc("rule", "a", "a", "Rule body\n"),
-            )
+            write_permissions(config_root, allow=[["git", "status"]])
             write(
                 home / ".config" / "opencode" / "opencode.json",
                 json.dumps(
@@ -3194,17 +3370,13 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(config["share"], "manual")
             self.assertEqual(config["permission"], {"bash": "ask", "read": "allow"})
             self.assertEqual(config["plugin"], ["opencode-scheduler"])
-            self.assertEqual(
-                config["instructions"], [str(config_root / "rules" / "a.md")]
-            )
+            self.assertEqual(config["instructions"], ["stale-rule"])
+            self.assertEqual(config["permissions"][1]["resource"], "git status *")
 
     def test_opencode_sync_does_not_bake_local_config_into_config_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
-            write(
-                config_root / "rules" / "a.md",
-                source_doc("rule", "a", "a", "Rule body\n"),
-            )
+            write_permissions(config_root, allow=[["git", "status"]])
             write(
                 home / ".config" / "opencode" / "opencode.json",
                 json.dumps({"share": "disabled", "permission": {"bash": "deny"}}),
@@ -3226,9 +3398,7 @@ class SyncTests(unittest.TestCase):
             )
             self.assertNotIn("enabled_providers", config)
             self.assertEqual(config["permission"]["bash"], "deny")
-            self.assertEqual(
-                config["instructions"], [str(config_root / "rules" / "a.md")]
-            )
+            self.assertIn("permissions", config)
 
     def test_cli_removed_flags_are_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3509,7 +3679,9 @@ body
                 "Cursor-only body",
                 (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"),
             )
-            self.assertTrue((home / ".claude" / "commands" / "claude-only.md").exists())
+            self.assertTrue(
+                (home / ".claude" / "skills" / "claude-only" / "SKILL.md").exists()
+            )
             self.assertFalse(
                 (home / ".config" / "opencode" / "commands" / "claude-only.md").exists()
             )
@@ -3655,9 +3827,9 @@ body
 
             run_sync(config_root=config_root, home=home)
 
-            claude_command = (home / ".claude" / "commands" / "one.md").read_text(
-                encoding="utf-8"
-            )
+            claude_command = (
+                home / ".claude" / "skills" / "one" / "SKILL.md"
+            ).read_text(encoding="utf-8")
             opencode_command = (
                 home / ".config" / "opencode" / "commands" / "one.md"
             ).read_text(encoding="utf-8")
@@ -3679,15 +3851,15 @@ body
             run_sync(config_root=config_root, home=home)
 
             commands_dir = home / ".config" / "opencode" / "commands"
-            claude_commands_dir = home / ".claude" / "commands"
+            claude_skills_dir = home / ".claude" / "skills"
             self.assertTrue((commands_dir / "one.md").exists())
-            self.assertTrue((claude_commands_dir / "one.md").exists())
+            self.assertTrue((claude_skills_dir / "one" / "SKILL.md").exists())
 
             shutil.rmtree(config_root / "commands")
             run_sync(config_root=config_root, home=home)
 
             self.assertFalse((commands_dir / "one.md").exists())
-            self.assertFalse((claude_commands_dir / "one.md").exists())
+            self.assertFalse((claude_skills_dir / "one").exists())
             manifest = json.loads(
                 (commands_dir / ".coding-agents-managed.json").read_text(
                     encoding="utf-8"
@@ -3695,11 +3867,27 @@ body
             )
             self.assertEqual(manifest["entries"], {})
             claude_manifest = json.loads(
-                (claude_commands_dir / ".coding-agents-managed.json").read_text(
+                (claude_skills_dir / ".coding-agents-managed.json").read_text(
                     encoding="utf-8"
                 )
             )
             self.assertEqual(claude_manifest["entries"], {})
+
+    def test_claude_rejects_a_command_named_like_a_skill(self) -> None:
+        """Claude serves commands as skills, so both would answer /one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "skills" / "one" / "SKILL.md",
+                source_doc("skill", "one", "one", "body\n", description="skill"),
+            )
+            write(
+                config_root / "commands" / "one.md",
+                source_doc("command", "one-command", "one", "body\n"),
+            )
+
+            with self.assertRaisesRegex(ValueError, "collides with the skill"):
+                run_sync(config_root=config_root, home=home)
 
     def test_codex_omits_commands_on_skill_name_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3718,6 +3906,8 @@ body
                     "one",
                     "Command body\n",
                     description="Command one",
+                    # Claude would serve it and the skill at one /one.
+                    extra={"only": ["opencode", "codex"]},
                 ),
             )
 
@@ -3749,6 +3939,8 @@ body
                     "one",
                     "Command body\n",
                     description="Command one",
+                    # Claude would serve it and the skill at one /one.
+                    extra={"only": ["opencode", "codex"]},
                 ),
             )
             write(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,6 @@ from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
 from ..plan import (
     Diagnostic,
-    ManifestMode,
     NativePatch,
     NativeValue,
     OwnedFile,
@@ -28,15 +27,19 @@ from ..plan import (
 from ..sources import (
     EFFORT_LEVELS,
     AgentSource,
+    PermissionSource,
     SkillSource,
     SourceBundle,
     StrictModel,
     resolve_model_policy,
 )
 from .permissions import (
-    CLAUDE_RESOLVED_WRAPPERS,
+    CLAUDE_PEELED_PREFIXES,
     CLAUDE_TOOL_PATTERNS,
+    bucket_entries,
     bucket_patterns,
+    claude_path,
+    denied_paths,
     fold_edit_write,
     glob_variants,
     literal_directories,
@@ -47,6 +50,8 @@ from .support import (
     applies_to,
     block,
     bundled_files,
+    command_target_diagnostics,
+    declared_trees,
     frontmatter,
     markdown,
     native_patch,
@@ -98,25 +103,8 @@ class ClaudeSkillNative(StrictModel):
     context: str | None = None
     agent: str | None = None
     shell: str | None = None
-
-
-class ClaudeCommandNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
-    description: str | None = None
-    agent: str | None = None
-    context: str | None = None
-    model: str | None = None
-    argument_hint: str | None = Field(
-        None,
-        serialization_alias="argument-hint",
-        validation_alias=AliasChoices("argument-hint", "argument_hint"),
-    )
-    allowed_tools: list[str] | None = Field(
-        None,
-        serialization_alias="allowed-tools",
-        validation_alias=AliasChoices("allowed-tools", "allowed_tools"),
-    )
+    license: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 CLAUDE_MCP_WILDCARD = "mcp__*"
@@ -264,32 +252,51 @@ def _agent_meta(
     return meta
 
 
+def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str]]:
+    return bucket_entries(permissions, glob_variants, CLAUDE_PEELED_PREFIXES)
+
+
 def _permission_values(
     sources: SourceBundle, tools: Mapping[str, str]
 ) -> tuple[tuple[tuple[str, ...], Any], ...]:
     if not (permissions := sources.permissions):
         return ()
-    buckets = bucket_patterns(
-        permissions,
-        glob_variants,
-        lambda wrapper: f"{wrapper} *",
-        CLAUDE_RESOLVED_WRAPPERS,
-    )
-    ask = buckets["ask"] + list(secret_name_variants(permissions.secret_names))
-    deny = [f"Bash({pattern})" for pattern in buckets["deny"]] + [
-        f"{operation}({path})"
-        for path in permissions.secret_paths
+    buckets = bucket_patterns(shell_entries(permissions))
+    workspace = permissions.workspace
+    # Claude has no unmatched-command setting, so an allow lands as the bare
+    # tool rule; the deny rules still outrank it.
+    allow = [
+        *(["Bash"] if permissions.unmatched == "allow" else []),
+        *(f"Bash({pattern})" for pattern in buckets["allow"]),
+        *tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "allow"),
+    ]
+    # `Read(**)` and `Edit(**)` anchor at the cwd. Reads in the extra
+    # directories need no rule; edits there, and anything elsewhere once
+    # `workspace.unmatched` allows it, do.
+    if tools.get("read") == "allow" and workspace.unmatched == "allow":
+        allow.append("Read(//**)")
+    if tools.get("edit") == "allow":
+        allow.extend(
+            ["Edit(//**)"]
+            if workspace.unmatched == "allow"
+            else [f"Edit({claude_path(directory)}/**)" for directory in workspace.allow]
+        )
+    deny = [
+        f"Bash({pattern})"
+        for pattern in (
+            *buckets["deny"],
+            *secret_name_variants(permissions.secret_names),
+        )
+    ] + [
+        f"{operation}({claude_path(path)})"
+        for path in denied_paths(permissions)
         for operation in ("Read", "Edit")
     ]
     values: list[tuple[tuple[str, ...], Any]] = [
-        (
-            ("permissions", "allow"),
-            [f"Bash({pattern})" for pattern in buckets["allow"]]
-            + list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "allow")),
-        ),
+        (("permissions", "allow"), allow),
         (
             ("permissions", "ask"),
-            [f"Bash({pattern})" for pattern in ask]
+            [f"Bash({pattern})" for pattern in buckets["ask"]]
             + list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "ask")),
         ),
     ]
@@ -315,18 +322,18 @@ def _validate_patches(
 def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.claude
     files: list[OwnedFile] = []
-    managed_roots: tuple[tuple[str, ManifestMode], ...] = (
-        ("rules", "file"),
-        ("skills", "dir"),
-        ("commands", "file"),
-        ("agents", "file"),
+    trees = declared_trees(
+        root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
     )
-    trees = [
+    # Commands now land as skills; this prunes what earlier syncs wrote.
+    trees.append(
         OwnedTree(
-            root / name, manifest_root=root / name, manifest_mode=mode, declaration=True
+            root / "commands",
+            manifest_root=root / "commands",
+            manifest_mode="file",
+            retired=True,
         )
-        for name, mode in managed_roots
-    ]
+    )
     diagnostics = []
     if sources.globals:
         global_source = sources.globals[0]
@@ -370,23 +377,15 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         value = block(skill, "claude")
         native, issues = strict_native(skill.path, "claude", value, ClaudeSkillNative)
         diagnostics.extend(issues)
-        diagnostics.extend(
-            omissions(
-                skill.path,
-                "claude",
-                value,
-                {
-                    *({"license"} if skill.license else set()),
-                    *({"metadata"} if skill.metadata else set()),
-                },
-            )
-        )
+        diagnostics.extend(omissions(skill.path, "claude", value, set()))
         if native:
             meta, issues = frontmatter(
                 skill.path,
                 {
                     "name": skill.name,
                     "description": skill.description,
+                    **({"license": skill.license} if skill.license else {}),
+                    **({"metadata": skill.metadata} if skill.metadata else {}),
                     **({"paths": skill.paths} if skill.paths else {}),
                     **(
                         {"disable-model-invocation": True}
@@ -399,28 +398,41 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
             diagnostics.extend(issues)
             trees.append(_tree(skill, root / "skills", meta))
+    skill_names = {
+        skill.source_dir.name for skill in sources.skills if applies_to(skill, "claude")
+    }
     for command in sources.commands:
         if not applies_to(command, "claude"):
             continue
+        if command.stem in skill_names:
+            diagnostics.append(
+                Diagnostic(
+                    "error",
+                    f"command {command.stem} collides with the skill of that "
+                    f"name; Claude serves both at /{command.stem}",
+                    command.path,
+                )
+            )
+            continue
         value = block(command, "claude")
-        native, issues = strict_native(
-            command.path, "claude", value, ClaudeCommandNative
-        )
+        # Claude merged commands into skills: a skill answers the same
+        # `/name` and takes the same frontmatter.
+        native, issues = strict_native(command.path, "claude", value, ClaudeSkillNative)
         diagnostics.extend(issues)
         diagnostics.extend(omissions(command.path, "claude", value, set()))
         if native:
-            canonical = {"description": command.description}
+            canonical = {"name": command.stem, "description": command.description}
             if command.execution.agent:
                 canonical["agent"] = command.execution.agent
             if command.execution.subtask:
                 canonical["context"] = "fork"
             meta, issues = frontmatter(command.path, canonical, native, value.raw)
             diagnostics.extend(issues)
-            files.append(
-                OwnedFile(
-                    root / "commands" / command.path.name,
-                    markdown(meta, command.body),
-                    root / "commands",
+            trees.append(
+                OwnedTree(
+                    root / "skills" / command.stem,
+                    ((Path("SKILL.md"), markdown(meta, command.body)),),
+                    root / "skills",
                 )
             )
     for agent in sources.agents:
@@ -485,16 +497,12 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 value,
                 {
                     *({"workspace.ask"} if permissions.workspace.ask else set()),
-                    *({"unmatched"} if permissions.unmatched != "ask" else set()),
                 },
             )
         )
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
-        for path, targets, _ in permissions.command_targets:
-            value = targets.root.get("claude", type(value)())
-            diagnostics.extend(unhandled_target_block(path, "claude", value))
-            diagnostics.extend(omissions(path, "claude", value, set()))
+        diagnostics.extend(command_target_diagnostics(permissions, "claude"))
     permission_values = tuple(
         NativeValue("claude", root / "settings.json", pointer, value)
         for pointer, value in _permission_values(sources, folded[0])

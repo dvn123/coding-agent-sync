@@ -158,23 +158,38 @@ provider, so unknown keys there are passthrough by design.
 
 `unmatched` is the decision for a shell command no rule matches: `ask`, the
 default, or `allow`. It lands only where the guard rules still outrank it:
-OpenCode's `*` bash entry, which every rule is written after, and the Cursor
-CLI's `approvalMode`, whose deny list survives `unrestricted`. Cursor Desktop,
-Claude, and Codex each need an omit for `unmatched: allow` — Desktop has no
-deny channel to keep the guards binding, Claude gates an unmatched command by
-permission mode, and Codex by sandbox, and neither mode is a portable
-allow/ask. There is no `deny` value: a blanket command denial is not a policy
-any target can run under.
+OpenCode's `*` bash entry, which every rule is written after, Claude's bare
+`Bash` allow, which every deny outranks, and the Cursor CLI's `approvalMode`,
+whose deny list survives `unrestricted`. Cursor Desktop and Codex each need
+an omit for `unmatched: allow`: Desktop has no deny channel to keep the guards
+binding, and Codex gates an unmatched command by sandbox. There is no `deny`
+value: a blanket command denial is not a policy any target can run under.
+Declared `wrappers` get wrapped copies of every ask and deny rule, never a
+blanket allow, so a wrapped allowed command falls to `unmatched`; a target
+that peels a wrapper itself gets no copies for it. On Claude, a single-token
+deny also lands behind each common program directory (`/bin/`, `/usr/bin/`,
+`/usr/local/bin/`, `/opt/homebrew/bin/`, `/sbin/`, `/usr/sbin/`), since
+Claude does not resolve a program path. OpenCode's bundled plugin resolves
+both, as the OpenCode target reference describes.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it
 takes no portable tool policy at all, so `edit` and `write` fold onto a single
 gate everywhere they project: Claude's Edit rules cover every file-editing
 tool, and OpenCode's write tool asks for its `edit` permission. A split
-decision narrows to the stricter side with a warning. `workspace.allow` and `.ask` contain `/`-absolute or `~/`
-roots. Command rules use portable literal argv tokens. A token may start with
-`~` to match the home-relative command text agents type; every target matches
-it literally and never expands it.
+decision narrows to the stricter side with a warning. `workspace.allow`,
+`.ask`, and `.deny` contain `/`-absolute or `~/` roots; `workspace.unmatched`
+(`ask`, the default, or `allow`) decides every other directory outside the
+project, and file tools honour it only where `tools` allows them. A denied
+directory's files are denied like secret paths. `secret_paths` are `**/`
+patterns, matching at any depth, or `~/` home paths; each target receives
+them in every anchor it checks a file by. `secret_names` deny any command
+that mentions them. Command rules use
+portable literal argv tokens. A token may start with `~` to match the
+home-relative command text agents type; every target matches it literally and
+never expands it. A `text` predicate matches as a substring anywhere after the
+command, so a leading or trailing space in it anchors the match to a token
+boundary: `' -T'` matches `curl -T f` but not `-H Content-Type`.
 
 ```yaml
 schema: coding-agents/v4
@@ -246,10 +261,10 @@ Target compilers own their native schemas. The supported typed fields are:
 
 | Target | Source kinds and typed fields |
 | --- | --- |
-| Claude | Skills: native Claude skill frontmatter. Commands: `description`, `agent`, `context`, `model`, `argument-hint`, `allowed-tools`. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
+| Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
 | Cursor | Rules: `description`, `globs`, `always_apply`; `globs` requires `always_apply: false`. Skills: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. |
 | Codex | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`. Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `sandbox_mode`, `nickname_candidates`. |
-| OpenCode V1 | Rules: `instructions`. Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subtask`, `model`. Agents: `name`, `description`, `model`, `provider`, `color`, `reasoningEffort`, `permission`, `mode`, `steps`, `temperature`, `top_p`, `disable`, `hidden`. |
+| OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 
 The table is intentionally concrete, not a target extension API. OpenCode V1
 is the only active OpenCode adapter. V2 remains out of scope until it is

@@ -21,12 +21,17 @@ from capabilities.protocols.opencode import (
     OpenCodeEvent,
     OpenCodeRequest,
     ToolUseObservation,
-    decode_skill_catalog,
 )
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
+from capabilities.targets.opencode import (
+    api,
+    environment,
+    inspect,
+    isolate_service,
+    settled,
+)
 from capabilities.targets.opencode import config as opencode_config
-from capabilities.targets.opencode import environment, supported
 
 SKILL_NAME = "blackbox-loading-probe"
 SKILL_DESCRIPTION = "Discover the black-box OpenCode loading marker."
@@ -135,19 +140,16 @@ def runtime(
         "loading",
         {"skill": {"*": "allow", DENIED_SKILL: "deny"}},
     )
-    probe_config["command"] = {
+    probe_config["commands"] = {
         CONFIG_COMMAND_NAME: {
             "template": f"{CONFIG_COMMAND_BODY} all=[$ARGUMENTS] first=[$1]",
             "description": "config command fixture",
             "agent": "build",
             "model": "test/loading-probe",
-            "subtask": False,
+            "subagent": False,
         }
     }
-    probe_config["skills"] = {
-        "paths": [str(path_skills)],
-        "urls": [remote.url_for("/skills/")],
-    }
+    probe_config["skills"] = [str(path_skills), remote.url_for("/skills/")]
     config.write_text(json.dumps(probe_config))
     write_fixtures(paths.config)
     env = environment(
@@ -162,6 +164,7 @@ def runtime(
         paths,
         env,
     )
+    isolate_service(request, value)
     return value
 
 
@@ -189,72 +192,89 @@ def find_event(
             for event in events
             if (observation := event.tool_use()) is not None
             and observation.tool == "skill"
-            and observation.input.get("name") == skill
+            and observation.input.get("id") == skill
         ),
         None,
     )
 
 
-def model_case(
-    runtime: Runtime,
-    requested_skill: str | None = None,
-    *,
-    command: str | None = None,
+def skill_case(
+    runtime: Runtime, skill: str
 ) -> tuple[tuple[OpenCodeRequest, ...], tuple[OpenCodeEvent, ...]]:
-    runtime.state.enabled = requested_skill is not None
-    runtime.state.arguments = {"name": requested_skill}
+    runtime.state.enabled = True
+    runtime.state.arguments = {"id": skill}
     runtime.stub.requests.clear()
-    args = ["run"]
-    if command:
-        args += ["--command", command, "alpha"]
-    else:
-        args.append("Call the skill tool exactly as instructed by the model.")
-    args += [
+    process = execute(
+        runtime,
+        "run",
+        "Call the skill tool exactly as instructed by the model.",
         "--title",
         "capability loading probe",
-        "--pure",
+        "--standalone",
         "--format",
         "json",
         "--model",
         "test/loading-probe",
-    ]
-    process = execute(runtime, *args)
+    )
     return (
         tuple(OpenCodeRequest.decode(request) for request in runtime.stub.requests),
         OpenCodeEvent.decode_lines(process.stdout),
     )
 
 
+def command_case(runtime: Runtime, command: str) -> tuple[OpenCodeRequest, ...]:
+    """Run a slash command through the session API; 2.x `run` has no `--command`."""
+    runtime.state.enabled = False
+    runtime.stub.requests.clear()
+    session = inspect(
+        runtime,
+        *api(
+            "post",
+            "/api/session",
+            data={
+                "location": {"directory": str(runtime.paths.work)},
+                "title": "capability loading probe",
+            },
+        ),
+    )["data"]["id"]
+    inspect(
+        runtime,
+        *api(
+            "post",
+            f"/api/session/{session}/command",
+            data={"name": command, "text": "alpha"},
+        ),
+    )
+    inspect(runtime, *api("post", f"/api/experimental/session/{session}/wait"))
+    return tuple(OpenCodeRequest.decode(request) for request in runtime.stub.requests)
+
+
 def observe(runtime: Runtime, name: str) -> CheckResult:
     if name == "catalog":
-        process = supported(
-            "the `debug skill` inspector",
-            run,
-            *runtime.seatbelt.command(runtime.executable, "debug", "skill", "--pure"),
-            cwd=runtime.paths.work,
-            env=runtime.env,
-            timeout=30,
-        )
-        catalog = decode_skill_catalog(process.stdout)
-        text = catalog.text("skill_catalog")
+        expected = {SKILL_NAME, PATH_SKILL, URL_SKILL}
+        catalog = settled(
+            runtime,
+            api("get", "/api/skill", runtime.paths.work),
+            lambda value: expected <= {item["name"] for item in value["data"]},
+        )["data"]
+        descriptions = {item["name"]: item["description"] for item in catalog}
         return CheckResult(
             {
-                "catalog-name": SKILL_NAME in text,
-                "catalog-description": SKILL_DESCRIPTION in text,
-                "path-skill-catalog": all(
-                    value in text for value in (PATH_SKILL, PATH_SKILL_DESCRIPTION)
-                ),
-                "url-skill-catalog": all(
-                    value in text for value in (URL_SKILL, URL_SKILL_DESCRIPTION)
-                ),
+                "catalog-name": SKILL_NAME in descriptions,
+                "catalog-description": descriptions.get(SKILL_NAME)
+                == SKILL_DESCRIPTION,
+                "path-skill-catalog": descriptions.get(PATH_SKILL)
+                == PATH_SKILL_DESCRIPTION,
+                "url-skill-catalog": descriptions.get(URL_SKILL)
+                == URL_SKILL_DESCRIPTION,
             },
-            text,
+            json.dumps(descriptions),
         )
     if name in {"command", "config-command"}:
         command = COMMAND_NAME if name == "command" else CONFIG_COMMAND_NAME
         body = COMMAND_BODY if name == "command" else CONFIG_COMMAND_BODY
-        requests, _ = model_case(runtime, command=command)
-        command_user = requests[0].text("user")
+        requests = command_case(runtime, command)
+        command_user = requests[0].text("user") if requests else ""
         return CheckResult(
             {
                 f"{name}-body": body in command_user,
@@ -275,7 +295,7 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
         "path-skill": PATH_SKILL,
         "url-skill": URL_SKILL,
     }[name]
-    requests, events = model_case(runtime, skill)
+    requests, events = skill_case(runtime, skill)
     event = find_event(events, skill)
     initial = requests[0]
     checks = (
