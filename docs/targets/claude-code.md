@@ -7,7 +7,7 @@
 | Global | `<home>/.claude/CLAUDE.md` |
 | Rule | `<home>/.claude/rules/<stem>.md` |
 | Skill | `<home>/.claude/skills/<directory>/` |
-| Command | `<home>/.claude/commands/<source-file>.md` |
+| Command | `<home>/.claude/skills/<source-stem>/SKILL.md`; Claude merged commands into skills, so a command may not share a skill's name |
 | Agent | `<home>/.claude/agents/<source-file>.md` |
 | Permissions | owned pointers in `<home>/.claude/settings.json` |
 
@@ -22,10 +22,19 @@ so the subagent follows the parent conversation deliberately.
 
 Claude receives portable command, tool, workspace, secret-path, and
 secret-name permissions in `settings.json`. It is one of the two targets with
-an exact portable command-policy projection. It has no projection for the
-policy's `unmatched` decision: `permissions.defaultMode` is the only surface
-for it, and its modes are not allow/ask, so a non-default `unmatched` needs an
-omit and the mode stays a patch's to set. Generated pointers are semantic
+an exact portable command-policy projection. `unmatched: allow` lands as a
+bare `Bash` allow, which every deny rule outranks; the permission mode stays a
+patch's to set. Claude anchors a bare path rule at the cwd and a `/` one at
+the settings file, so `**/` secret paths and absolute directories take the
+`//` root form, workspace directories receive `Edit(<dir>/**)` when edits are
+allowed, and `workspace.unmatched: allow` becomes `Read(//**)` and
+`Edit(//**)`. Denied workspace directories become Read and Edit denies.
+`workspace.ask` has no channel and needs an omit. Claude peels leading
+assignments, `env` in every form, `sudo`, and `timeout`, `time`, `nice`,
+`nohup`, `stdbuf`, `command`, `builtin`, and `noglob` before it matches a deny
+or ask rule, and retries the rule behind a bare `xargs`, so those wrappers get
+no copies; `xargs` with options still does. The `deny-reach` live scenarios
+pin this. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
 

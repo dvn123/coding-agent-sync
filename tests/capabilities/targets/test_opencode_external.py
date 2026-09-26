@@ -56,19 +56,27 @@ def command_output(runtime: Runtime, command: str, *arguments: str) -> str:
 def test_opencode_installed_binary_exposes_tui_config(runtime: Runtime) -> None:
     output = command_output(runtime, runtime.strings, runtime.opencode)
 
+    # 2.x replaced layered `tui.json` files with one global `cli.json`.
     assert all(
-        token in output for token in ("OPENCODE_TUI_CONFIG", "tui.json", "diff_style")
+        token in output
+        for token in (
+            "OPENCODE_CLI_CONFIG_CONTENT",
+            "cli.json",
+            "https://opencode.ai/v2/cli.json",
+        )
     )
 
 
 @pytest.mark.capability_case("opencode.tui-runtime")
 @pytest.mark.capability_live
 def test_opencode_native_help_exposes_tui_runtime(runtime: Runtime) -> None:
-    output = command_output(runtime, runtime.opencode, "--help")
+    # 2.x starts the full TUI by default and moved `--mini` to a subcommand.
+    root = command_output(runtime, runtime.opencode, "--help")
+    mini = command_output(runtime, runtime.opencode, "mini", "--help")
 
-    assert all(
-        token in output for token in ("start opencode tui", "--mini", "--no-replay")
-    )
+    assert "Directory to start OpenCode in" in root
+    assert "Start the minimal interactive interface" in root
+    assert "--no-replay" in mini
 
 
 @pytest.mark.parametrize(

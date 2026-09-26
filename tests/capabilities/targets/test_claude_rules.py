@@ -85,7 +85,7 @@ def invoke(runtime: Runtime, paths: Paths, prompt: str) -> AnthropicRequest:
 
 @pytest.mark.capability_case("claude.instructions-rules")
 @pytest.mark.capability_live
-def test_claude_compiled_global_and_glob_rule_reach_root_request(
+def test_claude_compiled_global_and_rule_reach_root_request(
     runtime: Runtime,
 ) -> None:
     paths = paths_for(runtime, "instructions-rules")
@@ -100,9 +100,8 @@ def test_claude_compiled_global_and_glob_rule_reach_root_request(
             "rule",
             "python",
             "python",
-            "glob rule",
+            "rule",
             RULE_SENTINEL,
-            "activation:\n  globs:\n    - '**/*.py'\n",
         )
     )
 
@@ -112,12 +111,10 @@ def test_claude_compiled_global_and_glob_rule_reach_root_request(
     compiled_rule = (paths.home / ".claude" / "rules" / "python.md").read_text()
     assert GLOBAL_SENTINEL in compiled_global
     assert RULE_SENTINEL in compiled_rule
-    assert "activation:" not in compiled_rule
 
     request = invoke(runtime, paths, "Reply with compiler probe complete.")
     payload = request.text()
     assert GLOBAL_SENTINEL in payload
-    # Current user-scoped Claude lowering intentionally ignores activation globs.
     assert RULE_SENTINEL in payload
 
 
@@ -137,7 +134,7 @@ def test_claude_compiled_agent_is_discoverable_in_root_request(
             AGENT_NAME,
             AGENT_DESCRIPTION,
             AGENT_BODY,
-            "tools:\n  inherit: false\n  allow:\n    - Read\n",
+            "only: [claude]\ntargets:\n  claude:\n    native:\n      tools: Read\n",
         )
     )
 

@@ -32,7 +32,10 @@ fragments carrying them acknowledge `targets.codex.omit.commands.allow` and
 `targets.codex.omit.commands.ask`. Secret paths and names still have no
 projection, and neither does the policy's `unmatched` decision: Codex gates an
 unmatched command by sandbox and approval policy, not by an allowlist, so a
-non-default value needs an omit here too.
+non-default value needs an omit here too. Literal `workspace.allow`
+directories land as absolute `sandbox_workspace_write.writable_roots`, which
+Codex applies in `workspace-write` mode; `workspace.ask`, `.deny`, and
+`.unmatched` have no channel and each need an omit.
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,

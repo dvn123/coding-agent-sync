@@ -1,11 +1,48 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
 from ..sources import CommandPermission, PermissionSource, WorkspacePermissions
 
-CLAUDE_RESOLVED_WRAPPERS = frozenset(
-    {"timeout", "time", "nice", "nohup", "stdbuf", "command", "noglob", "builtin"}
+
+def wrapper_prefixes(wrapper: str) -> tuple[str, str]:
+    """A wrapper right before the command, and with its arguments between."""
+    return (f"{wrapper} ", f"{wrapper} * ")
+
+
+# Claude peels these itself before it matches a deny or ask rule, so copies
+# behind them are dead. `xargs` is peeled only bare: a deny retries itself
+# behind `xargs `, but not behind `xargs` options.
+CLAUDE_PEELED_PREFIXES = frozenset(
+    {
+        *(
+            prefix
+            for wrapper in (
+                "timeout",
+                "time",
+                "nice",
+                "nohup",
+                "stdbuf",
+                "command",
+                "noglob",
+                "builtin",
+                "env",
+            )
+            for prefix in wrapper_prefixes(wrapper)
+        ),
+        "xargs ",
+    }
+)
+# Claude does not resolve a program path, so `Bash(rm *)` misses `/bin/rm`.
+# A bare `*/rm *` would also match `ls foo/rm bar`, so single-token
+# denies get a copy per install directory instead.
+PROGRAM_DIRECTORIES = (
+    "/bin/",
+    "/usr/bin/",
+    "/usr/local/bin/",
+    "/opt/homebrew/bin/",
+    "/sbin/",
+    "/usr/sbin/",
 )
 # Claude's file permission checks only consult Edit rules, and an Edit rule
 # covers every file-editing tool, so `write` folds onto the same pattern as
@@ -47,44 +84,36 @@ CURSOR_TOOL_PATTERNS = {"read": "Read(**)", "write": "Write(**)"}
 CURSOR_TOOL_FLAGS = {"websearch": "autoAcceptWebSearch"}
 # The CLI's approvalMode, which is the only one `unmatched` reaches; Desktop
 # is pinned to `allowlist` because it has no deny channel. The enum's third
-# value, `manual`, prompts for everything and no portable value asks for it.
+# value, `auto-review`, hands unlisted commands to a model classifier, which no
+# portable value asks for. `permissions.deny` binds under every value.
 CURSOR_APPROVAL_MODES = {"ask": "allowlist", "allow": "unrestricted"}
 
 
-def _wrapper_prefixes(wrapper: str | None) -> tuple[str, ...]:
-    return ("",) if wrapper is None else (f"{wrapper} ", f"{wrapper} * ")
-
-
 def _glob_heads(
-    rule: CommandPermission, options: Sequence[str], wrapper: str | None
+    rule: CommandPermission, options: Sequence[str], prefix: str
 ) -> tuple[str, ...]:
-    prefixes = _wrapper_prefixes(wrapper)
     if not rule.subcommand:
-        return tuple(f"{prefix}{rule.command}" for prefix in prefixes)
+        return (f"{prefix}{rule.command}",)
     subcommand = " ".join(rule.subcommand)
-    return tuple(
-        head
-        for prefix in prefixes
-        for head in (
-            f"{prefix}{rule.command} {subcommand}",
-            *(f"{prefix}{rule.command} {option}* {subcommand}" for option in options),
-        )
+    return (
+        f"{prefix}{rule.command} {subcommand}",
+        *(f"{prefix}{rule.command} {option}* {subcommand}" for option in options),
     )
 
 
 def glob_variants(
     rule: CommandPermission,
     options: Sequence[str] = (),
-    wrapper: str | None = None,
+    prefix: str = "",
     *,
     optional_trailing: bool = False,
 ) -> tuple[str, ...]:
-    heads = _glob_heads(rule, options, wrapper)
+    heads = _glob_heads(rule, options, prefix)
     if rule.exact:
         return heads
-    prefixes = heads
+    stems = heads
     if rule.tail:
-        prefixes = tuple(
+        stems = tuple(
             variant
             for head in heads
             for sequence in sorted(rule.tail)
@@ -94,19 +123,27 @@ def glob_variants(
             )
         )
     if rule.text:
+        # A trailing-space text also ends the command bare: Claude's final
+        # ` *` matches an empty end only when it is the rule's sole wildcard.
         return tuple(
             dict.fromkeys(
-                f"{prefix}*{text}*" for prefix in prefixes for text in sorted(rule.text)
+                variant
+                for stem in stems
+                for text in sorted(rule.text)
+                for variant in (
+                    f"{stem}*{text}*",
+                    *((f"{stem}*{text[:-1]}",) if text.endswith(" ") else ()),
+                )
             )
         )
     return tuple(
         dict.fromkeys(
             variant
-            for prefix in prefixes
+            for stem in stems
             for variant in (
-                (f"{prefix} *",)
-                if optional_trailing or "*" not in prefix
-                else (f"{prefix} *", prefix)
+                (f"{stem} *",)
+                if optional_trailing or "*" not in stem
+                else (f"{stem} *", stem)
             )
         )
     )
@@ -174,12 +211,61 @@ def tool_patterns(
     )
 
 
-def external_directory_map(workspace: WorkspacePermissions) -> dict[str, str]:
-    entries = {"*": "ask"}
-    for decision in ("allow", "ask"):
-        for directory in getattr(workspace, decision):
-            entries[f"{directory}/**"] = decision
-    return entries
+def has_directories(workspace: WorkspacePermissions) -> bool:
+    return bool(
+        workspace.allow
+        or workspace.ask
+        or workspace.deny
+        or workspace.unmatched != "ask"
+    )
+
+
+def external_directory_rules(
+    workspace: WorkspacePermissions,
+) -> list[tuple[str, list[str]]]:
+    """OpenCode's own `*: ask` default sits before its built-in allows (tool
+    output, tmp, config), so only a non-default decision is written over it.
+    """
+    return [
+        *([(workspace.unmatched, ["*"])] if workspace.unmatched != "ask" else []),
+        *(
+            (
+                decision,
+                [f"{directory}/**" for directory in getattr(workspace, decision)],
+            )
+            for decision in ("allow", "ask", "deny")
+        ),
+    ]
+
+
+def denied_paths(permissions: PermissionSource) -> tuple[str, ...]:
+    """Secret paths plus every file below a denied workspace directory."""
+    return (
+        *permissions.secret_paths,
+        *(f"{directory}/**" for directory in permissions.workspace.deny),
+    )
+
+
+def claude_path(pattern: str) -> str:
+    """Claude anchors a bare pattern at the cwd and a `/` one at the settings
+    file, so anywhere-patterns and absolute paths take the `//` root form."""
+    if pattern.startswith("**/"):
+        return f"//{pattern}"
+    if pattern.startswith("/"):
+        return f"/{pattern}"
+    return pattern
+
+
+def opencode_paths(pattern: str) -> tuple[str, ...]:
+    """OpenCode checks a file inside the session directory by its relative
+    path, which `**/x` (a regex needing a `/`) and an expanded `~/x` both miss,
+    so each pattern also lands in its relative spellings."""
+    if pattern.startswith("**/"):
+        return (pattern, pattern.removeprefix("**/"))
+    if pattern.startswith("~/"):
+        relative = pattern.removeprefix("~/")
+        return (pattern, f"**/{relative}", relative)
+    return (pattern,)
 
 
 def literal_directories(workspace: WorkspacePermissions) -> list[str]:
@@ -215,24 +301,64 @@ def rule_patterns(
     )
 
 
-def bucket_patterns(
+def bucket_entries(
     permissions: PermissionSource,
-    lower: Callable[[CommandPermission, Sequence[str], str | None], Sequence[str]],
-    blanket: Callable[[str], str],
-    resolved_wrappers: frozenset[str] = frozenset(),
-) -> dict[str, list[str]]:
+    lower: Callable[[CommandPermission, Sequence[str], str], Sequence[str]],
+    peeled: frozenset[str] = frozenset(),
+    *,
+    peels_ask: bool = True,
+    resolves_paths: bool = False,
+) -> Iterator[tuple[str, str, str]]:
+    """Lower each bucket as `(bucket, origin, pattern)`, with wrapped copies
+    of every ask and deny rule.
+
+    `origin` names the step that produced the pattern, for the audit. Allows
+    get no wrapper form: a blanket `env *` would allow any payload the wrapper
+    carries, so a wrapped allowed command falls to `unmatched`. `peeled` are
+    wrapper prefixes the target strips before it matches a deny, and before an
+    ask too unless `peels_ask` is false. `resolves_paths` says it judges
+    `/bin/rm` as `rm`.
+    """
     commands = permissions.commands
-    wrappers = tuple(w for w in permissions.wrappers if w not in resolved_wrappers)
-    patterns: dict[str, list[str]] = {}
+    wrapped = [
+        (wrapper, prefix)
+        for wrapper in permissions.wrappers
+        for prefix in wrapper_prefixes(wrapper)
+    ]
     for bucket, rules in commands.buckets:
-        emitted = (
-            [blanket(wrapper) for wrapper in wrappers] if bucket == "allow" else []
-        )
+        # Under `unmatched: allow` an allow decides nothing on either glob
+        # target: the blanket allow already covers it, and it never outranks
+        # an ask or deny.
+        if bucket == "allow" and permissions.unmatched == "allow":
+            continue
         for rule in rules:
             options = commands.option_tokens(rule.command)
-            emitted.extend(lower(rule, options, None))
+            for origin, patterns in (
+                ("base", lower(rule, (), "")),
+                ("option", bare := lower(rule, options, "")),
+            ):
+                yield from ((bucket, origin, pattern) for pattern in patterns)
+            # Multi-token denies stay bare: a copy per directory for every
+            # `git push` spelling would multiply the ruleset for little gain.
+            if bucket == "deny" and not rule.subcommand and not resolves_paths:
+                yield from (
+                    (bucket, "directory", f"{directory}{pattern}")
+                    for directory in PROGRAM_DIRECTORIES
+                    for pattern in bare
+                )
             if bucket != "allow":
-                for wrapper in wrappers:
-                    emitted.extend(lower(rule, options, wrapper))
-        patterns[bucket] = list(dict.fromkeys(emitted))
-    return patterns
+                skip = peeled if bucket == "deny" or peels_ask else frozenset()
+                for origin, prefix in wrapped:
+                    if prefix in skip:
+                        continue
+                    yield from (
+                        (bucket, origin, pattern)
+                        for pattern in lower(rule, options, prefix)
+                    )
+
+
+def bucket_patterns(entries: Iterable[tuple[str, str, str]]) -> dict[str, list[str]]:
+    patterns: dict[str, dict[str, None]] = {"allow": {}, "ask": {}, "deny": {}}
+    for bucket, _, pattern in entries:
+        patterns[bucket][pattern] = None
+    return {bucket: list(emitted) for bucket, emitted in patterns.items()}

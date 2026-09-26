@@ -26,7 +26,8 @@ from capabilities.targets.opencode import environment
 
 OUTPUT_COMMAND = "blackbox-output"
 OUTPUT_LAST_LINE = "OPENCODE_TOOL_OUTPUT_LAST_LINE_0bf79e"
-OUTPUT_PATH = re.compile(r"Full output saved to: (\S+)")
+OUTPUT_FIRST_LINE = "probe-output-0"
+OUTPUT_MARKER = re.compile(r"full output saved to (\S+)\]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +65,8 @@ def runtime(
         f'echo "{OUTPUT_LAST_LINE}"\n',
     )
     state = ToolResponder(
-        "bash",
-        {"command": OUTPUT_COMMAND, "description": "tool-output probe"},
+        "shell",
+        {"command": OUTPUT_COMMAND},
         "tool-probe",
         "call_tool_probe",
         "tool probe complete",
@@ -109,10 +110,10 @@ def observe(runtime: Runtime, _name: str) -> CheckResult:
         *runtime.seatbelt.command(
             runtime.executable,
             "run",
-            "Call the bash tool exactly as instructed by the model.",
+            "Call the shell tool exactly as instructed by the model.",
             "--title",
             "capability tool-output probe",
-            "--pure",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -129,23 +130,29 @@ def observe(runtime: Runtime, _name: str) -> CheckResult:
         (
             tool
             for event in OpenCodeEvent.decode_lines(process.stdout)
-            if (tool := event.tool_use()) is not None and tool.tool == "bash"
+            if (tool := event.tool_use()) is not None and tool.tool == "shell"
         ),
         None,
     )
     output = str(observation.output) if observation else ""
-    match = OUTPUT_PATH.search(output)
+    match = OUTPUT_MARKER.search(output)
     path = Path(match.group(1)) if match else None
     return CheckResult(
         {
             "configured-shell-used": runtime.shell_marker.is_file(),
+            # The shell tool keeps the tail of its output, so the head is
+            # what truncation elides from the model.
             "tool-output-truncated": observation is not None
             and observation.status == "completed"
-            and "...output truncated..." in output,
+            and match is not None
+            and OUTPUT_FIRST_LINE not in output,
             "tool-output-path": path is not None and path.is_file(),
             "tool-output-preserved": path is not None
             and path.is_file()
-            and OUTPUT_LAST_LINE in path.read_text(),
+            and all(
+                line in path.read_text()
+                for line in (OUTPUT_FIRST_LINE, OUTPUT_LAST_LINE)
+            ),
         },
         str(observation),
     )

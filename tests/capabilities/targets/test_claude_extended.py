@@ -97,7 +97,8 @@ def command_output(runtime: Runtime, executable: str, *arguments: str) -> str:
 def test_claude_native_help_exposes_extended_surface(
     runtime: Runtime, arguments: tuple[str, ...], tokens: tuple[str, ...]
 ) -> None:
-    output = command_output(runtime, runtime.claude, *arguments)
+    # Help text wraps, so a phrase may span a line break.
+    output = " ".join(command_output(runtime, runtime.claude, *arguments).split())
 
     assert all(token in output for token in tokens)
 
