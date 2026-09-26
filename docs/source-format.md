@@ -166,11 +166,10 @@ binding, and Codex gates an unmatched command by sandbox. There is no `deny`
 value: a blanket command denial is not a policy any target can run under.
 Declared `wrappers` get wrapped copies of every ask and deny rule, never a
 blanket allow, so a wrapped allowed command falls to `unmatched`; a target
-that peels a wrapper itself gets no copies for it. On Claude, a single-token
-deny also lands behind each common program directory (`/bin/`, `/usr/bin/`,
-`/usr/local/bin/`, `/opt/homebrew/bin/`, `/sbin/`, `/usr/sbin/`), since
-Claude does not resolve a program path. OpenCode's bundled plugin resolves
-both, as the OpenCode target reference describes.
+that peels a wrapper itself gets no copies for it. On Claude, which resolves
+no program path, every ask and deny also lands behind any absolute directory.
+OpenCode's bundled plugin resolves both, as the OpenCode target reference
+describes.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it
