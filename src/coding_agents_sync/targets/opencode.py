@@ -178,7 +178,6 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
         functools.partial(glob_variants, optional_trailing=True),
         UNWRAP_PEELED,
         peels_ask=False,
-        resolves_paths=True,
     )
 
 

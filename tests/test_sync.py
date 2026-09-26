@@ -26,6 +26,7 @@ from coding_agents_sync.patches import PatchError
 from coding_agents_sync.runtime_config import NativeConfigError
 from coding_agents_sync.sources import SourceSchemaError, load_permissions
 from coding_agents_sync.targets.opencode import UNWRAP_PLUGIN
+from coding_agents_sync.targets.permissions import CLAUDE_OPAQUE_COMMANDS
 
 
 def write(path: Path, content: str) -> None:
@@ -593,6 +594,14 @@ class SyncTests(unittest.TestCase):
                     "Bash(fd -x *)",
                     "Bash(fd * -x *)",
                     "Bash(fd * -x)",
+                    "Bash(/*/fd --exec *)",
+                    "Bash(/*/fd --exec)",
+                    "Bash(/*/fd * --exec *)",
+                    "Bash(/*/fd * --exec)",
+                    "Bash(/*/fd -x *)",
+                    "Bash(/*/fd -x)",
+                    "Bash(/*/fd * -x *)",
+                    "Bash(/*/fd * -x)",
                 ],
             )
             self.assertIn("Bash(gh api * -X DELETE *)", claude["permissions"]["ask"])
@@ -842,6 +851,13 @@ class SyncTests(unittest.TestCase):
                     "Bash(kubectl apply *)",
                     "Bash(kubectl --context* apply *)",
                     "Bash(kubectl --context* apply)",
+                    # Claude resolves no program path, and sees past neither a
+                    # leading redirect nor a wrapper run by path.
+                    "Bash(/*/kubectl apply *)",
+                    "Bash(/*/kubectl apply)",
+                    "Bash(/*/kubectl --context* apply *)",
+                    "Bash(/*/kubectl --context* apply)",
+                    *(f"Bash({pattern})" for pattern in CLAUDE_OPAQUE_COMMANDS),
                 ],
             )
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
@@ -1403,8 +1419,8 @@ class SyncTests(unittest.TestCase):
             )
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertIn("Bash(*EXAMPLE_TOKEN*)", claude["permissions"]["deny"])
-            self.assertIn("Bash(/usr/bin/shred *)", claude["permissions"]["deny"])
-            self.assertNotIn("Bash(/usr/bin/git push *)", claude["permissions"]["deny"])
+            self.assertIn("Bash(/*/shred *)", claude["permissions"]["deny"])
+            self.assertIn("Bash(/*/git push *)", claude["permissions"]["deny"])
             self.assertEqual(
                 claude["permissions"]["additionalDirectories"], ["~/Developer"]
             )
@@ -1540,7 +1556,13 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(claude["permissions"]["allow"], ["Bash(git status *)"])
             self.assertEqual(
                 claude["permissions"]["ask"],
-                ["Bash(rmdir *)", "Bash(xargs * rmdir *)", "Bash(xargs * rmdir)"],
+                [
+                    "Bash(rmdir *)",
+                    "Bash(/*/rmdir *)",
+                    "Bash(/*/rmdir)",
+                    "Bash(xargs * rmdir *)",
+                    "Bash(xargs * rmdir)",
+                ],
             )
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())

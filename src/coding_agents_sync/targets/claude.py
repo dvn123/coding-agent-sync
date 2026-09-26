@@ -34,7 +34,9 @@ from ..sources import (
     resolve_model_policy,
 )
 from .permissions import (
+    CLAUDE_OPAQUE_COMMANDS,
     CLAUDE_PEELED_PREFIXES,
+    CLAUDE_PROGRAM_PATH,
     CLAUDE_TOOL_PATTERNS,
     bucket_entries,
     bucket_patterns,
@@ -253,7 +255,12 @@ def _agent_meta(
 
 
 def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str]]:
-    return bucket_entries(permissions, glob_variants, CLAUDE_PEELED_PREFIXES)
+    return bucket_entries(
+        permissions,
+        glob_variants,
+        CLAUDE_PEELED_PREFIXES,
+        path_prefix=CLAUDE_PROGRAM_PATH,
+    )
 
 
 def _permission_values(
@@ -285,6 +292,7 @@ def _permission_values(
         f"Bash({pattern})"
         for pattern in (
             *buckets["deny"],
+            *(CLAUDE_OPAQUE_COMMANDS if buckets["deny"] else ()),
             *secret_name_variants(permissions.secret_names),
         )
     ] + [
