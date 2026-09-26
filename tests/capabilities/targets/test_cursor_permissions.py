@@ -216,16 +216,17 @@ SCENARIOS = {
         (UNMATCHED,),
         False,
     ),
-    # An explicit allow survives any redirect: the bundle's redirect-safety
-    # classification gates auto-allow decisions, not a user allowlist entry,
-    # so even a target outside the workspace runs (containment owns the
-    # write itself).
+    # An explicit allow holds only while every output redirect targets
+    # /dev/null, a literal path inside the workspace, or a temp path; any other
+    # target, including a non-literal one such as `$HOME/x`, falls back to the
+    # approval prompt.
     "redirect-workspace": (f"{ALLOWED} a > out.txt", "success", (ALLOWED,), False),
     "redirect-dev-null": (f"{ALLOWED} a > /dev/null", "success", (ALLOWED,), False),
-    "redirect-outside": (
+    "redirect-outside": (f"{ALLOWED} a > /probe-out.txt", "rejected", (), False),
+    "redirect-expansion": (
         f"{ALLOWED} a > $HOME/probe-out.txt",
-        "success",
-        (ALLOWED,),
+        "rejected",
+        (),
         False,
     ),
     # smartAllowlistDenylist is a soft deny: it forces a prompt rather than

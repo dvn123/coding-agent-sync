@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
@@ -20,8 +19,12 @@ from capabilities.protocols.openai import ToolResponder
 from capabilities.protocols.opencode import OpenCodeRequest
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
-from capabilities.targets.opencode import config as opencode_config
-from capabilities.targets.opencode import environment, supported
+from capabilities.targets.opencode import (
+    api,
+    environment,
+    isolate_service,
+    settled,
+)
 
 MODEL = "runtime-main"
 SMALL_MODEL = "runtime-small"
@@ -43,45 +46,70 @@ class Runtime:
 
 
 def write_config(paths: Paths, base_url: str) -> Path:
-    config = opencode_config(base_url, MODEL, "runtime", {"*": "allow"})
-    provider = cast(dict[str, Any], config["provider"]["test"])
-    main: dict[str, Any] = provider["models"][MODEL]
-    main.update(
-        {
-            "attachment": True,
-            "temperature": True,
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-            "variants": {"precise": {"temperature": 0.25}},
-        }
-    )
-    provider["models"][SMALL_MODEL] = main | {"name": "Runtime Small Probe"}
-    config.update(
-        {
-            "model": f"test/{MODEL}",
-            "small_model": f"test/{SMALL_MODEL}",
-            "enabled_providers": ["test"],
-            "disabled_providers": ["disabled-probe"],
-            "default_agent": AGENT,
-            "subagent_depth": 2,
-            "agent": {
-                AGENT: {
-                    "description": "Runtime agent fixture",
-                    "mode": "primary",
-                    "prompt": AGENT_PROMPT,
-                    "model": f"test/{MODEL}",
-                    "variant": "precise",
-                    "steps": 5,
-                    "permission": {"bash": "deny", "read": "allow"},
-                }
+    # Native 2.x shapes throughout: a provider or model entry cannot mix 1.x
+    # and 2.x fields, and a 1.x variant's options become provider settings
+    # rather than request body fields.
+    model = {
+        "name": "Runtime Probe",
+        "capabilities": {"tools": True, "input": ["text", "image"], "output": ["text"]},
+        "limit": {"context": 100000, "output": 1000},
+        "variants": [{"id": "precise", "body": {"temperature": 0.25}}],
+    }
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "update": "disable",
+        "model": f"test/{MODEL}",
+        "default_agent": AGENT,
+        "permissions": [{"action": "*", "resource": "*", "effect": "allow"}],
+        "providers": {
+            "test": {
+                "name": "Local runtime probe",
+                "package": "aisdk:@ai-sdk/openai-compatible",
+                "env": [],
+                "settings": {
+                    "apiKey": "not-a-credential",
+                    "baseURL": f"{base_url}/v1",
+                },
+                "models": {
+                    MODEL: model,
+                    SMALL_MODEL: model | {"name": "Runtime Small Probe"},
+                },
+            }
+        },
+        # 1.x `enabled_providers` and `disabled_providers` are these policies.
+        "experimental": {
+            "policies": [
+                {"action": "provider.use", "resource": "*", "effect": "deny"},
+                {"action": "provider.use", "resource": "test", "effect": "allow"},
+                {
+                    "action": "provider.use",
+                    "resource": "disabled-probe",
+                    "effect": "deny",
+                },
+            ]
+        },
+        "agents": {
+            # 1.x `small_model` is the built-in title agent's model.
+            "title": {"model": f"test/{SMALL_MODEL}"},
+            AGENT: {
+                "description": "Runtime agent fixture",
+                "mode": "primary",
+                "system": AGENT_PROMPT,
+                "model": f"test/{MODEL}#precise",
+                "steps": 5,
+                "permissions": [
+                    {"action": "shell", "resource": "*", "effect": "deny"},
+                    {"action": "read", "resource": "*", "effect": "allow"},
+                ],
             },
-            "references": {
-                "runtime-docs": {
-                    "path": str(paths.root / "reference"),
-                    "description": REFERENCE_DESCRIPTION,
-                }
-            },
-        }
-    )
+        },
+        "references": {
+            "runtime-docs": {
+                "path": str(paths.root / "reference"),
+                "description": REFERENCE_DESCRIPTION,
+            }
+        },
+    }
     path = paths.root / "opencode.json"
     path.write_text(json.dumps(config))
     return path
@@ -122,6 +150,7 @@ def runtime(
         attachment,
     )
     require_containment(value.seatbelt, stub, paths, env)
+    isolate_service(request, value)
     return value
 
 
@@ -152,13 +181,12 @@ def model_requests(
     args = [
         "run",
         "Reply with the runtime probe complete.",
-        "--pure",
+        "--standalone",
         "--format",
         "json",
+        # 2.x folds the variant into the model reference.
         "--model",
-        f"test/{MODEL}",
-        "--variant",
-        "precise",
+        f"test/{MODEL}#precise",
     ]
     if title:
         args += ["--title", "capability runtime probe"]
@@ -170,29 +198,34 @@ def model_requests(
     return tuple(OpenCodeRequest.decode(request) for request in runtime.stub.requests)
 
 
+def tool_names(request: OpenCodeRequest) -> set[str]:
+    return {tool["function"]["name"] for tool in request.raw.get("tools", [])}
+
+
 def observe(runtime: Runtime, name: str) -> CheckResult:
     if name == "provider-model":
-        process = supported(
-            "the configured model catalog",
-            run,
-            *runtime.seatbelt.command(runtime.executable, "models", "test", "--pure"),
-            cwd=runtime.paths.work,
-            env=runtime.env,
-            timeout=30,
-        )
+        expected = {MODEL, SMALL_MODEL}
+        catalog = settled(
+            runtime,
+            api("get", "/api/model", runtime.paths.work),
+            lambda value: (
+                expected
+                <= {
+                    item["id"] for item in value["data"] if item["providerID"] == "test"
+                }
+            ),
+        )["data"]
         requests = model_requests(runtime)
         request = requests[0]
         return CheckResult(
             {
-                "provider-listed": all(
-                    value in process.stdout
-                    for value in (f"test/{MODEL}", f"test/{SMALL_MODEL}")
-                ),
+                "provider-listed": expected
+                <= {item["id"] for item in catalog if item["providerID"] == "test"},
                 "selected-model": request.raw["model"] == MODEL,
                 "selected-variant": request.raw.get("temperature") == 0.25,
                 "provider-reached": len(requests) == 1,
             },
-            process.stdout + "\n" + json.dumps(request.raw, sort_keys=True),
+            json.dumps(catalog) + "\n" + json.dumps(request.raw, sort_keys=True),
         )
     if name == "small-model":
         requests = model_requests(runtime, title=False)
@@ -205,38 +238,31 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             json.dumps([request.raw["model"] for request in requests]),
         )
     if name == "agent":
-        listing = supported(
-            "the agent catalog",
-            run,
-            *runtime.seatbelt.command(runtime.executable, "agent", "list", "--pure"),
-            cwd=runtime.paths.work,
-            env=runtime.env,
-            timeout=30,
+        # 2.x has no `agent list` or `debug agent <name>`; `debug agents`
+        # reports each agent with its resolved model and ordered permissions.
+        agents = settled(
+            runtime,
+            ("debug", "agents"),
+            lambda value: any(item["id"] == AGENT for item in value),
         )
-        inspected = supported(
-            "the `debug agent` inspector",
-            run,
-            *runtime.seatbelt.command(
-                runtime.executable, "debug", "agent", AGENT, "--pure"
-            ),
-            cwd=runtime.paths.work,
-            env=runtime.env,
-            timeout=30,
-        )
-        agent = json.loads(inspected.stdout)
+        agent = next((item for item in agents if item["id"] == AGENT), {})
+        model = agent.get("model") or {}
         request = model_requests(runtime)[0]
+        # 2.x has no per-agent tool map: a wholly denied action removes its
+        # tool from the model request instead.
+        tools = tool_names(request)
         return CheckResult(
             {
-                "agent-listed": AGENT in listing.stdout,
+                "agent-listed": bool(agent),
                 "default-agent-selected": AGENT_PROMPT in request.text("system"),
-                "agent-model": agent["model"]
-                == {"providerID": "test", "modelID": MODEL},
-                "agent-variant": agent["variant"] == "precise",
-                "agent-steps": agent["steps"] == 5,
-                "tool-disabled": agent["tools"]["bash"] is False,
-                "tool-enabled": agent["tools"]["read"] is True,
+                "agent-model": (model.get("providerID"), model.get("id"))
+                == ("test", MODEL),
+                "agent-variant": model.get("variant") == "precise",
+                "agent-steps": agent.get("steps") == 5,
+                "tool-disabled": "shell" not in tools,
+                "tool-enabled": "read" in tools,
             },
-            inspected.stdout,
+            json.dumps(agent) + "\n" + json.dumps(sorted(tools)),
         )
     if name == "reference":
         request = model_requests(runtime)[0]

@@ -1,26 +1,10 @@
 from __future__ import annotations
 
-import subprocess
-from functools import cache
 from pathlib import Path
 
 import pytest
 
-from capabilities.harness import require_command
-from capabilities.targets.cursor import local_executable
-
-
-@cache
-def help_output(*arguments: str) -> str:
-    result = subprocess.run(
-        [require_command("cursor-agent"), *arguments],
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=15,
-    )
-    assert result.returncode == 0, result.stderr
-    return result.stdout
+from capabilities.targets.cursor import help_output, local_executable
 
 
 def local_bundle() -> str:
@@ -95,10 +79,10 @@ def test_cursor_agent_declares_isolated_worktree_options() -> None:
 def test_cursor_agent_declares_private_worker_contracts() -> None:
     help = help_output("worker", "--help")
 
-    assert "private cloud worker" in help
+    assert "Run a self-hosted Cloud Agent worker" in help
     assert "--worker-dir <path>" in help
-    assert "--pool" in help
+    assert "--pool [name]" in help
     assert (
-        "one cloud\n"
-        "                                    agent claims this worker at a time" in help
+        "One cloud agent claims this worker at a\n"
+        "                                    time." in help
     )

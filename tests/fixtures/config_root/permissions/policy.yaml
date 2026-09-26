@@ -24,7 +24,7 @@ targets:
   codex:
     omit:
       tools: Codex has no portable user permission channel.
-      workspace: Codex has no portable workspace permission channel.
+      workspace.ask: Codex has no workspace ask channel.
       secret_paths: Codex has no portable secret-path channel.
       secret_names: Codex has no portable secret-name channel.
   cursor:

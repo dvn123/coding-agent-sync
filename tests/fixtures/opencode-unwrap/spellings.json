@@ -1,0 +1,106 @@
+{
+  "rm -rf x": [],
+  "echo rm -rf x": [],
+  "git commit -m \"FOO=1 rm -rf x\"": [],
+  "FOO=\"x rm\" ls": [
+    "ls"
+  ],
+  "FOO=1 BAR=2 rm -rf x": [
+    "BAR=2 rm -rf x",
+    "rm -rf x"
+  ],
+  "FOO=\"a b\" git commit -m \"retries=3 and rm it\"": [
+    "git commit -m \"retries=3 and rm it\""
+  ],
+  "FOO=a\\ b rm -rf x": [
+    "rm -rf x"
+  ],
+  "/bin/rm -rf x": [
+    "rm -rf x"
+  ],
+  "./gradlew build": [
+    "gradlew build"
+  ],
+  "\\rm -rf x": [
+    "rm -rf x"
+  ],
+  "\"rm\" -rf x": [
+    "rm -rf x"
+  ],
+  "> /dev/null rm -rf x": [
+    "rm -rf x"
+  ],
+  ">/dev/null rm -rf x": [
+    "rm -rf x"
+  ],
+  "2>&1 rm -rf x": [
+    "rm -rf x"
+  ],
+  "timeout 30 rm -rf x": [
+    "rm -rf x"
+  ],
+  "timeout -k 5 30 rm -rf x": [
+    "rm -rf x"
+  ],
+  "timeout --signal=KILL 30 rm -rf x": [
+    "rm -rf x"
+  ],
+  "timeout 30 -- rm -rf x": [
+    "rm -rf x"
+  ],
+  "timeout 30": [],
+  "nice -n 5 rm -rf x": [
+    "rm -rf x"
+  ],
+  "nohup rm -rf x": [
+    "rm -rf x"
+  ],
+  "time -o t rm -rf x": [
+    "rm -rf x"
+  ],
+  "stdbuf -o L rm -rf x": [
+    "rm -rf x"
+  ],
+  "command rm -rf x": [
+    "rm -rf x"
+  ],
+  "command -v rm": [],
+  "builtin cd x": [
+    "cd x"
+  ],
+  "exec -a name rm -rf x": [
+    "rm -rf x"
+  ],
+  "env": [],
+  "env FOO=1 -u HOME rm -rf x": [
+    "rm -rf x"
+  ],
+  "env -P /bin rm -rf x": [
+    "rm -rf x"
+  ],
+  "env -S 'rm -rf x'": [
+    "rm -rf x"
+  ],
+  "/usr/bin/env rm -rf x": [
+    "env rm -rf x",
+    "rm -rf x"
+  ],
+  "sudo -u root FOO=1 rm -rf x": [
+    "rm -rf x"
+  ],
+  "xargs -0 -P 4 rm -rf": [
+    "rm -rf"
+  ],
+  "xargs -I {} rm -rf {}": [
+    "rm -rf {}"
+  ],
+  "xargs -J % rm -rf %": [
+    "rm -rf %"
+  ],
+  "nohup nice -n 5 FOO=1 /bin/rm -rf x": [
+    "nice -n 5 FOO=1 /bin/rm -rf x",
+    "FOO=1 /bin/rm -rf x",
+    "/bin/rm -rf x",
+    "rm -rf x"
+  ]
+}

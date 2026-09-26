@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .common import (
-    DecodedInspector,
     ProtocolShapeError,
-    strings,
     structural_summary,
 )
 from .openai import ChatRequest, JsonEvent
@@ -70,37 +68,30 @@ class OpenCodeEvent(JsonEvent):
         return events
 
 
-def decode_skill_catalog(output: str) -> DecodedInspector[list[dict[str, Any]]]:
-    try:
-        value = json.loads(output)
-    except json.JSONDecodeError as error:
-        raise ProtocolShapeError("invalid OpenCode skill inspector JSON") from error
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
-        raise ProtocolShapeError(
-            f"unknown OpenCode skill inspector envelope: {structural_summary(value)}"
-        )
-    return DecodedInspector(
-        value,
-        tuple(strings(value, channel="skill_catalog", source_path="$")),
-    )
-
-
-def decode_config(output: str) -> DecodedInspector[dict[str, Any]]:
+def decode_config_entries(output: str) -> tuple[dict[str, Any], ...]:
+    """Decode `debug config`: documents and directories, lowest priority first."""
     try:
         value = json.loads(output)
     except json.JSONDecodeError as error:
         raise ProtocolShapeError("invalid OpenCode config inspector JSON") from error
-    if not isinstance(value, dict) or not isinstance(value.get("permission"), dict):
-        raise ProtocolShapeError(
-            f"unknown OpenCode config inspector envelope: {structural_summary(value)}"
-        )
-    return DecodedInspector(
-        value,
-        tuple(
-            strings(
-                value["permission"],
-                channel="permission",
-                source_path="$.permission",
+    match value:
+        case [*entries] if all(
+            isinstance(entry, dict)
+            and (
+                (
+                    entry.get("type") == "document"
+                    and isinstance(entry.get("info"), dict)
+                )
+                or (
+                    entry.get("type") == "directory"
+                    and isinstance(entry.get("path"), str)
+                )
             )
-        ),
-    )
+            for entry in entries
+        ):
+            return tuple(entries)
+        case _:
+            raise ProtocolShapeError(
+                "unknown OpenCode config inspector envelope: "
+                f"{structural_summary(value)}"
+            )

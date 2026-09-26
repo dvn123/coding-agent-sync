@@ -42,7 +42,7 @@ from capabilities.targets.cursor_desktop_static import (
         ),
         pytest.param(
             DESKTOP_BUNDLE,
-            ("SubmittedCustomMode", 'x!=="customModes"', "Export Custom Modes"),
+            ("SubmittedCustomMode", "Search custom modes", "Export Custom Modes"),
             marks=pytest.mark.capability_case("cursor-desktop.custom-modes"),
             id="custom-modes",
         ),

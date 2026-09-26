@@ -61,6 +61,12 @@ def display_pointer(pointer: Pointer) -> str:
     )
 
 
+def touches(left: Pointer, right: Pointer) -> bool:
+    """Whether one pointer is a prefix of the other."""
+    shared = min(len(left), len(right))
+    return left[:shared] == right[:shared]
+
+
 @dataclass(frozen=True)
 class Operation:
     kind: OperationKind

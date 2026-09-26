@@ -34,7 +34,8 @@ under pointer ownership.
 
 The CLI's `approvalMode` carries the policy's `unmatched` decision:
 `allowlist` for `ask`, `unrestricted` for `allow`. The third enum value,
-`manual`, prompts for everything and has no portable spelling. `unrestricted`
+`auto-review`, hands unlisted commands to a model classifier and has no
+portable spelling. `unrestricted`
 waives the allowlist but not `permissions.deny`, which the
 `cursor-agent.config` probe pins, so the CLI's guards keep binding.
 

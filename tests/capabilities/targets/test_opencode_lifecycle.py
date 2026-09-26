@@ -5,7 +5,6 @@ import contextlib
 import json
 import os
 import signal
-import socket
 import stat
 import subprocess
 import sys
@@ -14,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pytest
@@ -27,18 +26,20 @@ from capabilities.harness import (
     run_probe,
 )
 from capabilities.model import CheckResult
-from capabilities.protocols.openai import ToolResponder, openai_sse
+from capabilities.protocols.openai import ToolResponder, openai_sse, tool_call_sse
 from capabilities.protocols.opencode import OpenCodeRequest
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.opencode import config as opencode_config
-from capabilities.targets.opencode import environment
+from capabilities.targets.opencode import environment, free_port
 
 PLUGIN_SYSTEM = "OPENCODE_PLUGIN_SYSTEM_HOOK_59f42e"
 REFERENCE_DESCRIPTION = "OPENCODE_GIT_REFERENCE_DESCRIPTION_768cda"
 REFERENCE_BODY = "OPENCODE_GIT_REFERENCE_BODY_ae92c1"
 FORMATTER_BODY = "OPENCODE_FORMATTER_BODY_c491d7"
 COMPACTION_SUMMARY = "OPENCODE_COMPACTION_SUMMARY_eb9d20"
+COMPACTION_PROMPT = "into a structured summary"
+COMPACTION_CONTEXT = 50_000
 
 
 def executable(path: Path, body: str) -> None:
@@ -68,16 +69,6 @@ class LocalRuntime:
     stub: RecordedServer
     env: dict[str, str]
     reference_checkout: Path
-
-
-def offline_plugin_dependencies(paths: Paths) -> None:
-    config = paths.config / "opencode"
-    (config / "node_modules").mkdir(parents=True)
-    dependency = {"@opencode-ai/plugin": "*"}
-    (config / "package.json").write_text(json.dumps({"dependencies": dependency}))
-    (config / "package-lock.json").write_text(
-        json.dumps({"packages": {"": {"dependencies": dependency}}})
-    )
 
 
 def git_reference(paths: Paths, git: str, env: dict[str, str]) -> tuple[Path, Path]:
@@ -120,7 +111,6 @@ def local_runtime(
     sandbox = require_command("sandbox-exec")
     paths = Paths.create(tmp_path_factory.mktemp("opencode-lifecycle").resolve())
     (paths.work / ".git").mkdir()
-    offline_plugin_dependencies(paths)
     base_env = environment(
         paths,
         paths.root / "pending.json",
@@ -166,7 +156,6 @@ def local_runtime(
         paths,
         config_path,
         f"{Path(git).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
-        OPENCODE_DISABLE_DEFAULT_PLUGINS="true",
         OPENCODE_REPO_CLONE_GITHUB_BASE_URL=f"{remotes.as_uri()}/",
     )
     value = LocalRuntime(
@@ -191,7 +180,7 @@ def observe_local(runtime: LocalRuntime, _name: str) -> CheckResult:
             "Reply with lifecycle probe complete.",
             "--title",
             "capability lifecycle probe",
-            "--pure",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -261,17 +250,23 @@ def plugin_runtime(
     opencode, sandbox = require_command("opencode"), require_command("sandbox-exec")
     paths = Paths.create(tmp_path_factory.mktemp("opencode-plugin-lifecycle").resolve())
     (paths.work / ".git").mkdir()
-    offline_plugin_dependencies(paths)
     marker = paths.root / "plugin-loaded"
-    plugin = paths.root / "probe-plugin.mjs"
-    plugin.write_text(
-        "export default async () => {\n"
-        f"  await Bun.write({json.dumps(str(marker))}, 'loaded')\n"
-        "  return {\n"
-        '    "experimental.chat.system.transform": async (_input, output) => {\n'
-        f"      output.system.unshift({json.dumps(PLUGIN_SYSTEM)})\n"
-        "    },\n"
-        "  }\n"
+    # 2.x plugins are `{id, setup}` definitions, a configured local plugin
+    # must be a directory, and the context hook replaces 1.x
+    # `experimental.chat.system.transform`.
+    plugin = paths.root / "probe-plugin"
+    plugin.mkdir()
+    (plugin / "index.js").write_text(
+        'import { writeFile } from "node:fs/promises"\n'
+        "export default {\n"
+        '  id: "capability.probe",\n'
+        "  async setup(ctx) {\n"
+        f"    await writeFile({json.dumps(str(marker))}, 'loaded')\n"
+        f"    const text = {json.dumps(PLUGIN_SYSTEM)}\n"
+        '    await ctx.session.hook("context", (event) => {\n'
+        "      event.system.push({ type: 'text', text })\n"
+        "    })\n"
+        "  },\n"
         "}\n"
     )
     state = ToolResponder(
@@ -291,14 +286,13 @@ def plugin_runtime(
         "plugin lifecycle",
         {"*": "allow"},
     )
-    config["plugin"] = [plugin.as_uri()]
+    config["plugins"] = [plugin.as_uri()]
     config_path = paths.root / "opencode.json"
     config_path.write_text(json.dumps(config))
     env = environment(
         paths,
         config_path,
         "/usr/bin:/bin:/usr/sbin:/sbin",
-        OPENCODE_DISABLE_DEFAULT_PLUGINS="true",
     )
     value = PluginRuntime(
         opencode,
@@ -323,6 +317,7 @@ def test_opencode_plugin_runtime(plugin_runtime: PluginRuntime) -> None:
             "Reply with plugin lifecycle complete.",
             "--title",
             "capability plugin lifecycle probe",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -402,7 +397,7 @@ def tool_runtime(
     lsp_server(lsp, lsp_marker)
     state = ToolResponder(
         "write",
-        {"filePath": str(target), "content": "before lifecycle\n"},
+        {"path": str(target), "content": "before lifecycle\n"},
         "tool-lifecycle-probe",
         "tool_lifecycle_probe",
         "tool lifecycle complete",
@@ -436,7 +431,6 @@ def tool_runtime(
         paths,
         config_path,
         "/usr/bin:/bin:/usr/sbin:/sbin",
-        OPENCODE_DISABLE_LSP_DOWNLOAD="true",
     )
     value = ToolRuntime(
         opencode,
@@ -461,7 +455,7 @@ def observe_tools(runtime: ToolRuntime, _name: str) -> CheckResult:
             "Call the write tool exactly as instructed by the model.",
             "--title",
             "capability tool lifecycle probe",
-            "--pure",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -472,11 +466,14 @@ def observe_tools(runtime: ToolRuntime, _name: str) -> CheckResult:
         timeout=30,
     )
     assert process.returncode == 0, process.stderr or process.stdout
+    written = runtime.target.is_file()
     return CheckResult(
         {
             "formatter-executed": runtime.formatter_marker.is_file()
             and FORMATTER_BODY in runtime.target.read_text(),
-            "lsp-initialized": runtime.lsp_marker.is_file(),
+            # 2.x keeps `lsp` configuration but runs no language servers, so
+            # a written file of the configured type never reaches one.
+            "lsp-not-started": written and not wait_for(runtime.lsp_marker, 2),
         },
         process.stdout,
     )
@@ -511,7 +508,7 @@ def test_opencode_formatter_runtime(tool_observation: CheckResult, check: str) -
 @pytest.mark.capability_live
 @pytest.mark.parametrize(
     ("tool_observation", "check"),
-    (pytest.param("tools", "lsp-initialized", id="lsp-initialized"),),
+    (pytest.param("tools", "lsp-not-started", id="lsp-not-started"),),
     indirect=("tool_observation",),
     scope="module",
 )
@@ -519,19 +516,12 @@ def test_opencode_lsp_runtime(tool_observation: CheckResult, check: str) -> None
     assert tool_observation.checks[check], tool_observation.detail
 
 
-def usage_sse(model: str, text: str, *, input_tokens: int, output_tokens: int) -> bytes:
-    prefix = openai_sse(
-        [
-            ({"role": "assistant", "content": text}, None),
-            ({}, "stop"),
-        ],
-        model,
-    ).decode()
+def with_usage(body: bytes, *, input_tokens: int, output_tokens: int) -> bytes:
     usage = {
         "id": "chatcmpl-capability",
         "object": "chat.completion.chunk",
         "created": 0,
-        "model": model,
+        "model": "compaction-probe",
         "choices": [],
         "usage": {
             "prompt_tokens": input_tokens,
@@ -539,34 +529,53 @@ def usage_sse(model: str, text: str, *, input_tokens: int, output_tokens: int) -
             "total_tokens": input_tokens + output_tokens,
         },
     }
-    return prefix.replace(
-        "data: [DONE]", f"data: {json.dumps(usage)}\n\ndata: [DONE]"
-    ).encode()
+    return body.replace(
+        b"data: [DONE]", f"data: {json.dumps(usage)}\n\ndata: [DONE]".encode()
+    )
+
+
+def text_sse(text: str, *, input_tokens: int, output_tokens: int) -> bytes:
+    return with_usage(
+        openai_sse(
+            [({"role": "assistant", "content": text}, None), ({}, "stop")],
+            "compaction-probe",
+        ),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 @dataclass(slots=True)
 class CompactionResponder:
+    fixture: Path
     requests: list[dict[str, Any]]
 
     def respond(self, request: dict[str, Any], _count: int) -> tuple[bytes, str]:
         self.requests.append(request)
         text = json.dumps(request.get("messages", []))
-        if "Create a new anchored summary" in text:
-            return usage_sse(
-                "compaction-probe",
-                COMPACTION_SUMMARY,
+        if COMPACTION_PROMPT in text:
+            # 2.x rejects a checkpoint without one of its template headings.
+            return text_sse(
+                f"## Objective\n- {COMPACTION_SUMMARY}",
                 input_tokens=100,
                 output_tokens=20,
             ), "text/event-stream"
         if len(self.requests) == 1:
-            return usage_sse(
-                "compaction-probe",
-                "initial response",
-                input_tokens=950,
+            # 2.x checks the window before each step, not after a final
+            # answer, so the overflowing response must lead to another step.
+            return with_usage(
+                tool_call_sse(
+                    "read",
+                    {"path": str(self.fixture)},
+                    called=False,
+                    model="compaction-probe",
+                    call_id="compaction_probe",
+                    completion="",
+                ),
+                input_tokens=COMPACTION_CONTEXT - 50,
                 output_tokens=100,
             ), "text/event-stream"
-        return usage_sse(
-            "compaction-probe",
+        return text_sse(
             "continued after compaction",
             input_tokens=100,
             output_tokens=20,
@@ -581,7 +590,9 @@ def test_opencode_compaction_runtime(
     opencode, sandbox = require_command("opencode"), require_command("sandbox-exec")
     paths = Paths.create(tmp_path_factory.mktemp("opencode-compaction").resolve())
     (paths.work / ".git").mkdir()
-    state = CompactionResponder([])
+    fixture = paths.work / "compaction.txt"
+    fixture.write_text("compaction fixture\n")
+    state = CompactionResponder(fixture, [])
     stub = recorded_server(request, state.respond)
     config = opencode_config(
         stub.base_url,
@@ -589,15 +600,13 @@ def test_opencode_compaction_runtime(
         "compaction",
         {"*": "allow"},
     )
+    # 2.x also estimates the window before the first step, so the context
+    # must fit the initial prompt for the reported usage to be what overflows.
     config["provider"]["test"]["models"]["compaction-probe"]["limit"] = {
-        "context": 1000,
+        "context": COMPACTION_CONTEXT,
         "output": 100,
     }
-    config["compaction"] = {
-        "auto": True,
-        "reserved": 100,
-        "tail_turns": 0,
-    }
+    config["compaction"] = {"auto": True, "buffer": 100}
     config_path = paths.root / "opencode.json"
     config_path.write_text(json.dumps(config))
     env = environment(paths, config_path, "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -611,7 +620,7 @@ def test_opencode_compaction_runtime(
             "Trigger the compaction lifecycle.",
             "--title",
             "capability compaction probe",
-            "--pure",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -623,23 +632,17 @@ def test_opencode_compaction_runtime(
     )
     assert process.returncode == 0, process.stderr or process.stdout
     payloads = [json.dumps(item) for item in state.requests]
-    assert len(payloads) >= 3 and any(
-        "Create a new anchored summary" in item for item in payloads
-    ), payloads
+    assert len(payloads) >= 3 and any(COMPACTION_PROMPT in item for item in payloads), (
+        payloads
+    )
     assert any(COMPACTION_SUMMARY in item for item in payloads[2:]), payloads
-
-
-def free_port() -> int:
-    with socket.socket() as server:
-        server.bind(("127.0.0.1", 0))
-        return int(server.getsockname()[1])
 
 
 @dataclass(frozen=True, slots=True)
 class ServerRuntime:
     process: subprocess.Popen[bytes]
     base_url: str
-    directory_query: str
+    directory: Path
     authorization: str
 
 
@@ -690,13 +693,12 @@ def start_server(
         seatbelt.command(
             opencode,
             "serve",
-            "--pure",
             "--hostname",
             "127.0.0.1",
             "--port",
             str(port),
             "--log-level",
-            "ERROR",
+            "error",
         ),
         cwd=paths.work,
         env=env,
@@ -705,12 +707,7 @@ def start_server(
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    return ServerRuntime(
-        process,
-        f"http://127.0.0.1:{port}",
-        f"directory={quote(str(paths.work), safe='')}",
-        authorization,
-    )
+    return ServerRuntime(process, f"http://127.0.0.1:{port}", paths.work, authorization)
 
 
 def wait_for_server(runtime: ServerRuntime, timeout: float = 10) -> str | None:
@@ -720,12 +717,16 @@ def wait_for_server(runtime: ServerRuntime, timeout: float = 10) -> str | None:
         if runtime.process.poll() is not None:
             return f"exited with status {runtime.process.returncode}"
         try:
-            http_json(runtime, "/global/health")
+            http_json(runtime, "/api/info")
             return None
         except (URLError, OSError) as error:
             last_error = str(error)
             time.sleep(0.05)
     return f"did not become ready within {timeout:g}s ({last_error})"
+
+
+def location(runtime: ServerRuntime) -> str:
+    return urlencode({"location[directory]": str(runtime.directory)})
 
 
 @pytest.fixture(scope="module")
@@ -736,19 +737,18 @@ def server_runtime(
     paths = Paths.create(tmp_path_factory.mktemp("opencode-server").resolve())
     (paths.work / ".git").mkdir()
     config_path = paths.root / "opencode.json"
-    config_path.write_text(json.dumps({"autoupdate": False}))
-    username, password = "probe-user", "probe-password"
+    config_path.write_text(json.dumps({"update": "disable"}))
+    # 2.x fixes the Basic auth username; only the password is configurable.
+    password = "probe-password"
     env = environment(
         paths,
         config_path,
         "/usr/bin:/bin:/usr/sbin:/sbin",
-        OPENCODE_SERVER_USERNAME=username,
-        OPENCODE_SERVER_PASSWORD=password,
-        OPENCODE_DISABLE_DEFAULT_PLUGINS="true",
+        OPENCODE_PASSWORD=password,
     )
     seatbelt = loopback_seatbelt(sandbox)
     authorization = (
-        "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+        "Basic " + base64.b64encode(f"opencode:{password}".encode()).decode()
     )
     failures = []
     for attempt in range(1, 3):
@@ -771,16 +771,24 @@ def server_runtime(
 @pytest.mark.capability_live
 def test_opencode_server_auth(server_runtime: ServerRuntime) -> None:
     with pytest.raises(HTTPError) as error:
-        http_json(server_runtime, "/global/health", authorized=False)
+        http_json(server_runtime, "/api/info", authorized=False)
     assert error.value.code == 401
-    assert http_json(server_runtime, "/global/health")["healthy"] is True
+    assert http_json(server_runtime, "/api/info")["pid"] == server_runtime.process.pid
 
 
 @pytest.mark.capability_case("opencode.api-catalog")
 @pytest.mark.capability_live
 def test_opencode_api_catalog(server_runtime: ServerRuntime) -> None:
-    agents = http_json(server_runtime, f"/agent?{server_runtime.directory_query}")
-    assert {"build", "plan"} <= {item["name"] for item in agents}
+    # `agent.list` answers before plugin activation registers the built-in
+    # agents, so a cold location first reports an empty catalog.
+    deadline = time.monotonic() + 20
+    while True:
+        agents = http_json(server_runtime, f"/api/agent?{location(server_runtime)}")
+        names = {item["id"] for item in agents["data"]}
+        if {"build", "plan"} <= names or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    assert {"build", "plan"} <= names, agents
 
 
 @pytest.mark.capability_case("opencode.api-sessions")
@@ -788,9 +796,12 @@ def test_opencode_api_catalog(server_runtime: ServerRuntime) -> None:
 def test_opencode_api_sessions(server_runtime: ServerRuntime) -> None:
     created = http_json(
         server_runtime,
-        f"/session?{server_runtime.directory_query}",
+        "/api/session",
         method="POST",
-        payload={},
-    )
-    sessions = http_json(server_runtime, f"/session?{server_runtime.directory_query}")
+        payload={"location": {"directory": str(server_runtime.directory)}},
+    )["data"]
+    sessions = http_json(
+        server_runtime,
+        "/api/session?" + urlencode({"directory": str(server_runtime.directory)}),
+    )["data"]
     assert created["id"] in {item["id"] for item in sessions}

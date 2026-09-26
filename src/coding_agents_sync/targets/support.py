@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import stat
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +10,8 @@ from pydantic import BaseModel, ValidationError
 
 from ..io import MANAGED_MANIFEST
 from ..patches import load_patch, merge_patches
-from ..plan import Diagnostic, NativePatch, OwnedFile, OwnedTree
-from ..sources import TargetBlock
+from ..plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
+from ..sources import PermissionSource, TargetBlock
 
 
 def one_of(field: str, value: str | None, allowed: frozenset[str]) -> str | None:
@@ -89,6 +89,36 @@ def unhandled_target_block(
             Diagnostic("error", f"{target} raw fields are not valid here", source)
         )
     return tuple(diagnostics)
+
+
+def declared_trees(
+    root: Path, roots: Iterable[tuple[str, ManifestMode]]
+) -> list[OwnedTree]:
+    """One manifest-owned tree per managed directory below `root`."""
+    return [
+        OwnedTree(
+            root / name, manifest_root=root / name, manifest_mode=mode, declaration=True
+        )
+        for name, mode in roots
+    ]
+
+
+def command_target_diagnostics(
+    permissions: PermissionSource,
+    target: str,
+    required: Callable[[frozenset[str]], set[str]] = lambda _intent: set(),
+) -> tuple[Diagnostic, ...]:
+    """Check each command fragment's target block; `required` maps the
+    fragment's buckets to the omits the target owes for them."""
+    return tuple(
+        diagnostic
+        for path, targets, intent in permissions.command_targets
+        for value in (targets.root.get(target, TargetBlock()),)
+        for diagnostic in (
+            *unhandled_target_block(path, target, value),
+            *omissions(path, target, value, required(intent)),
+        )
+    )
 
 
 def strict_native[T: BaseModel](

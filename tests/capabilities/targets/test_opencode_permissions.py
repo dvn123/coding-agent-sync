@@ -22,12 +22,11 @@ from capabilities.protocols.openai import ToolResponder
 from capabilities.protocols.opencode import (
     OpenCodeEvent,
     ToolUseObservation,
-    decode_config,
 )
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.opencode import config as opencode_config
-from capabilities.targets.opencode import environment, supported
+from capabilities.targets.opencode import environment
 
 RECORDER = "blackbox-recorder"
 ALLOWED_COMMAND = f"{RECORDER} allowed"
@@ -36,7 +35,7 @@ WRAPPED_COMMAND = f"timeout 30 {RECORDER} wrapped"
 NEAR_PREFIX_COMMAND = f"{RECORDER}x near-prefix"
 OPTC = "blackbox-opt"
 CHAIN_ALLOW_PATTERN = f"{RECORDER} ok*"
-DENIAL_TEXT = "prevents you from using this specific tool call"
+DENIAL_TEXT = "Permission denied: "
 RECORDER_ARGUMENT = re.compile(rf"{RECORDER} ([\w-]+)")
 
 # Every chain pairs an allowed segment with a denied one and repeats the
@@ -161,7 +160,7 @@ def runtime(
     external_denied.write_text("blocked\n")
     external_allowed.write_text("allowed\n")
     state = ToolResponder(
-        "bash",
+        "shell",
         {},
         "permission-probe",
         "call_permission_probe",
@@ -185,15 +184,22 @@ def runtime(
             f"{OPTC} * -c *": "deny",
             f"{OPTC} * push *": "deny",
         },
+        # A file inside the session directory is checked by its relative path,
+        # and `**/` compiles to a regex that needs a `/`, so `**/.env*` alone
+        # lets the root `.env` through; the bare spelling covers it.
         "read": {
             "*": "allow",
             "**/.env*": "deny",
+            ".env*": "deny",
             "**/.env.example": "allow",
+            ".env.example": "allow",
         },
         "edit": {
             "*": "allow",
             "**/.env*": "deny",
+            ".env*": "deny",
             "**/.env.example": "allow",
+            ".env.example": "allow",
         },
         "external_directory": {
             "*": "allow",
@@ -243,7 +249,7 @@ def run_tool(runtime: Runtime, tool: str, arguments: dict[str, Any]) -> ToolResu
             runtime.executable,
             "run",
             prompt,
-            "--pure",
+            "--standalone",
             "--format",
             "json",
             "--model",
@@ -266,81 +272,58 @@ def run_tool(runtime: Runtime, tool: str, arguments: dict[str, Any]) -> ToolResu
 
 
 def denied(result: ToolResult, permission: str) -> bool:
-    if result.observation is None:
-        return False
-    error = result.observation.error
+    """A denial names only the permission; 1.x also serialized every rule."""
     return (
-        result.observation.status == "error"
-        and DENIAL_TEXT in error
-        and f'"permission":"{permission}"' in error
-        and '"action":"deny"' in error
+        result.observation is not None
+        and result.observation.status == "error"
+        and result.observation.error == f"{DENIAL_TEXT}{permission}"
     )
 
 
 def observe(runtime: Runtime, name: str) -> CheckResult:
-    if name == "config":
-        process = supported(
-            "the `debug config` inspector",
-            run,
-            *runtime.seatbelt.command(runtime.executable, "debug", "config", "--pure"),
-            cwd=runtime.paths.work,
-            env=runtime.env,
-            timeout=30,
-        )
-        resolved = decode_config(process.stdout)
-        return CheckResult(
-            {
-                "resolved-deny": resolved.raw["permission"]["bash"][f"{RECORDER} *"]
-                == "deny"
-            },
-            resolved.text("permission"),
-        )
-
     scenarios = {
         "allowed": (
-            "bash",
-            {"command": ALLOWED_COMMAND, "description": "permission probe"},
+            "shell",
+            {"command": ALLOWED_COMMAND},
         ),
         "denied-bash": (
-            "bash",
-            {"command": DENIED_COMMAND, "description": "permission probe"},
+            "shell",
+            {"command": DENIED_COMMAND},
         ),
         "near-prefix": (
-            "bash",
-            {"command": NEAR_PREFIX_COMMAND, "description": "permission probe"},
+            "shell",
+            {"command": NEAR_PREFIX_COMMAND},
         ),
         "wrapped": (
-            "bash",
-            {"command": WRAPPED_COMMAND, "description": "permission probe"},
+            "shell",
+            {"command": WRAPPED_COMMAND},
         ),
         "probe-opt-plain": (
-            "bash",
-            {"command": f"{OPTC} -C /tmp status optplain", "description": "probe"},
+            "shell",
+            {"command": f"{OPTC} -C /tmp status optplain"},
         ),
         "probe-opt-broad": (
-            "bash",
-            {"command": f"{OPTC} other optbroad", "description": "probe"},
+            "shell",
+            {"command": f"{OPTC} other optbroad"},
         ),
         "probe-opt-smuggle-flag": (
-            "bash",
+            "shell",
             {
                 "command": f"{OPTC} -C /tmp -c core.pager=evil status optflag",
-                "description": "probe",
             },
         ),
         "probe-opt-smuggle-sub": (
-            "bash",
+            "shell",
             {
                 "command": f"{OPTC} -C /tmp push origin status optsub",
-                "description": "probe",
             },
         ),
-        "denied-read": ("read", {"filePath": str(runtime.secret)}),
-        "allowed-read": ("read", {"filePath": str(runtime.example)}),
+        "denied-read": ("read", {"path": str(runtime.secret)}),
+        "allowed-read": ("read", {"path": str(runtime.example)}),
         "denied-edit": (
             "edit",
             {
-                "filePath": str(runtime.secret),
+                "path": str(runtime.secret),
                 "oldString": "SECRET=blocked",
                 "newString": "SECRET=edited",
             },
@@ -348,21 +331,21 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
         "allowed-edit": (
             "edit",
             {
-                "filePath": str(runtime.example),
+                "path": str(runtime.example),
                 "oldString": "EXAMPLE=allowed",
                 "newString": "EXAMPLE=edited",
             },
         ),
         "denied-external": (
             "read",
-            {"filePath": str(runtime.external_denied)},
+            {"path": str(runtime.external_denied)},
         ),
         "allowed-external": (
             "read",
-            {"filePath": str(runtime.external_allowed)},
+            {"path": str(runtime.external_allowed)},
         ),
     } | {
-        chain: ("bash", {"command": command, "description": "permission probe"})
+        chain: ("shell", {"command": command})
         for chain, (command, _, _) in CHAINS.items()
     }
     if name == "allowed-edit":
@@ -382,7 +365,7 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             {
                 f"{name}-outcome": completed
                 if outcome == "completed"
-                else denied(result, "bash"),
+                else denied(result, "shell"),
                 f"{name}-markers": ran == frozenset(executed),
             },
             f"{observation} ran={sorted(ran)}",
@@ -393,7 +376,7 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             "allowed-executed": (runtime.recorder_dir / "allowed").exists(),
         },
         "denied-bash": {
-            "denied-bash": denied(result, "bash"),
+            "denied-bash": denied(result, "shell"),
             "denied-not-executed": not (runtime.recorder_dir / "denied").exists(),
         },
         "near-prefix": {
@@ -411,19 +394,19 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             "probe-opt-plain-executed": (runtime.recorder_dir / "optplain").exists(),
         },
         "probe-opt-broad": {
-            "probe-opt-broad-denied": denied(result, "bash"),
+            "probe-opt-broad-denied": denied(result, "shell"),
             "probe-opt-broad-not-executed": not (
                 runtime.recorder_dir / "optbroad"
             ).exists(),
         },
         "probe-opt-smuggle-flag": {
-            "probe-opt-smuggle-flag-denied": denied(result, "bash"),
+            "probe-opt-smuggle-flag-denied": denied(result, "shell"),
             "probe-opt-smuggle-flag-not-executed": not (
                 runtime.recorder_dir / "optflag"
             ).exists(),
         },
         "probe-opt-smuggle-sub": {
-            "probe-opt-smuggle-sub-denied": denied(result, "bash"),
+            "probe-opt-smuggle-sub-denied": denied(result, "shell"),
             "probe-opt-smuggle-sub-not-executed": not (
                 runtime.recorder_dir / "optsub"
             ).exists(),
@@ -450,7 +433,6 @@ observation = cached_scenario_fixture(observe)
 
 
 EXPECTATIONS = (
-    ("config", "resolved-deny"),
     ("allowed", "allowed-completed"),
     ("allowed", "allowed-executed"),
     ("denied-bash", "denied-bash"),

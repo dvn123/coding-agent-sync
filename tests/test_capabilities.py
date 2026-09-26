@@ -91,7 +91,6 @@ def test_opencode_compiler_evidence_uses_generated_artifact_surfaces() -> None:
     assert case.evidence_kind is EvidenceKind.COMPILER_E2E
     assert case.surfaces == (
         "opencode.global-instructions",
-        "opencode.instructions-config",
         "opencode.agents",
     )
 

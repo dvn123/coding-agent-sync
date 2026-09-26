@@ -43,8 +43,13 @@ V4_PORTABLE_ADDED = {
     ".codex/.coding-agents-managed.json",
     ".config/opencode/.coding-agents-managed.json",
     ".cursor/.coding-agents-managed.json",
+    # Shell denies rely on the bundled plugin to see through wrappers.
+    ".config/opencode/plugins/opencode-unwrap.js",
 }
 V4_PORTABLE_REMOVED = {
+    # Claude merged commands into skills; the fixture command is OpenCode-only.
+    ".claude/commands/.coding-agents-managed.json",
+    ".claude/commands/sample.md",
     ".codex/skills/source-command-sample/SKILL.md",
     ".cursor/agents/.coding-agents-managed.json",
     ".cursor/agents/sample.md",
@@ -52,12 +57,18 @@ V4_PORTABLE_REMOVED = {
 V4_PORTABLE_CHANGED = {
     ".claude/agents/.coding-agents-managed.json",
     ".claude/agents/sample.md",
-    ".claude/commands/.coding-agents-managed.json",
-    ".claude/commands/sample.md",
+    # Claude skills gained `license` and `metadata`.
+    ".claude/skills/.coding-agents-managed.json",
+    ".claude/skills/sample/SKILL.md",
     ".codex/skills/.coding-agents-managed.json",
     ".codex/skills/sample/SKILL.md",
+    # OpenCode 2 ignores `instructions`, so rules join the global AGENTS.md.
+    ".config/opencode/AGENTS.md",
     ".config/opencode/agents/.coding-agents-managed.json",
     ".config/opencode/agents/sample.md",
+    # OpenCode 2 renamed `subtask` to `subagent`.
+    ".config/opencode/commands/.coding-agents-managed.json",
+    ".config/opencode/commands/sample.md",
     ".cursor/rules/.coding-agents-managed.json",
     ".cursor/rules/always.mdc",
     ".cursor/rules/coding-agents-global.mdc",
@@ -154,7 +165,7 @@ def test_isolated_home_matches_913bd2d_characterization(tmp_path: Path) -> None:
         for path, hash_ in baseline_portable.items()
         if path not in V4_PORTABLE_CHANGED | V4_PORTABLE_REMOVED
     }
-    for path in V4_PORTABLE_ADDED:
+    for path in V4_PORTABLE_ADDED - {".config/opencode/plugins/opencode-unwrap.js"}:
         assert json.loads((home / path).read_text()) == {"version": 1, "entries": {}}
 
     baseline_native = BASELINE["native_semantic_sha256"]

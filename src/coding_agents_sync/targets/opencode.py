@@ -1,24 +1,24 @@
 from __future__ import annotations
 
+import fnmatch
 import functools
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import AliasChoices, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, field_validator
 
 from ..models import SyncContext
 from ..patches import (
     Patch,
     PatchError,
-    Pointer,
     display_pointer,
+    touches,
     validate_generated_conflicts,
 )
 from ..plan import (
     Diagnostic,
-    ManifestMode,
     NativePatch,
     NativeValue,
     OwnedFile,
@@ -26,23 +26,29 @@ from ..plan import (
     Plan,
 )
 from ..sources import (
-    RuleSource,
+    PermissionSource,
     SkillSource,
     SourceBundle,
     StrictModel,
     resolve_model_policy,
 )
 from .permissions import (
+    bucket_entries,
     bucket_patterns,
-    external_directory_map,
+    denied_paths,
+    external_directory_rules,
     fold_edit_write,
     glob_variants,
+    opencode_paths,
     secret_name_variants,
+    wrapper_prefixes,
 )
 from .support import (
     applies_to,
     block,
     bundled_files,
+    command_target_diagnostics,
+    declared_trees,
     frontmatter,
     markdown,
     native_patch,
@@ -52,10 +58,6 @@ from .support import (
     strict_native,
     unhandled_target_block,
 )
-
-
-class OpenCodeRuleNative(StrictModel):
-    instructions: str | None = None
 
 
 class OpenCodeSkillNative(StrictModel):
@@ -74,77 +76,61 @@ class OpenCodeCommandNative(StrictModel):
     name: str | None = None
     description: str | None = None
     agent: str | None = None
-    subtask: bool | None = None
+    subagent: bool | None = None
     model: str | None = None
 
 
-# Agent frontmatter is parsed against ConfigAgentV1 in
-# packages/core/src/v1/config/agent.ts, not the looser runtime Agent.Info.
-# Its rest record hoists every unknown key into `options`, which is how a
-# top-level `reasoningEffort` reaches the provider, so unknown keys stay
-# unvalidated by design. `mode` and permission actions are closed sets, and
-# `color` is a hex code or a theme name rather than a free string.
+# Agent frontmatter holds only the native ConfigAgent.Info fields
+# (packages/schema/src/config/agent.ts); any other key sends the whole file
+# through OpenCode's v1 migration. `mode` is a closed set, and `color` is hex
+# only: the migration turns anything else into #aaaaaa.
 OPENCODE_AGENT_MODES = frozenset({"subagent", "primary", "all"})
-OPENCODE_PERMISSION_EFFECTS = frozenset({"allow", "ask", "deny"})
-OPENCODE_THEME_COLORS = frozenset(
-    {"primary", "secondary", "accent", "success", "warning", "error", "info"}
-)
 OPENCODE_HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+# Claude's agent color names, so one portable color serves both targets.
+PORTABLE_COLORS = {
+    "red": "#ef4444",
+    "orange": "#f97316",
+    "yellow": "#eab308",
+    "green": "#22c55e",
+    "cyan": "#06b6d4",
+    "blue": "#3b82f6",
+    "purple": "#a855f7",
+    "pink": "#ec4899",
+}
 
 
 def _opencode_color(value: object) -> bool:
-    return isinstance(value, str) and (
-        value in OPENCODE_THEME_COLORS or bool(OPENCODE_HEX_COLOR.fullmatch(value))
-    )
+    return isinstance(value, str) and bool(OPENCODE_HEX_COLOR.fullmatch(value))
 
 
-def _permission_effects(value: Any, path: str) -> None:
-    """Check every leaf of a permission ruleset, which may nest a path map."""
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            _permission_effects(nested, f"{path}.{key}")
-    elif value not in OPENCODE_PERMISSION_EFFECTS:
-        raise ValueError(
-            f"permission {path} must be one of "
-            f"{sorted(OPENCODE_PERMISSION_EFFECTS)}, got {value!r}"
-        )
+class OpenCodeRule(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    action: str
+    resource: str = "*"
+    effect: Literal["allow", "ask", "deny"]
 
 
 class OpenCodeAgentNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: str | None = None
     description: str | None = None
+    # `provider/model`, optionally `#variant`.
     model: str | None = None
-    provider: str | None = None
-    color: str | None = None
-    reasoning_effort: str | None = Field(
-        None,
-        serialization_alias="reasoningEffort",
-        validation_alias=AliasChoices("reasoningEffort", "reasoning_effort"),
-    )
-    permission: dict[str, Any] | None = None
+    # Provider request extras: sampling and `reasoningEffort` go in `body`.
+    request: dict[str, Any] | None = None
     mode: str | None = None
-
-    steps: int | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    disable: bool | None = None
     hidden: bool | None = None
+    color: str | None = None
+    steps: int | None = None
+    disabled: bool | None = None
+    # Appended after the global rules, so an agent's rules win.
+    permissions: list[OpenCodeRule] | None = None
 
     @field_validator("mode")
     @classmethod
     def _validate_mode(cls, value: str | None) -> str | None:
         return one_of("mode", value, OPENCODE_AGENT_MODES)
-
-    @field_validator("permission")
-    @classmethod
-    def _validate_permission(
-        cls, value: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
-        if value is not None:
-            _permission_effects(value, "")
-        return value
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
@@ -158,13 +144,42 @@ def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
     )
 
 
-def _instruction(rule: RuleSource, home: Path, native: OpenCodeRuleNative) -> str:
-    if native.instructions:
-        return native.instructions
-    try:
-        return f"~/{rule.path.relative_to(home)}"
-    except ValueError:
-        return str(rule.path)
+# OpenCode matches a shell rule against a command's raw text. The bundled
+# opencode-unwrap plugin denies a command when the rules deny it with its
+# assignments, program path, or these wrappers peeled, so deny copies behind
+# them are dead. It carries over only a deny, so asks keep their copies, as
+# does a declared wrapper outside this list.
+UNWRAP_PLUGIN = Path(__file__).with_name("opencode-unwrap.js")
+UNWRAP_PEELED = frozenset(
+    prefix
+    for wrapper in (
+        "builtin",
+        "command",
+        "doas",
+        "env",
+        "exec",
+        "nice",
+        "nocorrect",
+        "noglob",
+        "nohup",
+        "stdbuf",
+        "sudo",
+        "time",
+        "timeout",
+        "xargs",
+    )
+    for prefix in wrapper_prefixes(wrapper)
+)
+
+
+def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str]]:
+    return bucket_entries(
+        permissions,
+        functools.partial(glob_variants, optional_trailing=True),
+        UNWRAP_PEELED,
+        peels_ask=False,
+        resolves_paths=True,
+    )
 
 
 def _permissions(
@@ -172,67 +187,37 @@ def _permissions(
 ) -> tuple[NativeValue, ...]:
     if not (permissions := sources.permissions):
         return ()
-    buckets = bucket_patterns(
-        permissions,
-        functools.partial(glob_variants, optional_trailing=True),
-        lambda wrapper: f"{wrapper} *",
-    )
-    bash: dict[str, str] = {"*": permissions.unmatched}
+    buckets = bucket_patterns(shell_entries(permissions))
+    denied = [
+        variant
+        for path in denied_paths(permissions)
+        for variant in opencode_paths(path)
+    ]
+    rules: list[dict[str, str]] = []
 
-    def append(patterns: Iterable[str], decision: str) -> None:
-        for pattern in patterns:
-            bash.pop(pattern, None)
-            bash[pattern] = decision
-
-    append(buckets["allow"], "allow")
-    append(buckets["ask"], "ask")
-    append(secret_name_variants(permissions.secret_names), "ask")
-    # Guards land as `ask`, so this map never holds a bash `deny`. OpenCode's
-    # PermissionDeniedError embeds the serialized ruleset filtered only by
-    # permission *type*, so a single bash denial ships every bash rule to the
-    # model -- 1.3 MB against a real corpus. Ordering still binds the guards
-    # above the blanket wrapper allows. See docs/targets/opencode.md; upstream
-    # is anomalyco/opencode packages/core/src/v1/permission.ts:21-27 (dev) and
-    # packages/opencode/src/permission/index.ts:97-103 (2.0), both unfixed at
-    # 1.18.26.
-    append(buckets["deny"], "ask")
-    values = [NativeValue("opencode", config, ("permission", "bash"), bash)]
-    # No `write` key: OpenCode's write tool asks for its `edit` permission, so
-    # a `permission.write` entry would parse into the schema's rest record and
-    # never be consulted.
-    for tool in ("read", "edit"):
-        decision = tools.get(tool)
-        if decision is not None or permissions.secret_paths:
-            values.append(
-                NativeValue(
-                    "opencode",
-                    config,
-                    ("permission", tool),
-                    {
-                        **({"*": decision} if decision else {}),
-                        **dict.fromkeys(permissions.secret_paths, "deny"),
-                    },
-                )
-            )
-    values.extend(
-        NativeValue("opencode", config, ("permission", tool), decision)
-        for tool in ("webfetch", "websearch")
-        if (decision := permissions.tools.get(tool)) is not None
-    )
-    if permissions.workspace.allow or permissions.workspace.ask:
-        values.append(
-            NativeValue(
-                "opencode",
-                config,
-                ("permission", "external_directory"),
-                external_directory_map(permissions.workspace),
-            )
+    def add(action: str, effect: str, resources: Iterable[str]) -> None:
+        rules.extend(
+            {"action": action, "resource": resource, "effect": effect}
+            for resource in resources
         )
-    return tuple(values)
 
-
-def _touches(left: Pointer, right: Pointer) -> bool:
-    return left[: min(len(left), len(right))] == right[: min(len(left), len(right))]
+    # OpenCode applies the last matching rule, so each action's catch-all
+    # precedes its narrower rules, and every guard follows every allow.
+    add("shell", permissions.unmatched, ["*"])
+    for bucket in ("allow", "ask", "deny"):
+        add("shell", bucket, buckets[bucket])
+    add("shell", "deny", secret_name_variants(permissions.secret_names))
+    # `edit` also gates OpenCode's write and patch tools.
+    for tool in ("read", "edit"):
+        if decision := tools.get(tool):
+            add(tool, decision, ["*"])
+        add(tool, "deny", denied)
+    for tool in ("webfetch", "websearch"):
+        if decision := permissions.tools.get(tool):
+            add(tool, decision, ["*"])
+    for effect, resources in external_directory_rules(permissions.workspace):
+        add("external_directory", effect, resources)
+    return (NativeValue("opencode", config, ("permissions",), rules),)
 
 
 def _validate_patches(
@@ -242,10 +227,26 @@ def _validate_patches(
     for patch in patches:
         validate_generated_conflicts(Patch(patch.operations), values)
         for operation in patch.operations:
-            if _touches(operation.pointer, ("permission", "bash")):
+            # The legacy map migrates ahead of the native list, so a patch may
+            # only retire it. Contributions append after every generated rule;
+            # command policy has one writer, so none of them may be a shell rule.
+            if touches(operation.pointer, ("permission",)):
+                if operation.kind != "delete":
+                    raise PatchError(
+                        "opencode patch may only delete the legacy "
+                        f"{display_pointer(operation.pointer)}; use /permissions"
+                    )
+            elif touches(operation.pointer, ("permissions",)) and not (
+                operation.kind == "extend"
+                and operation.pointer == ("permissions",)
+                and all(
+                    not fnmatch.fnmatchcase("shell", rule.get("action", ""))
+                    for rule in operation.value
+                )
+            ):
                 raise PatchError(
-                    "opencode patch cannot contribute command permissions at "
-                    f"{display_pointer(operation.pointer)}"
+                    "opencode patch may only extend /permissions, and never "
+                    "with shell rules"
                 )
 
 
@@ -253,54 +254,27 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.opencode
     config = root / "opencode.json"
     files: list[OwnedFile] = []
-    managed_roots: tuple[tuple[str, ManifestMode], ...] = (
-        ("skills", "dir"),
-        ("commands", "file"),
-        ("agents", "file"),
+    trees = declared_trees(
+        root, (("skills", "dir"), ("commands", "file"), ("agents", "file"))
     )
-    trees = [
-        OwnedTree(
-            root / name, manifest_root=root / name, manifest_mode=mode, declaration=True
-        )
-        for name, mode in managed_roots
-    ]
     diagnostics = []
-    if sources.globals:
-        global_source = sources.globals[0]
-        if applies_to(global_source, "opencode"):
-            value = block(global_source, "opencode")
-            diagnostics.extend(
-                unhandled_target_block(global_source.path, "opencode", value)
-            )
-            diagnostics.extend(omissions(global_source.path, "opencode", value, set()))
-            files.append(
-                OwnedFile(
-                    root / "AGENTS.md",
-                    (global_source.body.rstrip() + "\n").encode(),
-                )
-            )
-        else:
-            files.append(
-                OwnedFile(
-                    root / "AGENTS.md",
-                    None,
-                    retire_if=(global_source.body.rstrip() + "\n").encode(),
-                )
-            )
-    instructions = []
-    for rule in sources.rules:
-        if not applies_to(rule, "opencode"):
-            continue
-        value = block(rule, "opencode")
-        native, issues = strict_native(rule.path, "opencode", value, OpenCodeRuleNative)
-        diagnostics.extend(issues)
-        if value.raw:
-            diagnostics.append(
-                Diagnostic("error", "opencode raw rule fields are not valid", rule.path)
-            )
-        diagnostics.extend(omissions(rule.path, "opencode", value, set()))
-        if native:
-            instructions.append(_instruction(rule, ctx.home, native))
+    # OpenCode 2 loads only AGENTS.md files: it accepts an `instructions` list
+    # but never resolves it, so rule bodies follow the global one here.
+    globals_ = [item for item in sources.globals if applies_to(item, "opencode")]
+    rules_ = [item for item in sources.rules if applies_to(item, "opencode")]
+    for source in (*globals_[:1], *rules_):
+        value = block(source, "opencode")
+        diagnostics.extend(unhandled_target_block(source.path, "opencode", value))
+        diagnostics.extend(omissions(source.path, "opencode", value, set()))
+    if globals_ or rules_:
+        parts = [source.body.rstrip() for source in (*globals_[:1], *rules_)]
+        files.append(
+            OwnedFile(root / "AGENTS.md", ("\n\n".join(parts) + "\n").encode())
+        )
+    elif sources.globals or sources.rules:
+        # Every global and rule was filtered by `only`; the host file is
+        # compiler-owned whenever those sources exist, so retire it.
+        files.append(OwnedFile(root / "AGENTS.md", None))
     for skill in sources.skills:
         if not applies_to(skill, "opencode"):
             continue
@@ -352,7 +326,7 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             if command.execution.agent:
                 command_meta["agent"] = command.execution.agent
             if command.execution.subtask:
-                command_meta["subtask"] = True
+                command_meta["subagent"] = True
             meta, issues = frontmatter(command.path, command_meta, native, value.raw)
             diagnostics.extend(issues)
             files.append(
@@ -379,14 +353,17 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
         )
         policy = resolve_model_policy(sources, agent, "opencode")
+        effort = agent.effort
         if policy is not None:
+            native_body = (value.native.get("request") or {}).get("body") or {}
             conflicts = {
-                key
-                for key in ("model", "provider", "reasoningEffort", "reasoning_effort")
-                if key in value.native or key in value.raw
+                *({"model"} & (set(value.native) | set(value.raw))),
+                *(
+                    {"request.body.reasoningEffort"}
+                    if "reasoningEffort" in native_body or agent.effort
+                    else set()
+                ),
             }
-            if agent.effort:
-                conflicts.add("reasoningEffort")
             if conflicts:
                 diagnostics.append(
                     Diagnostic(
@@ -397,23 +374,20 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     )
                 )
             if native:
-                native = native.model_copy(
-                    update={
-                        "model": policy.model,
-                        "reasoning_effort": policy.effort,
-                    }
-                )
+                native = native.model_copy(update={"model": policy.model})
+            effort = policy.effort
         if native:
-            agent_meta: dict[str, Any] = {
-                "name": agent.name,
-                "description": agent.description,
-            }
-            if agent.effort and policy is None:
-                agent_meta["reasoningEffort"] = agent.effort
+            agent_meta: dict[str, Any] = {"description": agent.description}
             if agent.color:
-                agent_meta["color"] = agent.color
+                agent_meta["color"] = PORTABLE_COLORS.get(agent.color, agent.color)
             meta, issues = frontmatter(agent.path, agent_meta, native, value.raw)
             diagnostics.extend(issues)
+            # The provider receives `request.body`, where OpenCode's own v1
+            # migration also puts a top-level `reasoningEffort`.
+            if effort:
+                request = dict(meta.get("request") or {})
+                request["body"] = {"reasoningEffort": effort, **request.get("body", {})}
+                meta["request"] = request
             # Checked after the merge because a portable `color` reaches this
             # frontmatter too, and only a native override replaces it.
             if (color := meta.get("color")) is not None and not _opencode_color(color):
@@ -421,7 +395,7 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     Diagnostic(
                         "error",
                         f"agent color {color!r} is not an OpenCode color; use "
-                        f"#RRGGBB or one of {sorted(OPENCODE_THEME_COLORS)}",
+                        f"#RRGGBB or one of {sorted(PORTABLE_COLORS)}",
                         agent.path,
                     )
                 )
@@ -443,14 +417,11 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(omissions(permissions.paths[0], "opencode", value, set()))
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
-        for path, targets, _ in permissions.command_targets:
-            value = targets.root.get("opencode", type(value)())
-            diagnostics.extend(unhandled_target_block(path, "opencode", value))
-            diagnostics.extend(omissions(path, "opencode", value, set()))
-    native_values = (
-        NativeValue("opencode", config, ("instructions",), instructions),
-        *_permissions(sources, config, folded[0]),
-    )
+        diagnostics.extend(command_target_diagnostics(permissions, "opencode"))
+        files.append(
+            OwnedFile(root / "plugins" / UNWRAP_PLUGIN.name, UNWRAP_PLUGIN.read_bytes())
+        )
+    native_values = (*_permissions(sources, config, folded[0]),)
     patch, issues = native_patch(
         config_root=ctx.config_root,
         target="opencode",

@@ -160,9 +160,17 @@ def resolve_cursor_local(*, allow_download: bool = False) -> tuple[Path | None, 
                 f"https://downloads.cursor.com/lab/{version_id}/{system}/{machine}/"
                 "agent-cli-local-package.tar.gz"
             )
+            # The download CDN answers 403 to urllib's default User-Agent.
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "coding-agents-capabilities"}
+            )
             with tempfile.TemporaryDirectory() as temporary:
                 archive = Path(temporary) / "cursor-local.tar.gz"
-                urllib.request.urlretrieve(url, archive)
+                with (
+                    urllib.request.urlopen(request, timeout=60) as response,
+                    archive.open("wb") as file,
+                ):
+                    shutil.copyfileobj(response, file)
                 with tarfile.open(archive) as bundle:
                     bundle.extractall(cache, filter="data")
             candidates = list(cache.rglob("cursor-agent-local"))

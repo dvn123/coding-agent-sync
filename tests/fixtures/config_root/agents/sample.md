@@ -20,11 +20,8 @@ targets:
       agent: Cursor Agent does not load user-scope agents.
   opencode:
     native:
-      # OpenCode takes #RRGGBB or a theme name, so the portable `blue` needs a
-      # native override here.
-      color: info
-      permission:
-        edit: deny
-        bash: deny
+      permissions:
+      - {action: edit, effect: deny}
+      - {action: shell, effect: deny}
 ---
 Review the neutral fixture input.

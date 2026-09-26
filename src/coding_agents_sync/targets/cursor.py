@@ -9,8 +9,8 @@ from ..models import SyncContext
 from ..patches import (
     Patch,
     PatchError,
-    Pointer,
     display_pointer,
+    touches,
     validate_generated_conflicts,
 )
 from ..plan import Diagnostic, NativePatch, NativeValue, OwnedFile, OwnedTree, Plan
@@ -26,6 +26,7 @@ from .permissions import (
     CURSOR_TOOL_FLAGS,
     CURSOR_TOOL_PATTERNS,
     cursor_shell_variants,
+    has_directories,
     rule_patterns,
     tool_patterns,
 )
@@ -33,6 +34,7 @@ from .support import (
     applies_to,
     block,
     bundled_files,
+    command_target_diagnostics,
     frontmatter,
     markdown,
     native_patch,
@@ -215,6 +217,11 @@ def _permission_values(
             # The variant has no token-matcher form to claw back, so the
             # allow rules it rides cannot keep their CLI wildcards either.
             unlowered |= hit
+    for rule in commands.deny:
+        # Likewise a text deny, whose denied form would otherwise ride the
+        # allows it narrows without a prompt.
+        if not rule_patterns(permissions, cursor_shell_variants, (rule,)):
+            unlowered |= colliding(rule)
     allow = rule_patterns(
         permissions,
         cursor_shell_variants,
@@ -268,13 +275,15 @@ def _permission_values(
             deny_forms.extend(forms)
         else:
             # Only a text predicate lowers to nothing: exact rules project,
-            # and exact+tail/text is a schema error. Degradation is safe
-            # (the command prompts), but the drop is not silent.
+            # and exact+tail/text is a schema error. The allows it narrows
+            # were dropped above, so the command falls to approvalMode, which
+            # prompts under `ask` and runs it under `unrestricted`.
             diagnostics.append(
                 Diagnostic(
                     "warning",
                     f"omitted deny {describe_rule(rule)}: Cursor's token "
-                    "matcher cannot hold a text predicate",
+                    "matcher cannot hold a text predicate, so it falls to "
+                    f"approvalMode {approval_mode}",
                 )
             )
     denied.extend(f"Shell({pattern})" for pattern in (*deny_forms, *clawback))
@@ -318,10 +327,6 @@ def _permission_values(
     )
 
 
-def _touches(left: Pointer, right: Pointer) -> bool:
-    return left[: min(len(left), len(right))] == right[: min(len(left), len(right))]
-
-
 def _validate_patches(
     patches: list[NativePatch], generated: tuple[NativeValue, ...]
 ) -> None:
@@ -335,7 +340,7 @@ def _validate_patches(
         validate_generated_conflicts(Patch(patch.operations), values[patch.target])
         if patch.target == "cursor-desktop":
             for operation in patch.operations:
-                if _touches(operation.pointer, ("terminalAllowlist",)):
+                if touches(operation.pointer, ("terminalAllowlist",)):
                     raise PatchError(
                         "cursor-desktop patch cannot contribute command permissions at "
                         f"{display_pointer(operation.pointer)}"
@@ -500,27 +505,19 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
         )
         required = {
             *({"tools"} if permissions.tools else set()),
-            *(
-                {"workspace"}
-                if permissions.workspace.allow or permissions.workspace.ask
-                else set()
-            ),
+            *({"workspace"} if has_directories(permissions.workspace) else set()),
             *({"secret_paths"} if permissions.secret_paths else set()),
             *({"secret_names"} if permissions.secret_names else set()),
             *({"unmatched"} if permissions.unmatched != "ask" else set()),
         }
         diagnostics.extend(omissions(permissions.paths[0], "cursor", value, required))
-        for path, targets, intent in permissions.command_targets:
-            value = targets.root.get("cursor", type(value)())
-            diagnostics.extend(unhandled_target_block(path, "cursor", value))
-            diagnostics.extend(
-                omissions(
-                    path,
-                    "cursor",
-                    value,
-                    {"commands.deny"} if "deny" in intent else set(),
-                )
+        diagnostics.extend(
+            command_target_diagnostics(
+                permissions,
+                "cursor",
+                lambda intent: {"commands.deny"} if "deny" in intent else set(),
             )
+        )
     native_values, permission_diagnostics = _permission_values(sources, root)
     diagnostics.extend(permission_diagnostics)
     patches = []

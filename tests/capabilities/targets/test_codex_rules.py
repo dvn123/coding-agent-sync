@@ -217,7 +217,7 @@ def test_codex_compiled_agent_registration_is_used_by_spawned_agent(
             AGENT_NAME,
             AGENT_DESCRIPTION,
             AGENT_BODY,
-            "codex:model: gpt-5.2\n",
+            "only: [codex]\ntargets:\n  codex:\n    native:\n      model: gpt-5.2\n",
         )
     )
     configure(paths, runtime)
@@ -261,10 +261,11 @@ def test_codex_compiled_and_native_rule_fragments_have_effective_execpolicy(
             "generated",
             "generated rule",
             "Generated rule body",
-            f"codex:rules:\n  - pattern: [{GENERATED_RULE}]\n    decision: allow\n",
+            "only: [codex]\ntargets:\n  codex:\n    native:\n      rules:\n"
+            f"        - pattern: [{GENERATED_RULE}]\n          decision: allow\n",
         )
     )
-    fragments = config_root / "target-config" / "codex" / "rules"
+    fragments = config_root / "target-config" / "codex" / "raw" / "rules"
     fragments.mkdir(parents=True)
     (fragments / "native.rules").write_text(
         f'prefix_rule(pattern=["{FRAGMENT_RULE}"], decision="forbidden")\n'

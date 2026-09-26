@@ -366,6 +366,21 @@ CASES = (
         )
     ),
     *(
+        # OpenCode 2 ignores the 1.x `logLevel` and `server` settings.
+        Case(
+            f"opencode.{case_id}",
+            "opencode",
+            "targets/test_opencode_config_resolution.py",
+            expected=Support.UNSUPPORTED,
+            surfaces=(f"opencode.{surface}",),
+            evidence_kind=EvidenceKind.CONFIG_RESOLUTION,
+        )
+        for case_id, surface in (
+            ("logging-config", "logging"),
+            ("server-config", "server"),
+        )
+    ),
+    *(
         Case(
             f"opencode.{case_id}",
             "opencode",
@@ -381,8 +396,6 @@ CASES = (
             ("models-config", "models"),
             ("model-variants-config", "model-variants"),
             ("shell-config", "shell"),
-            ("logging-config", "logging"),
-            ("server-config", "server"),
             ("command-config-resolution", "command-config"),
             ("skill-paths-config", "skill-paths"),
             ("references-local-config", "references-local"),
@@ -453,10 +466,24 @@ CASES = (
         surfaces=("opencode.permissions",),
     ),
     Case(
+        "opencode.unwrap",
+        "opencode",
+        "targets/test_opencode_unwrap.py",
+        surfaces=("opencode.permissions",),
+    ),
+    Case(
         "opencode.instructions",
         "opencode",
         "targets/test_opencode_rules.py",
-        surfaces=("opencode.global-instructions", "opencode.instructions-config"),
+        surfaces=("opencode.global-instructions",),
+    ),
+    # 2.x accepts `instructions` but never loads it.
+    Case(
+        "opencode.instructions-config",
+        "opencode",
+        "targets/test_opencode_rules.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("opencode.instructions-config",),
     ),
     Case(
         "opencode.agents",
@@ -484,12 +511,18 @@ CASES = (
             "plugins-runtime",
             "references-git",
             "formatter-runtime",
-            "lsp-runtime",
             "compaction-runtime",
             "server-auth",
             "api-catalog",
             "api-sessions",
         )
+    ),
+    Case(
+        "opencode.lsp-runtime",
+        "opencode",
+        "targets/test_opencode_lifecycle.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("opencode.lsp-runtime",),
     ),
     *(
         Case(
@@ -538,7 +571,6 @@ CASES = (
         "targets/test_opencode_rules.py",
         surfaces=(
             "opencode.global-instructions",
-            "opencode.instructions-config",
             "opencode.agents",
         ),
         evidence_kind=EvidenceKind.COMPILER_E2E,

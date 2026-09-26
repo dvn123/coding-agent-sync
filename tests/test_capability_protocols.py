@@ -7,8 +7,6 @@ from capabilities.protocols.cursor import CursorEvent, CursorRequest
 from capabilities.protocols.openai import ChatRequest, JsonEvent
 from capabilities.protocols.opencode import (
     OpenCodeEvent,
-    decode_config,
-    decode_skill_catalog,
 )
 from capabilities.protocols.responses import ResponsesRequest
 from capabilities.targets.opencode import config as opencode_config
@@ -161,20 +159,6 @@ def test_opencode_decoder_returns_typed_tool_use() -> None:
         observation.tool,
         observation.status,
     ) == ("tool_use", "stdout[0].part.state", "skill", "completed")
-
-
-def test_opencode_inspector_decoders_reject_unknown_envelopes() -> None:
-    catalog = decode_skill_catalog('[{"name":"probe"}]')
-    config = decode_config('{"permission":{"bash":{"*":"allow"}}}')
-    assert catalog.raw[0]["name"] == "probe"
-    assert catalog.observations[0].channel == "skill_catalog"
-    assert catalog.observations[0].source_path == "$[0].name"
-    assert config.raw["permission"] == {"bash": {"*": "allow"}}
-    assert config.observations[0].source_path == "$.permission.bash.*"
-    with pytest.raises(ProtocolShapeError, match="skill inspector"):
-        decode_skill_catalog("{}")
-    with pytest.raises(ProtocolShapeError, match="config inspector"):
-        decode_config("[]")
 
 
 def test_opencode_probe_config_is_wholly_native_v1() -> None:

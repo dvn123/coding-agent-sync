@@ -190,12 +190,14 @@ class CommandPermission(StrictModel):
     @classmethod
     def _validate_text(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(
-            not text or text != text.strip() or any(c in text for c in "*?()")
+            not (core := text.removeprefix(" ").removesuffix(" "))
+            or core != core.strip()
+            or any(c in text for c in "*?()")
             for text in value
         ):
             raise ValueError(
-                "text must contain non-empty literal text without "
-                "wildcards or parentheses"
+                "text must contain non-empty literal text without wildcards "
+                "or parentheses, edged by at most one space on each side"
             )
         if len(set(value)) != len(value):
             raise ValueError("text must be unique")
@@ -350,15 +352,17 @@ PERMISSION_DECISIONS = ("allow", "ask", "deny")
 class WorkspacePermissions(StrictModel):
     """Directories the agent may reach outside the current project."""
 
+    unmatched: Literal["ask", "allow"] = "ask"
     allow: tuple[str, ...] = ()
     ask: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _validate_directories(self) -> WorkspacePermissions:
-        seen = [*self.allow, *self.ask]
+        seen = [*self.allow, *self.ask, *self.deny]
         if len(seen) != len(set(seen)):
             raise ValueError(
-                "workspace directories must be unique across allow and ask"
+                "workspace directories must be unique across allow, ask, and deny"
             )
         if any(not path or path != path.strip() for path in seen):
             raise ValueError("workspace directories must be non-empty and trimmed")
@@ -429,10 +433,11 @@ class PermissionPolicyDocument(StrictModel):
             not path
             or path != path.strip()
             or any(character.isspace() or character in "()" for character in path)
+            or not path.startswith(("**/", "~/"))
             for path in value
         ):
             raise ValueError(
-                "secret_paths must contain non-empty native path patterns "
+                "secret_paths must be `**/`-anywhere or `~/`-home patterns "
                 "without whitespace or parentheses"
             )
         return value

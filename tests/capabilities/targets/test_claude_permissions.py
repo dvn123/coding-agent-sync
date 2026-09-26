@@ -281,6 +281,38 @@ SCENARIOS = {
         {"file_path": "{work}/.env.example"},
         {"allow": ("Read(**/.env.example)",), "deny": ("Read(**/.env*)",)},
     ),
+    # Which spellings a bare deny reaches on its own, so the compiler emits
+    # copies only for the rest. Everything else is allowed, so a denial can
+    # only come from the one deny rule.
+    **{
+        f"deny-reach-{name}": Scenario(
+            "Bash",
+            {"command": command},
+            {"allow": ("Bash",), "deny": (f"Bash({COMMAND} *)",)},
+        )
+        for name, command in (
+            ("plain", f"{COMMAND} arg"),
+            ("mention", f"echo {COMMAND} arg"),
+            ("assign", f"FOO=bar {COMMAND} arg"),
+            ("env", f"env {COMMAND} arg"),
+            ("env-assign", f"env FOO=bar {COMMAND} arg"),
+            ("env-unset", f"env -u HOME {COMMAND} arg"),
+            ("env-split", f"env -S '{COMMAND} arg'"),
+            ("env-absolute", f"/usr/bin/env {COMMAND} arg"),
+            ("xargs", f"xargs {COMMAND} arg"),
+            ("xargs-args", f"xargs -n 1 {COMMAND} arg"),
+            ("xargs-replace", f"xargs -I{{{{}}}} {COMMAND} {{{{}}}}"),
+            ("sudo", f"sudo {COMMAND} arg"),
+            ("timeout", f"timeout 30 {COMMAND} arg"),
+            ("nice", f"nice -n 5 {COMMAND} arg"),
+            ("nice-absolute", f"/usr/bin/nice -n 5 {COMMAND} arg"),
+            ("program-absolute", f"{{bin}}/{COMMAND} arg"),
+            ("escaped", f"\\{COMMAND} arg"),
+            ("quoted", f'"{COMMAND}" arg'),
+            ("redirect", f"> /dev/null {COMMAND} arg"),
+            ("redirect-fd", f"2>&1 {COMMAND} arg"),
+        )
+    },
 }
 EXPECTED = {
     "allow-exact": {"exit-zero": True, "executed": True, "result-error": False},
@@ -405,6 +437,35 @@ EXPECTED = {
     "probe-var-wrapper": {"exit-zero": True, "executed": False},
     "deny-env": {"exit-zero": True, "result-error": True},
     "deny-env-example": {"exit-zero": True, "result-error": True},
+    # A deny peels assignments, `env` in every form, `sudo`, the resolved
+    # wrappers, and a quoted or escaped program name, and retries itself behind
+    # a bare `xargs`. It does not resolve a program path, skip `xargs` options,
+    # or look past a leading redirect, which runs the denied command.
+    **{
+        f"deny-reach-{name}": {"exit-zero": True, "denied": denied}
+        for name, denied in (
+            ("plain", True),
+            ("mention", False),
+            ("assign", True),
+            ("env", True),
+            ("env-assign", True),
+            ("env-unset", True),
+            ("env-split", True),
+            ("env-absolute", False),
+            ("xargs", True),
+            ("xargs-args", False),
+            ("xargs-replace", False),
+            ("sudo", True),
+            ("timeout", True),
+            ("nice", True),
+            ("nice-absolute", False),
+            ("program-absolute", False),
+            ("escaped", True),
+            ("quoted", True),
+            ("redirect", False),
+            ("redirect-fd", False),
+        )
+    },
 }
 
 
@@ -486,7 +547,7 @@ def invoke(runtime: Runtime, scenario: Scenario) -> CheckResult:
     runtime.model.tool_call = (
         scenario.tool,
         {
-            key: value.format(work=runtime.paths.work)
+            key: value.format(work=runtime.paths.work, bin=runtime.paths.bin)
             for key, value in scenario.arguments.items()
         },
         TOOL_ID,

@@ -10,7 +10,6 @@ from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
 from ..plan import (
     Diagnostic,
-    ManifestMode,
     NativePatch,
     NativeValue,
     OwnedFile,
@@ -25,10 +24,13 @@ from ..sources import (
     StrictModel,
     describe_rule,
 )
+from .permissions import literal_directories
 from .support import (
     applies_to,
     block,
     bundled_files,
+    command_target_diagnostics,
+    declared_trees,
     frontmatter,
     native_patch,
     omissions,
@@ -194,17 +196,9 @@ def _validate_patches(patch: NativePatch, generated: list[NativeValue]) -> None:
 def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.codex
     files: list[OwnedFile] = []
-    managed_roots: tuple[tuple[str, ManifestMode], ...] = (
-        ("rules", "file"),
-        ("skills", "dir"),
-        ("agents", "file"),
+    trees = declared_trees(
+        root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
     )
-    trees = [
-        OwnedTree(
-            root / name, manifest_root=root / name, manifest_mode=mode, declaration=True
-        )
-        for name, mode in managed_roots
-    ]
     diagnostics: list[Diagnostic] = []
     globals_ = [item for item in sources.globals if applies_to(item, "codex")]
     rules_ = [item for item in sources.rules if applies_to(item, "codex")]
@@ -336,9 +330,11 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 value,
                 {
                     *({"tools"} if permissions.tools else set()),
+                    *({"workspace.ask"} if permissions.workspace.ask else set()),
+                    *({"workspace.deny"} if permissions.workspace.deny else set()),
                     *(
-                        {"workspace"}
-                        if permissions.workspace.allow or permissions.workspace.ask
+                        {"workspace.unmatched"}
+                        if permissions.workspace.unmatched != "ask"
                         else set()
                     ),
                     *({"secret_paths"} if permissions.secret_paths else set()),
@@ -347,17 +343,15 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 },
             )
         )
-        for path, targets, intent in permissions.command_targets:
-            value = targets.root.get("codex", type(value)())
-            diagnostics.extend(unhandled_target_block(path, "codex", value))
-            diagnostics.extend(
-                omissions(
-                    path,
-                    "codex",
-                    value,
-                    {f"commands.{bucket}" for bucket in intent & {"allow", "ask"}},
-                )
+        diagnostics.extend(
+            command_target_diagnostics(
+                permissions,
+                "codex",
+                lambda intent: {
+                    f"commands.{bucket}" for bucket in intent & {"allow", "ask"}
+                },
             )
+        )
     native_values = [
         NativeValue(
             "codex",
@@ -366,6 +360,21 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             [{"path": path, "enabled": True} for path in sorted(skill_paths)],
         )
     ]
+    # Codex takes absolute roots, and applies them in `workspace-write` mode.
+    if sources.permissions and (
+        directories := literal_directories(sources.permissions.workspace)
+    ):
+        native_values.append(
+            NativeValue(
+                "codex",
+                root / "config.toml",
+                ("sandbox_workspace_write", "writable_roots"),
+                [
+                    str(ctx.home / d.removeprefix("~/")) if d.startswith("~/") else d
+                    for d in directories
+                ],
+            )
+        )
     native_values.extend(
         value
         for agent in agents
