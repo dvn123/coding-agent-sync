@@ -16,7 +16,7 @@ from __future__ import annotations
 import collections
 import json
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -24,7 +24,13 @@ from typing import Annotated
 
 import typer
 
-from .sources import CommandPermission, PermissionSource, SourceBundle, load_sources
+from .sources import (
+    CommandPermission,
+    PermissionSource,
+    SourceBundle,
+    describe_rule,
+    load_sources,
+)
 from .targets import claude, opencode
 from .targets.permissions import fold_edit_write
 
@@ -448,23 +454,66 @@ def compiled(sources: SourceBundle) -> dict[str, object]:
     }
 
 
-def decisions(config_root: Path) -> dict[str, dict[str, str]]:
-    sources = load_sources(config_root)
-    assert sources.permissions is not None
-    probes = probe_commands(sources.permissions)
-    result: dict[str, dict[str, str]] = {}
+def _judges(sources: SourceBundle) -> dict[str, Callable[[str], str]]:
+    """The decision function of each target under each `unmatched` value."""
+    judges: dict[str, Callable[[str], str]] = {}
     for unmatched in UNMATCHED:
         config = compiled(_with_unmatched(sources, unmatched))
-        claude_permissions = config["claude"]
-        shell_rules = config["opencode"]
+        claude_permissions, shell_rules = config["claude"], config["opencode"]
         assert isinstance(claude_permissions, dict) and isinstance(shell_rules, list)
-        claude_rules = ClaudeRules(claude_permissions)
-        result[f"claude/{unmatched}"] = {p: claude_rules.verdict(p) for p in probes}
-        opencode_rules = OpenCodeRules(shell_rules)
-        result[f"opencode/{unmatched}"] = {
-            p: opencode_rules.decision(p) for p in probes
-        }
-    return result
+        judges[f"claude/{unmatched}"] = ClaudeRules(claude_permissions).verdict
+        judges[f"opencode/{unmatched}"] = OpenCodeRules(shell_rules).decision
+    return judges
+
+
+def decisions(
+    config_root: Path, extra: Iterable[str] = ()
+) -> dict[str, dict[str, str]]:
+    sources = load_sources(config_root)
+    assert sources.permissions is not None
+    probes = list(dict.fromkeys([*probe_commands(sources.permissions), *extra]))
+    return {
+        view: {probe: judge(probe) for probe in probes}
+        for view, judge in _judges(sources).items()
+    }
+
+
+def redundant(config_root: Path) -> list[str]:
+    """Source rules whose removal changes no decision on their own probes.
+
+    Each rule is checked against the full ruleset, so two rules that only
+    duplicate each other are both reported; remove them and rerun `decisions`
+    to confirm.
+    """
+    sources = load_sources(config_root)
+    permissions = sources.permissions
+    assert permissions is not None
+    commands = permissions.commands
+    full = _judges(sources)
+    found = []
+    for bucket, rules in commands.buckets:
+        for index, rule in enumerate(rules):
+            alone = commands.model_copy(
+                update={"allow": (), "ask": (), "deny": (), bucket: (rule,)}
+            )
+            probes = probe_commands(permissions.model_copy(update={"commands": alone}))
+            rest = commands.model_copy(
+                update={bucket: (*rules[:index], *rules[index + 1 :])}
+            )
+            reduced = _judges(
+                sources.model_copy(
+                    update={
+                        "permissions": permissions.model_copy(update={"commands": rest})
+                    }
+                )
+            )
+            if all(
+                full[view](probe) == reduced[view](probe)
+                for view in full
+                for probe in probes
+            ):
+                found.append(f"{bucket}\t{describe_rule(rule)}")
+    return found
 
 
 def _words(pattern: str) -> frozenset[str]:
@@ -598,9 +647,22 @@ main = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 def decisions_command(
     config_root: Annotated[Path, typer.Argument(file_okay=False)],
     output: Annotated[Path, typer.Argument(dir_okay=False)],
+    probes: Annotated[
+        Path | None,
+        typer.Option(
+            dir_okay=False,
+            help=(
+                "A previous `decisions` output whose probes are judged too, so "
+                "a source change is compared on the same commands."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Write every probe command's decision per target and `unmatched` value."""
-    output.write_text(json.dumps(decisions(config_root), indent=1, sort_keys=True))
+    extra = next(iter(json.loads(probes.read_text()).values()), {}) if probes else {}
+    output.write_text(
+        json.dumps(decisions(config_root, extra), indent=1, sort_keys=True)
+    )
 
 
 @main.command("diff")
@@ -619,6 +681,15 @@ def diff_command(
     for view, probe, was, now in changed:
         typer.echo(f"{view}\t{was} -> {now}\t{probe}")
     raise typer.Exit(code=1 if changed else 0)
+
+
+@main.command("redundant")
+def redundant_command(
+    config_root: Annotated[Path, typer.Argument(file_okay=False)],
+) -> None:
+    """List source rules that change no decision on the probes they generate."""
+    for line in redundant(config_root):
+        typer.echo(line)
 
 
 @main.command("origins")
