@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
-from ..sources import CommandPermission, PermissionSource, WorkspacePermissions
+from ..sources import (
+    WINDOWS_DRIVE,
+    CommandPermission,
+    PermissionSource,
+    WorkspacePermissions,
+)
 
 
 def wrapper_prefixes(wrapper: str) -> tuple[str, str]:
@@ -261,7 +266,10 @@ def denied_paths(permissions: PermissionSource) -> tuple[str, ...]:
 
 def claude_path(pattern: str) -> str:
     """Claude anchors a bare pattern at the cwd and a `/` one at the settings
-    file, so anywhere-patterns and absolute paths take the `//` root form."""
+    file, so anywhere-patterns and absolute paths take the `//` root form.
+    Windows paths match in POSIX form, `C:/x` as `/c/x`."""
+    if WINDOWS_DRIVE.match(pattern):
+        return f"//{pattern[0].lower()}{pattern[2:]}"
     if pattern.startswith("**/"):
         return f"//{pattern}"
     if pattern.startswith("/"):

@@ -1474,6 +1474,36 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(resource=resource):
                     self.assertEqual(resolve_opencode_bash(read, resource), decision)
 
+    def test_windows_drive_directories_reach_each_target(self) -> None:
+        """A Windows directory outside the home is spelled `C:/x`. Claude
+        matches rules against its POSIX form, so the rules say `//c/x`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                tools={"read": "allow", "edit": "allow"},
+                workspace={"allow": ["C:/mise"], "deny": ["D:/vault"]},
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertEqual(
+                claude["permissions"]["additionalDirectories"], ["C:/mise"]
+            )
+            self.assertIn("Edit(//c/mise/**)", claude["permissions"]["allow"])
+            self.assertIn("Read(//d/vault/**)", claude["permissions"]["deny"])
+            codex = tomllib.loads((home / ".codex/config.toml").read_text())
+            self.assertEqual(
+                codex["sandbox_workspace_write"]["writable_roots"], ["C:/mise"]
+            )
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            self.assertEqual(
+                opencode_rules(opencode, "external_directory"),
+                {"C:/mise/**": "allow", "D:/vault/**": "deny"},
+            )
+
     def test_workspace_unmatched_allow_opens_every_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
