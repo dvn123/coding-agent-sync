@@ -347,6 +347,8 @@ def describe_rule(rule: CommandPermission) -> str:
 
 PERMISSION_TOOLS = ("read", "edit", "write", "webfetch", "websearch")
 PERMISSION_DECISIONS = ("allow", "ask", "deny")
+# A Windows directory outside the home, forward-slashed like every other path.
+WINDOWS_DRIVE = re.compile(r"[A-Za-z]:/")
 
 
 class WorkspacePermissions(StrictModel):
@@ -366,8 +368,13 @@ class WorkspacePermissions(StrictModel):
             )
         if any(not path or path != path.strip() for path in seen):
             raise ValueError("workspace directories must be non-empty and trimmed")
-        if any(not path.startswith(("~/", "/")) for path in seen):
-            raise ValueError("workspace directories must be absolute or ~-relative")
+        if any(
+            not path.startswith(("~/", "/")) and not WINDOWS_DRIVE.match(path)
+            for path in seen
+        ):
+            raise ValueError(
+                "workspace directories must be absolute (/ or C:/) or ~-relative"
+            )
         return self
 
 
