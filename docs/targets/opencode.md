@@ -45,7 +45,9 @@ and ask. This requires OpenCode 2.0 or later: 1.x answered a denial with
 `PermissionDeniedError`, whose message embedded every bash rule, roughly
 1.3 MB per denial against a real corpus. 2.0 answers with
 `Permission.BlockedError`, whose model-facing message names only the
-permission.
+permission. A deny rule's `reason` lands in `<home>/.config/opencode/
+opencode-unwrap.json`, keyed by every pattern the rule emits, and the plugin
+names it on the denial; the file is removed when no deny carries a reason.
 
 OpenCode matches a shell rule against a command node's raw text, so a bare
 deny misses `timeout 30 rm`, `FOO=1 rm`, and `/bin/rm`. The compiler installs
@@ -54,8 +56,12 @@ the opencode-unwrap plugin (source: <https://github.com/dvn123/opencode-unwrap>,
 hooks `permission.evaluate` and denies a command when the agent's and
 session's rules deny it with its assignments, program path, or wrappers
 peeled, so denies land bare, with no directory copies and no copies behind
-the wrappers the plugin peels. It carries over only a deny, so ask rules and
-any declared wrapper it does not peel keep their copies. The
+the wrappers the plugin peels. It carries over a deny, so ask rules and any
+declared wrapper it does not peel keep their copies. The one allow it carries
+is through transparent wrappers (`timeout`, `time -p`, `nice`, `nohup`,
+`noglob`, `nocorrect`) for a command that fell to the catch-all; the audit does
+not model that allow.
+The
 `opencode.unwrap` live scenarios run OpenCode on the compiled output; the
 opt-in oracle scenario checks the audit's model against OpenCode on a real
 policy. To update the plugin, run `bun run build` in its repository, copy

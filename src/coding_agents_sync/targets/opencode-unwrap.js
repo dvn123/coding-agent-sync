@@ -134,6 +134,31 @@ function wrapped(list, wrapper) {
   }
   return;
 }
+var TRANSPARENT = {
+  nice: ["-n", "--adjustment"],
+  nohup: [],
+  noglob: [],
+  nocorrect: [],
+  time: ["-p"],
+  timeout: ["-k", "--kill-after", "-s", "--signal", "--foreground", "--preserve-status", "-v", "--verbose"]
+};
+var SYSTEM_DIRS = ["", "/bin/", "/usr/bin/"];
+function transparent(command) {
+  const text = command.trim();
+  const list = words(text);
+  const head = list[0];
+  if (!head || text.slice(head.start, head.end) !== head.value)
+    return;
+  const program = basename(head.value);
+  const options = TRANSPARENT[program];
+  if (!options || !SYSTEM_DIRS.includes(head.value.slice(0, head.value.length - program.length)))
+    return;
+  const index = wrapped(list, WRAPPERS[program]);
+  if (index === undefined)
+    return;
+  const safe = list.slice(1, index).every(({ value }) => !value.startsWith("-") || value === "--" || options.includes(value.split("=")[0]));
+  return safe ? text.slice(list[index].start).trim() : undefined;
+}
 function peelOnce(text) {
   const list = words(text);
   const head = list[0];
@@ -194,12 +219,15 @@ function match(input, pattern) {
   }
   return regex.test(input.replaceAll("\\", "/"));
 }
+function matching(rules, action, resource) {
+  return rules.findLast((rule) => match(action, rule.action) && match(resource, rule.resource));
+}
 function evaluate(rules, action, resource) {
-  return rules.findLast((rule) => match(action, rule.action) && match(resource, rule.resource))?.effect ?? "ask";
+  return matching(rules, action, resource)?.effect ?? "ask";
 }
 
 // src/review.ts
-async function review(event, rules) {
+async function review(event, rules, reasons = {}) {
   if (event.action !== "shell" || event.effect === "deny")
     return;
   const peeled = event.resources.flatMap(spellings);
@@ -216,22 +244,74 @@ async function review(event, rules) {
   const denied = peeled.find((spelling) => evaluate(loaded, "shell", spelling) === "deny");
   if (denied) {
     event.effect = "deny";
-    event.message = `\`${denied}\` is denied by the shell rules`;
+    event.message = denial(denied, because(loaded, denied, reasons));
+  } else if (event.effect === "ask" && event.resources.every((resource) => passes(loaded, resource))) {
+    event.effect = "allow";
   }
+}
+function passes(rules, command) {
+  if (evaluate(rules, "shell", command) === "allow")
+    return true;
+  for (let spelling = command;spelling !== undefined; spelling = transparent(spelling)) {
+    const rule = matching(rules, "shell", spelling);
+    if (rule && rule.resource !== "*")
+      return rule.effect === "allow";
+  }
+  return false;
+}
+function explain(resources, rules, reasons) {
+  for (const resource of resources) {
+    const reason = because(rules, resource, reasons);
+    if (reason)
+      return `\`${resource}\`: ${reason}`;
+  }
+  return;
+}
+function because(rules, resource, reasons) {
+  const rule = matching(rules, "shell", resource);
+  return rule?.effect === "deny" ? reasons[rule.resource] : undefined;
+}
+function denial(command, reason) {
+  return `\`${command}\` is denied by the shell rules` + (reason ? `: ${reason}` : "");
 }
 
 // src/index.ts
+async function loadReasons() {
+  try {
+    const document = await Bun.file(`${import.meta.dir}/../opencode-unwrap.json`).json();
+    const reasons = document?.reasons;
+    if (!reasons || typeof reasons !== "object")
+      return {};
+    return Object.fromEntries(Object.entries(reasons).filter(([, reason]) => typeof reason === "string"));
+  } catch {
+    return {};
+  }
+}
 var plugin = {
   id: "opencode-unwrap",
   async setup(ctx) {
-    await ctx.permission.hook("evaluate", (event) => review(event, async () => {
-      const session = await ctx.session.get({ sessionID: event.sessionID });
-      const agentID = event.agent ?? session.agent;
+    const reasons = await loadReasons();
+    async function rules(sessionID, agent) {
+      const session = await ctx.session.get({ sessionID });
+      const agentID = agent ?? session.agent;
       if (!agentID)
         throw new Error("the session names no agent");
-      const agent = await ctx.agent.get({ agentID });
-      return [...agent.data.permissions, ...session.permissions ?? []];
-    }));
+      const loaded = await ctx.agent.get({ agentID });
+      return [...loaded.data.permissions, ...session.permissions ?? []];
+    }
+    await ctx.permission.hook("evaluate", (event) => review(event, () => rules(event.sessionID, event.agent), reasons));
+    if (Object.keys(reasons).length === 0)
+      return;
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event.tool !== "shell" || event.status !== "error")
+        return;
+      const blocked = event.error.error;
+      if (blocked?._tag !== "Permission.BlockedError" || !blocked.rules || !blocked.resources)
+        return;
+      const reason = explain(blocked.resources, blocked.rules, reasons);
+      if (reason)
+        blocked.reason = reason;
+    });
   }
 };
 var src_default = plugin;

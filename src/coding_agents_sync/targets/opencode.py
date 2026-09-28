@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import functools
+import json
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
@@ -57,6 +58,7 @@ from .support import (
     raw_files,
     strict_native,
     unhandled_target_block,
+    with_skill_scripts,
 )
 
 
@@ -181,6 +183,30 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
     )
 
 
+# The plugin reads deny reasons from beside its directory, keyed by the exact
+# resource of the rule that decided the command.
+UNWRAP_REASONS = Path("opencode-unwrap.json")
+
+
+def deny_reasons(permissions: PermissionSource) -> dict[str, str]:
+    """Each emitted deny pattern of a rule that carries a reason, to that reason."""
+    commands = permissions.commands
+    reasons: dict[str, str] = {}
+    for rule in commands.deny:
+        if rule.reason is None:
+            continue
+        alone = permissions.model_copy(
+            update={
+                "commands": commands.model_copy(
+                    update={"allow": (), "ask": (), "deny": (rule,)}
+                )
+            }
+        )
+        for _bucket, _origin, pattern in shell_entries(alone):
+            reasons.setdefault(pattern, rule.reason)
+    return reasons
+
+
 def _permissions(
     sources: SourceBundle, config: Path, tools: Mapping[str, str]
 ) -> tuple[NativeValue, ...]:
@@ -251,6 +277,7 @@ def _validate_patches(
 
 def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.opencode
+    sources = with_skill_scripts(sources, "opencode", root, ctx.home)
     config = root / "opencode.json"
     files: list[OwnedFile] = []
     trees = declared_trees(
@@ -420,6 +447,15 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         files.append(
             OwnedFile(root / "plugins" / UNWRAP_PLUGIN.name, UNWRAP_PLUGIN.read_bytes())
         )
+    reasons = deny_reasons(permissions) if permissions else {}
+    files.append(
+        OwnedFile(
+            root / UNWRAP_REASONS,
+            (json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n").encode()
+            if reasons
+            else None,
+        )
+    )
     native_values = (*_permissions(sources, config, folded[0]),)
     patch, issues = native_patch(
         config_root=ctx.config_root,
