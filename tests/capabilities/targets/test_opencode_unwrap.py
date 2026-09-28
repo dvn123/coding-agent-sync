@@ -32,6 +32,7 @@ from coding_agents_sync import run_sync
 
 RECORDER = "unwrap-recorder"
 TOOL = "unwrap-tool"
+REASON = "run unwrap-tool instead"
 POLICY = """\
 schema: coding-agents/v4
 kind: permission-policy
@@ -51,10 +52,29 @@ id: test
 name: test
 description: permission rules
 deny:
-  - [{RECORDER}]
+  - {{command: {RECORDER}, reason: {REASON}}}
   - [{TOOL}, push]
 targets:
   cursor: {{omit: {{commands.deny: Cursor Desktop has no deny channel.}}}}
+"""
+ASK_POLICY = """\
+schema: coding-agents/v4
+kind: permission-policy
+id: user
+name: user
+description: permissions
+wrappers: [timeout]
+"""
+ASK_RULES = f"""\
+schema: coding-agents/v4
+kind: permission-rules
+id: test
+name: test
+description: permission rules
+allow:
+  - [{TOOL}, status]
+targets:
+  codex: {{omit: {{commands.allow: Codex allow rules skip its sandbox approval.}}}}
 """
 # One per integration path: a wrapper, an assignment, and a program path in
 # front of a single-token deny, and a wrapper in front of a multi-token one.
@@ -88,6 +108,23 @@ def executable(path: Path, script: str) -> None:
 def runtime(
     request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
 ) -> Runtime:
+    return build(request, tmp_path_factory, POLICY, RULES)
+
+
+@pytest.fixture(scope="module")
+def asking(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Runtime:
+    """Unmatched commands ask, and one subcommand is allowed."""
+    return build(request, tmp_path_factory, ASK_POLICY, ASK_RULES)
+
+
+def build(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+    policy: str,
+    rules: str,
+) -> Runtime:
     opencode, sandbox = require_command("opencode"), require_command("sandbox-exec")
     paths = Paths.create(tmp_path_factory.mktemp("opencode-unwrap").resolve())
     recorder_dir = paths.root / "recorder"
@@ -111,8 +148,8 @@ def runtime(
     stub = recorded_server(request, state.respond)
     sources = paths.root / "sources" / "permissions"
     (sources / "commands").mkdir(parents=True)
-    (sources / "policy.yaml").write_text(POLICY)
-    (sources / "commands" / "test.yaml").write_text(RULES)
+    (sources / "policy.yaml").write_text(policy)
+    (sources / "commands" / "test.yaml").write_text(rules)
     config = paths.home / ".config" / "opencode" / "opencode.json"
     config.parent.mkdir(parents=True)
     base = opencode_config(stub.base_url, "unwrap-probe", "unwrap", {})
@@ -140,7 +177,9 @@ def runtime(
     return value
 
 
-def run_shell(runtime: Runtime, command: str) -> ToolUseObservation | None:
+def run_shell(
+    runtime: Runtime, command: str, *, asked: bool = False
+) -> ToolUseObservation | None:
     runtime.state.tool = "shell"
     runtime.state.arguments = {"command": command.format(bin=runtime.paths.bin)}
     process = run_probe(
@@ -159,6 +198,10 @@ def run_shell(runtime: Runtime, command: str) -> ToolUseObservation | None:
         env=runtime.env,
         timeout=30,
     )
+    if asked:
+        # `opencode run` rejects a permission request and exits nonzero.
+        assert "permission requested: shell" in process.stderr, process.stderr
+        return None
     assert process.returncode == 0, process.stderr
     return next(
         (
@@ -197,6 +240,19 @@ def test_wrapped_denied_command_is_denied(runtime: Runtime, marker: str) -> None
 
 @pytest.mark.capability_case("opencode.unwrap")
 @pytest.mark.capability_live
+@pytest.mark.parametrize(
+    "command", [f"{RECORDER} direct", f"timeout 30 {RECORDER} wrapped"]
+)
+def test_a_denied_command_names_its_reason(runtime: Runtime, command: str) -> None:
+    """OpenCode's own deny and a peeled one both tell the model what to run."""
+    observation = run_shell(runtime, command)
+    assert observation is not None and observation.status == "error", observation
+    assert REASON in (observation.error or ""), observation
+    assert not ran(runtime, command.rsplit(" ", 1)[1])
+
+
+@pytest.mark.capability_case("opencode.unwrap")
+@pytest.mark.capability_live
 def test_peeled_allowed_command_runs(runtime: Runtime) -> None:
     observation = run_shell(runtime, f"nohup {TOOL} status allowed")
     assert observation is not None and observation.status == "completed", observation
@@ -215,3 +271,33 @@ def test_without_the_plugin_the_wrapped_command_runs(runtime: Runtime) -> None:
         moved.rename(plugins)
     assert observation is not None and observation.status == "completed", observation
     assert ran(runtime, "control")
+
+
+@pytest.mark.capability_case("opencode.unwrap")
+@pytest.mark.capability_live
+def test_an_allow_carries_through_a_transparent_wrapper(asking: Runtime) -> None:
+    """`timeout 30 tool status` falls to the catch-all ask; the plugin allows it."""
+    observation = run_shell(asking, f"timeout 30 {TOOL} status through")
+    assert observation is not None and observation.status == "completed", observation
+    assert ran(asking, "through")
+
+
+@pytest.mark.capability_case("opencode.unwrap")
+@pytest.mark.capability_live
+def test_a_wrapped_unallowed_command_still_asks(asking: Runtime) -> None:
+    assert run_shell(asking, f"timeout 30 {TOOL} log asked", asked=True) is None
+    assert not ran(asking, "asked")
+
+
+@pytest.mark.capability_case("opencode.unwrap")
+@pytest.mark.capability_live
+def test_without_the_plugin_a_wrapped_allowed_command_asks(asking: Runtime) -> None:
+    plugins = asking.paths.home / ".config" / "opencode" / "plugins"
+    moved = plugins.with_name("plugins.off")
+    plugins.rename(moved)
+    try:
+        command = f"timeout 30 {TOOL} status unwrapped"
+        assert run_shell(asking, command, asked=True) is None
+    finally:
+        moved.rename(plugins)
+    assert not ran(asking, "unwrapped")
