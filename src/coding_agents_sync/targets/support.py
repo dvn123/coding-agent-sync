@@ -11,7 +11,7 @@ from pydantic import BaseModel, ValidationError
 from ..io import MANAGED_MANIFEST
 from ..patches import load_patch, merge_patches
 from ..plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
-from ..sources import PermissionSource, TargetBlock
+from ..sources import CommandPermission, PermissionSource, SourceBundle, TargetBlock
 
 
 def one_of(field: str, value: str | None, allowed: frozenset[str]) -> str | None:
@@ -35,6 +35,45 @@ def bundled_files(source_dir: Path) -> tuple[dict[Path, bytes], frozenset[Path]]
             for path in paths
             if path.stat().st_mode & stat.S_IXUSR
         ),
+    )
+
+
+def with_skill_scripts(
+    sources: SourceBundle, target: str, root: Path, home: Path
+) -> SourceBundle:
+    """Allow each skill's bundled executables where `target` deploys them.
+
+    A skill's scripts are canonical source, so the agent that loads the skill
+    may run them. Matchers compare the command as typed, so both the
+    home-relative and the absolute spelling are allowed; a spelling that is not
+    a portable token (a Windows drive, a space in the home path) is left out.
+    """
+    if not (permissions := sources.permissions):
+        return sources
+    skills_root = root / "skills"
+    bases = (f"~/{skills_root.relative_to(home).as_posix()}", skills_root.as_posix())
+    seen = {rule.predicates for rule in permissions.commands.allow}
+    added: list[CommandPermission] = []
+    for skill in sources.skills:
+        if not applies_to(skill, target):
+            continue
+        for relative in sorted(bundled_files(skill.source_dir)[1]):
+            for base in bases:
+                path = f"{base}/{skill.source_dir.name}/{relative.as_posix()}"
+                try:
+                    rule = CommandPermission(command=path)
+                except ValidationError:
+                    continue
+                if rule.predicates not in seen:
+                    seen.add(rule.predicates)
+                    added.append(rule)
+    if not added:
+        return sources
+    commands = permissions.commands.model_copy(
+        update={"allow": (*permissions.commands.allow, *added)}
+    )
+    return sources.model_copy(
+        update={"permissions": permissions.model_copy(update={"commands": commands})}
     )
 
 

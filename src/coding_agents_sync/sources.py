@@ -121,6 +121,11 @@ class CommandExecution(StrictModel):
     subtask: bool = False
 
 
+# One shell word, quoted as typed (`IFS=$'\t'`), with no whitespace or glob
+# character, so its pattern matches that exact text and nothing wider.
+ASSIGNMENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=[^\s*?]*")
+
+
 def _portable_tokens(value: tuple[str, ...]) -> bool:
     # The alphabet includes ~ so a rule can match home-relative command text
     # exactly as the agent types it (`~/.config/tool/run.sh`); tokens are
@@ -141,6 +146,8 @@ class CommandPermission(StrictModel):
     text anywhere in the segment. The leading-option region between a command
     and its subcommand is not a rule predicate; it is the per-command
     `options` vocabulary, which the compiler expands into every rule's heads.
+    `reason`, on a deny only, is what the agent is told to do instead; it is
+    not a predicate.
     """
 
     command: str
@@ -148,6 +155,14 @@ class CommandPermission(StrictModel):
     tail: tuple[tuple[str, ...], ...] = ()
     text: tuple[str, ...] = ()
     exact: bool = False
+    reason: str | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def _validate_reason(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or "\n" in value):
+            raise ValueError("reason must be one non-empty line")
+        return value
 
     @field_validator("command")
     @classmethod
@@ -249,6 +264,7 @@ class CommandPermissions(StrictModel):
     ask: tuple[CommandPermission, ...] = ()
     deny: tuple[CommandPermission, ...] = ()
     options: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    assignments: dict[str, tuple[str, ...]] = Field(default_factory=dict)
 
     @property
     def buckets(self) -> tuple[tuple[str, tuple[CommandPermission, ...]], ...]:
@@ -261,6 +277,31 @@ class CommandPermissions(StrictModel):
 
     def option_tokens(self, command: str) -> tuple[str, ...]:
         return self.options.get(command, ())
+
+    def assignment_tokens(self, command: str) -> tuple[str, ...]:
+        return self.assignments.get(command, ())
+
+    @field_validator("assignments")
+    @classmethod
+    def _validate_assignments(
+        cls, value: dict[str, tuple[str, ...]]
+    ) -> dict[str, tuple[str, ...]]:
+        for command, tokens in value.items():
+            if not _portable_tokens((command,)):
+                raise ValueError(
+                    f"assignments key {command!r} must be one portable literal "
+                    "argv token"
+                )
+            if not tokens or len(set(tokens)) != len(tokens):
+                raise ValueError(
+                    f"assignments for {command} must be non-empty and unique"
+                )
+            # A literal value only: a wildcard value would span into the command.
+            if not all(ASSIGNMENT_TOKEN.fullmatch(token) for token in tokens):
+                raise ValueError(
+                    f"assignments for {command} must be literal NAME=value tokens"
+                )
+        return value
 
     @field_validator("options")
     @classmethod
@@ -304,7 +345,8 @@ class CommandPermissions(StrictModel):
                     "order, which is not the conjunction the model promises; "
                     "use one field, or one rule for each"
                 )
-            del bucket
+            if rule.reason is not None and bucket != "deny":
+                raise ValueError("only a deny rule carries a reason")
         for (left_name, left), (right_name, right) in combinations(named, 2):
             if left.predicates == right.predicates:
                 raise ValueError(
@@ -327,10 +369,11 @@ class CommandPermissions(StrictModel):
                     "stricter rule may narrow a looser one"
                 )
         commanded = {rule.command for _, rule in named}
-        if unused := sorted(set(self.options) - commanded):
-            raise ValueError(
-                f"options declared for {unused[0]}, which has no permission rule"
-            )
+        for field in ("options", "assignments"):
+            if unused := sorted(set(getattr(self, field)) - commanded):
+                raise ValueError(
+                    f"{field} declared for {unused[0]}, which has no permission rule"
+                )
         return self
 
 
@@ -457,6 +500,7 @@ class PermissionRulesDocument(StrictModel):
     name: str
     description: str = ""
     options: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    assignments: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     allow: tuple[CommandPermissionEntry, ...] = ()
     ask: tuple[CommandPermissionEntry, ...] = ()
     deny: tuple[CommandPermissionEntry, ...] = ()
@@ -915,23 +959,29 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
     # A command's leading-option vocabulary has one home, so the fragment that
     # owns the command owns its options and a second declaration is an error
     # rather than a silent union.
-    options: dict[str, tuple[str, ...]] = {}
-    owners: dict[str, Path] = {}
-    for path, fragment in fragments:
-        for command, tokens in fragment.options.items():
-            if command in owners:
-                raise SourceSchemaError(
-                    f"{path}: options for {command} are already declared in "
-                    f"{owners[command]}; a command's option vocabulary has one home"
-                )
-            owners[command], options[command] = path, tokens
+    vocabularies: dict[str, dict[str, tuple[str, ...]]] = {
+        "options": {},
+        "assignments": {},
+    }
+    for field, vocabulary in vocabularies.items():
+        owners: dict[str, Path] = {}
+        for path, fragment in fragments:
+            for command, tokens in getattr(fragment, field).items():
+                if command in owners:
+                    raise SourceSchemaError(
+                        f"{path}: {field} for {command} are already declared in "
+                        f"{owners[command]}; a command's {field.rstrip('s')} "
+                        "vocabulary has one home"
+                    )
+                owners[command], vocabulary[command] = path, tokens
 
     try:
         commands = CommandPermissions(
             allow=bucket("allow"),
             ask=bucket("ask"),
             deny=bucket("deny"),
-            options=dict(sorted(options.items())),
+            options=dict(sorted(vocabularies["options"].items())),
+            assignments=dict(sorted(vocabularies["assignments"].items())),
         )
     except ValidationError as exc:
         raise _model_error(root, exc) from exc

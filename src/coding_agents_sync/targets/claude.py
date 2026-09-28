@@ -62,6 +62,7 @@ from .support import (
     raw_files,
     strict_native,
     unhandled_target_block,
+    with_skill_scripts,
 )
 
 
@@ -329,6 +330,7 @@ def _validate_patches(
 
 def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.claude
+    sources = with_skill_scripts(sources, "claude", root, ctx.home)
     files: list[OwnedFile] = []
     trees = declared_trees(
         root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
