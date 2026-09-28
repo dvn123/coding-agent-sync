@@ -1181,6 +1181,110 @@ class SyncTests(unittest.TestCase):
                 claude["permissions"]["allow"],
             )
 
+    def test_a_tilde_command_also_matches_its_home_variable_spelling(self) -> None:
+        """Glob targets match the text as typed, and agents also type `$HOME/`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["~/bin/tool", "status"]],
+                deny=[["~/bin/tool", "push"]],
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            bash = opencode_rules(opencode, "shell")
+            for command, decision in {
+                "~/bin/tool status": "allow",
+                "$HOME/bin/tool status -v": "allow",
+                "$HOME/bin/tool push": "deny",
+                "$HOME/bin/tool reset": "ask",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn(
+                "Bash($HOME/bin/tool status *)", claude["permissions"]["allow"]
+            )
+
+    def test_a_declared_assignment_prefixes_every_rule_of_its_command(self) -> None:
+        """A literal `NAME=value` agents type before a command decides nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root)
+            write(
+                config_root / "permissions" / "commands" / "test.yaml",
+                permission_rules_doc(
+                    allow=[["tool", "status"]],
+                    deny=[["tool", "reset"]],
+                    extra={
+                        "assignments": {"tool": ["EDITOR=true", "IFS=", "IFS=$'\\t'"]}
+                    },
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            bash = opencode_rules(opencode, "shell")
+            for command, decision in {
+                "EDITOR=true tool status": "allow",
+                "IFS= tool status -v": "allow",
+                "IFS=$'\\t' tool status": "allow",
+                "EDITOR=true tool reset": "deny",
+                "EDITOR=false tool status": "ask",
+                "OTHER=1 tool status": "ask",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn("Bash(IFS= tool status *)", claude["permissions"]["allow"])
+
+    def test_an_assignment_value_is_literal(self) -> None:
+        for assignments, message in (
+            ({"tool": ["EDITOR=*"]}, "literal NAME=value"),
+            ({"tool": ["EDITOR=a b"]}, "literal NAME=value"),
+            ({"other": ["EDITOR=true"]}, "assignments declared for other"),
+        ):
+            with (
+                self.subTest(assignments=assignments),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                config_root, home = config_root_home(tmp)
+                write_permissions(config_root)
+                write(
+                    config_root / "permissions" / "commands" / "test.yaml",
+                    permission_rules_doc(
+                        allow=[["tool", "status"]], extra={"assignments": assignments}
+                    ),
+                )
+                with self.assertRaisesRegex(SourceSchemaError, message):
+                    run_sync(config_root=config_root, home=home)
+
+    def test_a_path_token_also_matches_its_quoted_spellings(self) -> None:
+        """Glob targets match quotes as typed, and agents quote path arguments."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, allow=[["tool", "post", "/api/search"]])
+
+            run_sync(config_root=config_root, home=home)
+
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            bash = opencode_rules(opencode, "shell")
+            for command, decision in {
+                "tool post /api/search --json {}": "allow",
+                "tool post '/api/search' --json {}": "allow",
+                'tool post "/api/search"': "allow",
+                "tool post '/api/create'": "ask",
+            }.items():
+                with self.subTest(command=command):
+                    self.assertEqual(resolve_opencode_bash(bash, command), decision)
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertIn(
+                "Bash(tool post '/api/search' *)", claude["permissions"]["allow"]
+            )
+
     def test_an_option_embedding_sibling_rule_leaves_desktop_too(self) -> None:
         """A rule whose subcommand embeds declared options also collides.
 
@@ -2845,6 +2949,77 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             self.assertEqual(stat.S_IMODE(deployed.stat().st_mode), 0o700)
+
+    def test_bundled_skill_scripts_are_allowed_where_each_target_deploys_them(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            self._runner_skill(config_root)
+            write_permissions(config_root, allow=[["git", "status"]])
+
+            run_sync(config_root=config_root, home=home)
+
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            claude_allow = "\n".join(claude["permissions"]["allow"])
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            opencode_allow = "\n".join(
+                rule["resource"]
+                for rule in opencode["permissions"]
+                if rule["action"] == "shell" and rule["effect"] == "allow"
+            )
+            for text, root in (
+                (claude_allow, ".claude"),
+                (opencode_allow, ".config/opencode"),
+            ):
+                with self.subTest(root=root):
+                    for base in (f"~/{root}", f"{home.as_posix()}/{root}"):
+                        self.assertIn(f"{base}/skills/runner/scripts/poll.sh", text)
+                    # Only executables, and only this target's own path.
+                    self.assertNotIn("notes.md", text)
+            self.assertNotIn(".config/opencode/skills", claude_allow)
+
+    def test_deny_reasons_land_beside_the_opencode_plugins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                deny=[{"command": "find", "reason": "use fd"}, ["rm"]],
+                wrappers=["timeout"],
+            )
+            run_sync(config_root=config_root, home=home)
+
+            sidecar = home / ".config/opencode/opencode-unwrap.json"
+            reasons = json.loads(sidecar.read_text())["reasons"]
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            denies = {
+                rule["resource"]
+                for rule in opencode["permissions"]
+                if rule["action"] == "shell" and rule["effect"] == "deny"
+            }
+            # Every pattern emitted for the reasoned rule, and only those.
+            self.assertEqual(
+                set(reasons), {pattern for pattern in denies if "find" in pattern}
+            )
+            self.assertEqual(set(reasons.values()), {"use fd"})
+            codex = (home / ".codex/rules/coding-agents.rules").read_text()
+            self.assertIn(
+                'prefix_rule(pattern=["find"], decision="forbidden", '
+                'justification="use fd")',
+                codex,
+            )
+            self.assertIn('prefix_rule(pattern=["rm"], decision="forbidden")', codex)
+
+            write_permissions(config_root, deny=[["find"]])
+            run_sync(config_root=config_root, home=home)
+            self.assertFalse(sidecar.exists())
+
+    def test_only_a_deny_carries_a_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, allow=[{"command": "fd", "reason": "no"}])
+            with self.assertRaisesRegex(SourceSchemaError, "only a deny"):
+                run_sync(config_root=config_root, home=home)
 
     def _agent_native(self, config_root: Path, target: str, native: object) -> None:
         write(

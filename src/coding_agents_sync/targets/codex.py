@@ -130,6 +130,7 @@ def _deny_rules(
     projects as its head and each tail appended directly, bare and behind each
     declared wrapper. The option-hole and tail-after-arguments spellings fall to
     Codex's own approval flow. Text and exact predicates have no prefix form.
+    A rule's `reason` becomes the `justification` Codex shows on rejection.
     Allow and ask never project: an allow would skip Codex's sandbox approval
     and an ask would add prompts the sandbox does not need.
     """
@@ -154,7 +155,11 @@ def _deny_rules(
         rules.extend(
             (
                 "permissions",
-                CodexPrefixRule(pattern=[*lead, *pattern], decision="forbidden"),
+                CodexPrefixRule(
+                    pattern=[*lead, *pattern],
+                    decision="forbidden",
+                    justification=rule.reason,
+                ),
             )
             for pattern in patterns
             for lead in ((), *((wrapper,) for wrapper in permissions.wrappers))

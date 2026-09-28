@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
 from ..sources import (
@@ -107,15 +108,41 @@ CURSOR_TOOL_FLAGS = {"websearch": "autoAcceptWebSearch"}
 CURSOR_APPROVAL_MODES = {"ask": "allowlist", "allow": "unrestricted"}
 
 
+def _home_spellings(command: str) -> tuple[str, ...]:
+    """A glob matches the text as typed, and agents type a home path as `~/`
+    or `$HOME/`, so a `~/` program lands under both."""
+    if command.startswith("~/"):
+        return (command, f"$HOME/{command.removeprefix('~/')}")
+    return (command,)
+
+
+def _quoted_spellings(token: str) -> tuple[str, ...]:
+    """Agents quote path arguments (`api post '/api/2.0/x'`), and a glob
+    matches the quotes, so a subcommand token holding a `/` lands in each
+    quoting too."""
+    if "/" in token:
+        return (token, f"'{token}'", f'"{token}"')
+    return (token,)
+
+
 def _glob_heads(
     rule: CommandPermission, options: Sequence[str], prefix: str
 ) -> tuple[str, ...]:
+    programs = _home_spellings(rule.command)
     if not rule.subcommand:
-        return (f"{prefix}{rule.command}",)
-    subcommand = " ".join(rule.subcommand)
-    return (
-        f"{prefix}{rule.command} {subcommand}",
-        *(f"{prefix}{rule.command} {option}* {subcommand}" for option in options),
+        return tuple(f"{prefix}{program}" for program in programs)
+    subcommands = [
+        " ".join(tokens)
+        for tokens in itertools.product(*map(_quoted_spellings, rule.subcommand))
+    ]
+    return tuple(
+        head
+        for program in programs
+        for subcommand in subcommands
+        for head in (
+            f"{prefix}{program} {subcommand}",
+            *(f"{prefix}{program} {option}* {subcommand}" for option in options),
+        )
     )
 
 
@@ -338,7 +365,9 @@ def bucket_entries(
     carries, so a wrapped allowed command falls to `unmatched`. `peeled` are
     wrapper prefixes the target strips before it matches a deny, and before an
     ask too unless `peels_ask` is false. `path_prefix` is where a program path
-    lands for a target that does not resolve one itself.
+    lands for a target that does not resolve one itself. Every rule, allows
+    included, also lands behind each literal `NAME=value` its command declares
+    in `assignments`: a fixed value spans nothing, unlike a wrapper's `*`.
     """
     commands = permissions.commands
     wrapped = [
@@ -354,9 +383,17 @@ def bucket_entries(
             continue
         for rule in rules:
             options = commands.option_tokens(rule.command)
+            assigned = [
+                f"{token} " for token in commands.assignment_tokens(rule.command)
+            ]
             for origin, patterns in (
                 ("base", lower(rule, (), "")),
                 ("option", lower(rule, options, "")),
+                *(
+                    ("assignment", lower(rule, opts, prefix))
+                    for prefix in assigned
+                    for opts in ((), options)
+                ),
             ):
                 yield from ((bucket, origin, pattern) for pattern in patterns)
             if bucket != "allow":
