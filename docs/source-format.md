@@ -73,7 +73,7 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Command | `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `only`, `model_policy`, `effort`, `background`, `color`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
-| Permission rules | `options`, `allow`, `ask`, `deny`. |
+| Permission rules | `options`, `assignments`, `allow`, `ask`, `deny`. |
 
 `model-policy.yaml` is a strict compiler input with schema
 `coding-agents/model-policy/v1`. It contains a non-`inherit` `default` profile
@@ -186,9 +186,21 @@ them in every anchor it checks a file by. `secret_names` deny any command
 that mentions them. Command rules use
 portable literal argv tokens. A token may start with `~` to match the
 home-relative command text agents type; every target matches it literally and
-never expands it. A `text` predicate matches as a substring anywhere after the
-command, so a leading or trailing space in it anchors the match to a token
-boundary: `' -T'` matches `curl -T f` but not `-H Content-Type`.
+never expands it. Claude and OpenCode, which match the typed text, also receive
+a `~/` command under its `$HOME/` spelling, and a subcommand token holding a
+`/` single- and double-quoted. `assignments` maps a command to literal
+`NAME=value` tokens (`git: [GIT_EDITOR=true]`) that agents type in front of it
+and that change nothing a rule decides; those two targets land every rule for
+the command behind each one too. A value is one literal shell word, quoted as
+typed (`IFS=$'\t'`), with no whitespace or glob character, because a wildcard
+would span into the command; Cursor and Codex receive nothing, so such a command
+falls to their default. Like `options`, a command's `assignments` have one
+home. A `text` predicate matches as a substring anywhere after the command, so
+a leading or trailing space in it anchors the match to a token boundary:
+`' -T'` matches `curl -T f` but not `-H Content-Type`. A deny rule
+may carry a one-line `reason`, what the agent should run instead; it is not a
+predicate. OpenCode delivers it through the opencode-unwrap plugin and Codex as
+the forbidden rule's `justification`.
 
 ```yaml
 schema: coding-agents/v4
@@ -208,6 +220,7 @@ deny:
   - command: git
     subcommand: [push]
     tail: [[--force]]
+    reason: use --force-with-lease
 targets:
   cursor:
     omit:

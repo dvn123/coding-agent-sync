@@ -42,6 +42,7 @@ from .support import (
     raw_files,
     strict_native,
     unhandled_target_block,
+    with_skill_scripts,
 )
 
 
@@ -349,6 +350,7 @@ def _validate_patches(
 
 def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.cursor
+    sources = with_skill_scripts(sources, "cursor", root, ctx.home)
     rules_root = root / "rules"
     skills_root = root / "skills"
     trees = [
