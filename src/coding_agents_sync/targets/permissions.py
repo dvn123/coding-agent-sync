@@ -16,9 +16,10 @@ def wrapper_prefixes(wrapper: str) -> tuple[str, str]:
     return (f"{wrapper} ", f"{wrapper} * ")
 
 
-# Claude peels these wrappers, by bare name only, before it matches a deny or
-# ask rule, so copies behind them are dead. `xargs` is peeled only bare: a deny
-# retries itself behind `xargs `, but not behind `xargs` options.
+# Claude strips an absolute program path and then peels these wrappers before
+# it matches a deny or ask rule, so copies behind them are dead. `xargs` is
+# peeled only bare: a deny retries itself behind `xargs `, but not behind
+# `xargs` options.
 CLAUDE_PEELED_WRAPPERS = (
     "timeout",
     "time",
@@ -41,27 +42,14 @@ CLAUDE_PEELED_PREFIXES = frozenset(
         "xargs ",
     }
 )
-# Claude 2.1.283 does not resolve a program path, so every deny also
-# lands behind any absolute directory: `/*/git push *` catches
-# `/usr/bin/git push -f`. The leading `/` keeps it off `ls foo/rm bar`.
-CLAUDE_PROGRAM_PATH = "/*/"
-# Command shapes Claude cannot see past, denied outright whenever a deny
-# exists: a leading redirect (`2>&1 rm -rf x`) and, in 2.1.283, a peeled
-# wrapper run by path (`/usr/bin/env rm -rf x`). Models write neither, so this
-# beats copying every deny behind every such form.
+# Claude cannot see past a leading redirect (`2>&1 rm -rf x`), so a command
+# that starts with one is denied outright whenever a deny exists. Models do not
+# write that shape, so this beats copying every deny behind every redirect.
 CLAUDE_OPAQUE_COMMANDS = (
     "<*",
     ">*",
     "&>*",
     *(f"{fd}{operator}*" for fd in range(10) for operator in "<>"),
-    *(
-        pattern
-        for wrapper in (*CLAUDE_PEELED_WRAPPERS, "xargs")
-        for pattern in (
-            f"{CLAUDE_PROGRAM_PATH}{wrapper} *",
-            f"{CLAUDE_PROGRAM_PATH}{wrapper}",
-        )
-    ),
 )
 # Claude's file permission checks only consult Edit rules, and an Edit rule
 # covers every file-editing tool, so `write` folds onto the same pattern as
@@ -355,7 +343,6 @@ def bucket_entries(
     peeled: frozenset[str] = frozenset(),
     *,
     peels_ask: bool = True,
-    path_prefix: str | None = None,
 ) -> Iterator[tuple[str, str, str]]:
     """Lower each bucket as `(bucket, origin, pattern)`, with wrapped copies
     of every ask and deny rule.
@@ -364,8 +351,7 @@ def bucket_entries(
     get no wrapper form: a blanket `env *` would allow any payload the wrapper
     carries, so a wrapped allowed command falls to `unmatched`. `peeled` are
     wrapper prefixes the target strips before it matches a deny, and before an
-    ask too unless `peels_ask` is false. `path_prefix` is where a program path
-    lands for a target that does not resolve one itself. Every rule, allows
+    ask too unless `peels_ask` is false. Every rule, allows
     included, also lands behind each literal `NAME=value` its command declares
     in `assignments`: a fixed value spans nothing, unlike a wrapper's `*`.
     """
@@ -398,19 +384,12 @@ def bucket_entries(
                 yield from ((bucket, origin, pattern) for pattern in patterns)
             if bucket != "allow":
                 skip = peeled if bucket == "deny" or peels_ask else frozenset()
-                prefixes = [
-                    *([("path", path_prefix)] if path_prefix else []),
-                    *(
-                        (origin, prefix)
-                        for origin, prefix in wrapped
-                        if prefix not in skip
-                    ),
-                ]
-                for origin, prefix in prefixes:
-                    yield from (
-                        (bucket, origin, pattern)
-                        for pattern in lower(rule, options, prefix)
-                    )
+                for origin, prefix in wrapped:
+                    if prefix not in skip:
+                        yield from (
+                            (bucket, origin, pattern)
+                            for pattern in lower(rule, options, prefix)
+                        )
 
 
 def bucket_patterns(entries: Iterable[tuple[str, str, str]]) -> dict[str, list[str]]:

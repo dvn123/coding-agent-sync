@@ -2,7 +2,7 @@
 
 Coding Agents Sync is an installable Python CLI that compiles one external
 Markdown and YAML configuration tree into user-level configuration for Claude
-Code, Codex, Cursor, and OpenCode. It preserves target-native fields, writes
+Code, ChatGPT Desktop / Codex, Cursor, and OpenCode. It preserves target-native fields, writes
 only declared outputs, and refuses to replace modified managed content.
 
 This repository contains the compiler, target knowledge, documentation, and
@@ -30,6 +30,28 @@ capability probe, and `coding-agents-check` runs this repository's development
 validation suite.
 
 ## Configuration
+
+For a fresh setup, copy the [portable starter](examples/portable/) into an empty
+source directory. It includes shared instructions, a skill with ChatGPT UI
+metadata, a reviewer agent, and a parent Codex sandbox patch. It contains no
+credentials or machine-specific paths. Do not copy over an existing source tree.
+
+```sh
+cp -R /path/to/coding-agents-sync/examples/portable /path/to/my-agent-config
+coding-agents-sync --config-root /path/to/my-agent-config --check
+coding-agents-sync --config-root /path/to/my-agent-config
+```
+
+The first `--check` reports expected drift before writing anything. For a
+preview in an isolated home, add `--home /path/to/preview-home`. Use the same
+source root for subsequent runs because it holds the ownership manifest.
+Restart ChatGPT Desktop or start a fresh Codex session after applying.
+
+ChatGPT Desktop and Codex share the `codex` target and `.codex` paths. Do not
+enable an automatic import as a second writer for the same managed settings.
+Sign in, authorize MCP connections, and review plugin hook trust in the host;
+sync does not copy account state. See [the target reference](docs/targets/codex.md)
+for typed metadata, dependencies, agent controls, model policies, and limits.
 
 The default configuration root is:
 

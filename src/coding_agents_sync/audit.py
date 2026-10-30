@@ -7,8 +7,8 @@ lowering can be shown to leave each target's decisions unchanged.
 
 The OpenCode model ports its `Wildcard.match` and last-match evaluation. The
 Claude model reproduces the matching the live `deny-reach` scenarios pin: the
-wildcard grammar, the peeling of assignments and wrappers before deny and ask
-rules, and the retry behind a bare `xargs`.
+wildcard grammar, the peeling of assignments, program paths, and wrappers
+before deny and ask rules, and the retry behind a bare `xargs`.
 """
 
 from __future__ import annotations
@@ -149,6 +149,9 @@ def claude_candidates(command: str, *, deny: bool) -> set[str]:
         elif deny and words and (head := _shell_words(words[0])[0][0]) != words[0]:
             # A quoted or escaped program name: `\rm`, `"rm"`.
             peeled = [head, *words[1:]]
+        elif deny and words and words[0].startswith("/"):
+            # An absolute program path: `/usr/bin/rm`.
+            peeled = [words[0].rsplit("/", 1)[1], *words[1:]]
         else:
             peeled = _peel(words, table)
         if peeled and (text := " ".join(peeled)) not in found:

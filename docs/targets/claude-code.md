@@ -29,19 +29,16 @@ the settings file, so `**/` secret paths and absolute directories take the
 `//` root form, workspace directories receive `Edit(<dir>/**)` when edits are
 allowed, and `workspace.unmatched: allow` becomes `Read(//**)` and
 `Edit(//**)`. Denied workspace directories become Read and Edit denies.
-`workspace.ask` has no channel and needs an omit. Claude peels leading
-assignments, `env` in every form, `sudo`, and `timeout`, `time`, `nice`,
-`nohup`, `stdbuf`, `command`, `builtin`, and `noglob` before it matches a deny
-or ask rule, and retries the rule behind a bare `xargs`, so those wrappers get
-no copies; `xargs` with options still does. Claude 2.1.311 also strips an
-absolute program path, so a deny reaches `/usr/bin/git push -f` and a peeled
-wrapper run by path (`/usr/bin/env rm -rf x`). 2.1.283 did neither,
-so every ask and deny still lands behind `/*/` (`/*/git push *`), which
-matches any absolute directory but not `ls foo/rm`, and a peeled wrapper run
-by path is still denied outright whenever the policy has a deny. No version
-looks past a leading redirect (`2>&1 rm -rf x`), so every command of that
-shape is likewise denied outright. The `deny-reach` and `compiled-guard` live
-scenarios pin this. Generated pointers are semantic
+`workspace.ask` has no channel and needs an omit. Claude strips an absolute
+program path, then peels leading assignments, `env` in every form, `sudo`,
+and `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, and
+`noglob` before it matches a deny or ask rule, and retries the rule behind a
+bare `xargs`. So `/usr/bin/git push -f` and `/usr/bin/env rm -rf x` need no
+copies, and neither do those wrappers; `xargs` with options still does. Claude
+does not look past a leading redirect (`2>&1 rm -rf x`), so whenever the
+policy has a deny, every command of that shape is denied outright. The
+`deny-reach`, `ask-reach`, and `compiled-guard` live scenarios pin this, and
+the compiler targets the latest Claude Code release only. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
 

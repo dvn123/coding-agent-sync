@@ -611,10 +611,19 @@ class ModelPolicyTarget(StrictModel):
         return value
 
 
+class CodexModelPolicyTarget(ModelPolicyTarget):
+    @field_validator("effort")
+    @classmethod
+    def _validate_effort(cls, value: str | None) -> str | None:
+        # Codex accepts model-defined effort values beyond the portable vocabulary.
+        return value
+
+
 class ModelPolicyProfile(StrictModel):
     claude: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
     cursor: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
     opencode: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
+    codex: CodexModelPolicyTarget | None = None
 
 
 class ModelPolicyDocument(StrictModel):
@@ -641,7 +650,13 @@ class ModelPolicyDocument(StrictModel):
         inherit = self.profiles["inherit"]
         if any(
             target.model or target.effort
-            for target in (inherit.claude, inherit.cursor, inherit.opencode)
+            for target in (
+                inherit.claude,
+                inherit.cursor,
+                inherit.opencode,
+                inherit.codex,
+            )
+            if target is not None
         ):
             raise ValueError("inherit profile must not pin a model or effort")
         sweet = self.profiles["sweet-spot"]

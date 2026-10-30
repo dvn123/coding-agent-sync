@@ -78,7 +78,11 @@ Permission documents use the same common fields in YAML, without frontmatter.
 `model-policy.yaml` is a strict compiler input with schema
 `coding-agents/model-policy/v1`. It contains a non-`inherit` `default` profile
 and named target profiles. Each profile may set only `model` and `effort` for
-`claude`, `opencode`, and `cursor`. A named agent selects a profile with
+`claude`, `opencode`, `cursor`, and optionally `codex`. Codex effort values are
+model-defined strings; the other profiles use the portable effort vocabulary.
+An absent `codex` entry preserves existing native agent model settings. An
+explicit `codex: {}` selects inheritance and owns the model fields, so it
+cannot be combined with native or raw model overrides. A named agent selects a profile with
 `model_policy`; an omitted selector uses `default`. The `inherit` profile emits
 no model or effort pin, except Claude emits its explicit native `model: inherit`
 marker so it follows the parent conversation rather than Claude's model-order
@@ -97,11 +101,12 @@ compilers retire the previously generated host file (`CLAUDE.md`,
 policy in place.
 
 The compiler projects a canonical field only where its semantics match. For
-example, skill `paths` and `disable_model_invocation` require omissions for
-Codex and OpenCode; agent `background` requires omissions for Codex and
-OpenCode; agent `color` requires an omission for Codex and a native override
-for OpenCode unless its value is already an OpenCode color; and `effort: max`
-requires one for Codex. Cursor projects command allow and deny rules to its
+example, skill `paths` requires omissions for Codex and OpenCode, while
+`disable_model_invocation` requires one only for OpenCode; agent `background`
+requires omissions for Codex and OpenCode; agent `color` requires an omission
+for Codex and a native override for OpenCode unless its value is already an
+OpenCode color. Codex projects every portable effort, including `max`.
+Cursor projects command allow and deny rules to its
 CLI and Desktop surfaces; only the deny side requires an omission
 acknowledgment (Desktop has no deny channel), so a permission-rule fragment
 containing deny rules must acknowledge
@@ -166,10 +171,9 @@ binding, and Codex gates an unmatched command by sandbox. There is no `deny`
 value: a blanket command denial is not a policy any target can run under.
 Declared `wrappers` get wrapped copies of every ask and deny rule, never a
 blanket allow, so a wrapped allowed command falls to `unmatched`; a target
-that peels a wrapper itself gets no copies for it. On Claude, which resolves
-no program path, every ask and deny also lands behind any absolute directory.
-OpenCode's bundled plugin resolves both, as the OpenCode target reference
-describes.
+that peels a wrapper itself gets no copies for it. Claude strips a program
+path itself, and OpenCode's bundled plugin does, as the OpenCode target
+reference describes.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it
@@ -275,7 +279,7 @@ Target compilers own their native schemas. The supported typed fields are:
 | --- | --- |
 | Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
 | Cursor | Rules: `description`, `globs`, `always_apply`; `globs` requires `always_apply: false`. Skills: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. |
-| Codex | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`. Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `sandbox_mode`, `nickname_candidates`. |
+| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `sandbox_mode` (legacy, warns), `nickname_candidates`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 
 The table is intentionally concrete, not a target extension API. OpenCode V1
