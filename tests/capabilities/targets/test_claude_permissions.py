@@ -485,8 +485,10 @@ EXPECTED = {
     "deny-env-example": {"exit-zero": True, "result-error": True},
     # A deny peels assignments, `env` in every form, `sudo`, the resolved
     # wrappers, and a quoted or escaped program name, and retries itself behind
-    # a bare `xargs`. It does not resolve a program path, skip `xargs` options,
-    # or look past a leading redirect, which runs the denied command.
+    # a bare `xargs`. By 2.1.311 (not yet in 2.1.283) it also strips an
+    # absolute program path, including a peeled wrapper's. It does not skip
+    # `xargs` options or look past a leading redirect, which runs the denied
+    # command.
     **{
         f"deny-reach-{name}": {"exit-zero": True, "denied": denied}
         for name, denied in (
@@ -497,15 +499,15 @@ EXPECTED = {
             ("env-assign", True),
             ("env-unset", True),
             ("env-split", True),
-            ("env-absolute", False),
+            ("env-absolute", True),
             ("xargs", True),
             ("xargs-args", False),
             ("xargs-replace", False),
             ("sudo", True),
             ("timeout", True),
             ("nice", True),
-            ("nice-absolute", False),
-            ("program-absolute", False),
+            ("nice-absolute", True),
+            ("program-absolute", True),
             ("escaped", True),
             ("quoted", True),
             ("redirect", False),

@@ -41,14 +41,14 @@ CLAUDE_PEELED_PREFIXES = frozenset(
         "xargs ",
     }
 )
-# Claude does not resolve a program path, so every deny also lands behind any
-# absolute directory: `/*/git push *` catches `/usr/bin/git push -f`. The
-# leading `/` keeps it off `ls foo/rm bar`.
+# Claude 2.1.283 does not resolve a program path, so every deny also
+# lands behind any absolute directory: `/*/git push *` catches
+# `/usr/bin/git push -f`. The leading `/` keeps it off `ls foo/rm bar`.
 CLAUDE_PROGRAM_PATH = "/*/"
 # Command shapes Claude cannot see past, denied outright whenever a deny
-# exists: a leading redirect (`2>&1 rm -rf x`) and a peeled wrapper run by path
-# (`/usr/bin/env rm -rf x`). Models write neither, so this beats copying every
-# deny behind every such form.
+# exists: a leading redirect (`2>&1 rm -rf x`) and, in 2.1.283, a peeled
+# wrapper run by path (`/usr/bin/env rm -rf x`). Models write neither, so this
+# beats copying every deny behind every such form.
 CLAUDE_OPAQUE_COMMANDS = (
     "<*",
     ">*",
