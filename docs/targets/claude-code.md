@@ -33,12 +33,14 @@ allowed, and `workspace.unmatched: allow` becomes `Read(//**)` and
 assignments, `env` in every form, `sudo`, and `timeout`, `time`, `nice`,
 `nohup`, `stdbuf`, `command`, `builtin`, and `noglob` before it matches a deny
 or ask rule, and retries the rule behind a bare `xargs`, so those wrappers get
-no copies; `xargs` with options still does. Claude resolves no program path,
-so every ask and deny also lands behind `/*/` (`/*/git push *`), which
-matches any absolute directory but not `ls foo/rm`. It looks past neither a
-leading redirect (`2>&1 rm -rf x`) nor a peeled wrapper run by path
-(`/usr/bin/env rm -rf x`), so whenever the policy has a deny, every command
-of either shape is denied outright. The `deny-reach` and `compiled-guard` live
+no copies; `xargs` with options still does. Claude 2.1.311 also strips an
+absolute program path, so a deny reaches `/usr/bin/git push -f` and a peeled
+wrapper run by path (`/usr/bin/env rm -rf x`). 2.1.283 did neither,
+so every ask and deny still lands behind `/*/` (`/*/git push *`), which
+matches any absolute directory but not `ls foo/rm`, and a peeled wrapper run
+by path is still denied outright whenever the policy has a deny. No version
+looks past a leading redirect (`2>&1 rm -rf x`), so every command of that
+shape is likewise denied outright. The `deny-reach` and `compiled-guard` live
 scenarios pin this. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
