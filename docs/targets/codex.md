@@ -1,5 +1,85 @@
 # Codex Target Reference
 
+This target also delivers local configuration for the ChatGPT desktop app.
+Keep the `codex` target name and `.codex` paths: Desktop and the CLI share
+these configuration surfaces. Desktop-only options may use precise
+`/desktop/...` native patch pointers; `/tui/...` settings affect the CLI.
+Account connections, OAuth state, and hook trust remain host-owned.
+
+Skills with `disable_model_invocation: true` receive
+`policy.allow_implicit_invocation: false` in `agents/openai.yaml`.
+The canonical value wins over a bundled policy value; other bundled UI,
+dependency, and policy fields are preserved. Without the canonical flag,
+the bundled file is copied unchanged. See the official
+[skill metadata reference](https://learn.chatgpt.com/docs/build-skills).
+
+## Typed skill metadata
+
+Use `targets.codex.native.openai` to author `agents/openai.yaml` without
+maintaining a separate target file:
+
+```yaml
+targets:
+  codex:
+    native:
+      openai:
+        interface:
+          display_name: Project review
+          short_description: Review a project for actionable defects
+          default_prompt: Review this project.
+        policy:
+          allow_implicit_invocation: false
+        dependencies:
+          tools:
+            - type: mcp
+              value: docs
+              transport: streamable_http
+              url: https://example.com/mcp
+```
+
+Interface fields also include `icon_small`, `icon_large`, and `brand_color`.
+Tool dependencies require a non-empty `value`; optional fields are
+`description`, `transport` (`stdio` or `streamable_http`), and `url`. They
+declare dependencies, not credentials or authorization to install a server.
+Register executable MCP configuration in the parent native patch.
+
+Typed fields merge by section into bundled metadata. Named fields win while
+unmentioned fields survive; dependency tool lists replace the bundled list.
+The portable explicit-invocation flag wins over the native invocation policy.
+These fields never appear in `SKILL.md` frontmatter. Other targets continue
+to receive the portable skill and its bundled files.
+
+## Custom agents
+
+Current ChatGPT Desktop and Codex support agent model behavior through
+`model`, `model_reasoning_effort`, `model_reasoning_summary`
+(`auto`, `concise`, `detailed`, `none`), and `model_verbosity`
+(`low`, `medium`, `high`). Optional `codex` entries in `model-policy.yaml`
+select model and effort through the same symbolic profiles as other targets.
+Do not combine a selected Codex profile with native or raw model fields.
+
+Use typed `features` to disable `shell_tool`, `apps`, `plugins`, `memories`,
+or `request_permissions_tool`. Only `false` is accepted: these controls reduce
+the parent's tool surface; they do not grant new capabilities.
+
+Use `skills.config: [{path: /path/to/SKILL.md, enabled: false}]` to disable
+individual skills, `skills.bundled.enabled: false` to disable bundled skills,
+and `skills.include_instructions: false` to omit the automatic skills block.
+Skills otherwise inherit from the parent. File paths must exist on the target
+machine; keep machine-specific paths in local-only source artifacts.
+
+Legacy `sandbox_mode` remains readable for older clients but emits a warning:
+current custom agents inherit the parent sandbox and cannot override it.
+An instruction to avoid edits is not an enforced read-only sandbox. Configure
+the sandbox and approval policy on the parent session. See the official
+[custom agent schema](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+
+These are local runtime configuration surfaces. They do not provision cloud
+Work hooks, account connectors, OAuth grants, or app trust decisions. Use
+native patches for parent MCP servers, plugin registrations, hooks, config
+profiles, and documented desktop settings; those surfaces are already
+pointer-owned and preserve unnamed siblings.
+
 ## Generated surfaces
 
 | Source | Output |

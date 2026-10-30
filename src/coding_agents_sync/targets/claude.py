@@ -36,7 +36,6 @@ from ..sources import (
 from .permissions import (
     CLAUDE_OPAQUE_COMMANDS,
     CLAUDE_PEELED_PREFIXES,
-    CLAUDE_PROGRAM_PATH,
     CLAUDE_TOOL_PATTERNS,
     bucket_entries,
     bucket_patterns,
@@ -256,12 +255,7 @@ def _agent_meta(
 
 
 def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str]]:
-    return bucket_entries(
-        permissions,
-        glob_variants,
-        CLAUDE_PEELED_PREFIXES,
-        path_prefix=CLAUDE_PROGRAM_PATH,
-    )
+    return bucket_entries(permissions, glob_variants, CLAUDE_PEELED_PREFIXES)
 
 
 def _permission_values(

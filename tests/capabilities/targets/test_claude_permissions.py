@@ -19,10 +19,7 @@ from capabilities.protocols.anthropic import AnthropicRequest, AnthropicResponde
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.claude import environment
-from coding_agents_sync.targets.permissions import (
-    CLAUDE_OPAQUE_COMMANDS,
-    CLAUDE_PROGRAM_PATH,
-)
+from coding_agents_sync.targets.permissions import CLAUDE_OPAQUE_COMMANDS
 
 COMMAND = "permission-blackbox-probe"
 UNLISTED_MARKER = "unlisted"
@@ -302,24 +299,63 @@ SCENARIOS = {
             ("env-assign", f"env FOO=bar {COMMAND} arg"),
             ("env-unset", f"env -u HOME {COMMAND} arg"),
             ("env-split", f"env -S '{COMMAND} arg'"),
-            ("env-absolute", f"/usr/bin/env {COMMAND} arg"),
             ("xargs", f"xargs {COMMAND} arg"),
             ("xargs-args", f"xargs -n 1 {COMMAND} arg"),
             ("xargs-replace", f"xargs -I{{{{}}}} {COMMAND} {{{{}}}}"),
             ("sudo", f"sudo {COMMAND} arg"),
             ("timeout", f"timeout 30 {COMMAND} arg"),
             ("nice", f"nice -n 5 {COMMAND} arg"),
-            ("nice-absolute", f"/usr/bin/nice -n 5 {COMMAND} arg"),
-            ("program-absolute", f"{{bin}}/{COMMAND} arg"),
             ("escaped", f"\\{COMMAND} arg"),
             ("quoted", f'"{COMMAND}" arg'),
             ("redirect", f"> /dev/null {COMMAND} arg"),
             ("redirect-fd", f"2>&1 {COMMAND} arg"),
+            ("program-absolute", f"{{bin}}/{COMMAND} arg"),
+            ("program-absolute-bare", f"{{bin}}/{COMMAND}"),
+            ("program-absolute-system", f"/usr/bin/{COMMAND} arg"),
+            ("env-program-absolute", f"env {{bin}}/{COMMAND} arg"),
+            *(
+                (f"{wrapper}-absolute", f"{{bin}}/{wrapper} {COMMAND} arg")
+                for wrapper in (
+                    "time",
+                    "nohup",
+                    "command",
+                    "builtin",
+                    "noglob",
+                    "env",
+                    "sudo",
+                    "xargs",
+                )
+            ),
+            ("timeout-absolute", f"{{bin}}/timeout 30 {COMMAND} arg"),
+            ("nice-absolute", f"/usr/bin/nice -n 5 {COMMAND} arg"),
+            ("stdbuf-absolute", f"{{bin}}/stdbuf -oL {COMMAND} arg"),
+            ("env-absolute-system", f"/usr/bin/env {COMMAND} arg"),
+            ("xargs-args-absolute", f"{{bin}}/xargs -n 1 {COMMAND} arg"),
         )
     },
-    # The compiled guards: every deny also lands behind `/*/`, and a command
-    # that starts with a redirect or runs a peeled wrapper by path is denied.
-    # A redirect elsewhere and another program run by path are not.
+    # Control: both path forms run when nothing asks.
+    **{
+        f"path-run-{name}": Scenario("Bash", {"command": command}, {"allow": ("Bash",)})
+        for name, command in (
+            ("program", f"{{bin}}/{COMMAND} arg"),
+            ("env", f"/usr/bin/env {COMMAND} arg"),
+        )
+    },
+    # An ask peels exactly like a deny, program path included.
+    **{
+        f"ask-reach-{name}": Scenario(
+            "Bash",
+            {"command": command},
+            {"allow": ("Bash",), "ask": (f"Bash({COMMAND} *)",)},
+        )
+        for name, command in (
+            ("program-absolute", f"{{bin}}/{COMMAND} arg"),
+            ("env-absolute", f"/usr/bin/env {COMMAND} arg"),
+        )
+    },
+    # The compiled guards: a command that starts with a redirect is denied, and
+    # the copies behind `xargs` options reach it run by path. A redirect
+    # elsewhere and another program run by path are not denied.
     **{
         f"compiled-guard-{name}": Scenario(
             "Bash",
@@ -330,22 +366,19 @@ SCENARIOS = {
                     f"Bash({pattern})"
                     for pattern in (
                         f"{COMMAND} *",
-                        f"{CLAUDE_PROGRAM_PATH}{COMMAND} *",
-                        f"{CLAUDE_PROGRAM_PATH}{COMMAND}",
+                        f"xargs * {COMMAND} *",
+                        f"xargs * {COMMAND}",
                         f"{OPT} push *",
-                        f"{CLAUDE_PROGRAM_PATH}{OPT} push *",
-                        f"{CLAUDE_PROGRAM_PATH}{OPT} push",
+                        f"{OPT} push",
                         *CLAUDE_OPAQUE_COMMANDS,
                     )
                 ),
             },
         )
         for name, command in (
-            ("path", f"{{bin}}/{COMMAND} arg"),
-            ("path-bare", f"{{bin}}/{COMMAND}"),
             ("path-subcommand", f"{{bin}}/{OPT} push arg"),
-            ("env-path", f"/usr/bin/env {COMMAND} arg"),
-            ("nice-path", f"/usr/bin/nice -n 5 {COMMAND} arg"),
+            ("xargs-args", f"xargs -n 1 {COMMAND} arg"),
+            ("xargs-args-path", f"{{bin}}/xargs -n 1 {COMMAND} arg"),
             ("other-path", "/bin/echo x"),
             ("fd-dup", f"2>&1 {COMMAND} arg"),
             ("stdout", f"> /dev/null {COMMAND} arg"),
@@ -485,10 +518,9 @@ EXPECTED = {
     "deny-env-example": {"exit-zero": True, "result-error": True},
     # A deny peels assignments, `env` in every form, `sudo`, the resolved
     # wrappers, and a quoted or escaped program name, and retries itself behind
-    # a bare `xargs`. By 2.1.311 (not yet in 2.1.283) it also strips an
-    # absolute program path, including a peeled wrapper's. It does not skip
-    # `xargs` options or look past a leading redirect, which runs the denied
-    # command.
+    # a bare `xargs`, and it strips an absolute program path first, so a
+    # wrapper run by path peels like a bare one. It does not skip `xargs`
+    # options or look past a leading redirect, which runs the denied command.
     **{
         f"deny-reach-{name}": {"exit-zero": True, "denied": denied}
         for name, denied in (
@@ -499,29 +531,54 @@ EXPECTED = {
             ("env-assign", True),
             ("env-unset", True),
             ("env-split", True),
-            ("env-absolute", True),
             ("xargs", True),
             ("xargs-args", False),
             ("xargs-replace", False),
             ("sudo", True),
             ("timeout", True),
             ("nice", True),
-            ("nice-absolute", True),
-            ("program-absolute", True),
             ("escaped", True),
             ("quoted", True),
             ("redirect", False),
             ("redirect-fd", False),
+            ("program-absolute", True),
+            ("program-absolute-bare", True),
+            ("program-absolute-system", True),
+            ("env-program-absolute", True),
+            *(
+                (f"{wrapper}-absolute", True)
+                for wrapper in (
+                    "time",
+                    "nohup",
+                    "command",
+                    "builtin",
+                    "noglob",
+                    "env",
+                    "sudo",
+                    "xargs",
+                    "timeout",
+                    "nice",
+                    "stdbuf",
+                )
+            ),
+            ("env-absolute-system", True),
+            ("xargs-args-absolute", False),
         )
+    },
+    **{
+        f"path-run-{name}": {"exit-zero": True, "executed": True, "denied": False}
+        for name in ("program", "env")
+    },
+    **{
+        f"ask-reach-{name}": {"exit-zero": True, "executed": False, "denied": True}
+        for name in ("program-absolute", "env-absolute")
     },
     **{
         f"compiled-guard-{name}": {"exit-zero": True, "denied": denied}
         for name, denied in (
-            ("path", True),
-            ("path-bare", True),
             ("path-subcommand", True),
-            ("env-path", True),
-            ("nice-path", True),
+            ("xargs-args", True),
+            ("xargs-args-path", True),
             ("other-path", False),
             ("fd-dup", True),
             ("stdout", True),

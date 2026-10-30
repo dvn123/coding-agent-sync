@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import tomlkit
+import yaml
 from pydantic import AliasChoices, ConfigDict, Field, field_validator
 
 from ..models import SyncContext
@@ -23,6 +24,7 @@ from ..sources import (
     SourceBundle,
     StrictModel,
     describe_rule,
+    resolve_model_policy,
 )
 from .permissions import literal_directories
 from .support import (
@@ -51,6 +53,37 @@ class CodexRuleNative(StrictModel):
     rules: list[CodexPrefixRule] = Field(default_factory=list)
 
 
+class CodexSkillInterface(StrictModel):
+    display_name: str | None = None
+    short_description: str | None = None
+    icon_small: str | None = None
+    icon_large: str | None = None
+    brand_color: str | None = None
+    default_prompt: str | None = None
+
+
+class CodexSkillPolicy(StrictModel):
+    allow_implicit_invocation: bool | None = None
+
+
+class CodexSkillTool(StrictModel):
+    type: Literal["mcp"] = "mcp"
+    value: str = Field(min_length=1)
+    description: str | None = None
+    transport: Literal["stdio", "streamable_http"] | None = None
+    url: str | None = None
+
+
+class CodexSkillDependencies(StrictModel):
+    tools: list[CodexSkillTool] = Field(default_factory=list)
+
+
+class CodexSkillMetadata(StrictModel):
+    interface: CodexSkillInterface | None = None
+    policy: CodexSkillPolicy | None = None
+    dependencies: CodexSkillDependencies | None = None
+
+
 class CodexSkillNative(StrictModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
@@ -63,11 +96,35 @@ class CodexSkillNative(StrictModel):
         serialization_alias="allowed-tools",
         validation_alias=AliasChoices("allowed-tools", "allowed_tools"),
     )
+    openai: CodexSkillMetadata | None = None
 
 
 # SandboxMode in codex-rs/protocol/src/config_types.rs. `external-sandbox`
 # is excluded: that enum is SandboxModeRequirement, which config.toml rejects.
 CODEX_SANDBOX_MODES = frozenset({"read-only", "workspace-write", "danger-full-access"})
+
+
+class CodexAgentFeatures(StrictModel):
+    shell_tool: Literal[False] | None = None
+    apps: Literal[False] | None = None
+    plugins: Literal[False] | None = None
+    memories: Literal[False] | None = None
+    request_permissions_tool: Literal[False] | None = None
+
+
+class CodexAgentSkill(StrictModel):
+    path: str = Field(min_length=1)
+    enabled: Literal[False] = False
+
+
+class CodexBundledSkills(StrictModel):
+    enabled: Literal[False] = False
+
+
+class CodexAgentSkills(StrictModel):
+    config: list[CodexAgentSkill] = Field(default_factory=list)
+    bundled: CodexBundledSkills | None = None
+    include_instructions: Literal[False] | None = None
 
 
 class CodexAgentNative(StrictModel):
@@ -81,6 +138,12 @@ class CodexAgentNative(StrictModel):
     # "a model-defined effort value that this client does not know yet", so
     # the accepted set is deliberately open.
     model_reasoning_effort: str | None = None
+    model_reasoning_summary: Literal["auto", "concise", "detailed", "none"] | None = (
+        None
+    )
+    model_verbosity: Literal["low", "medium", "high"] | None = None
+    features: CodexAgentFeatures | None = None
+    skills: CodexAgentSkills | None = None
     sandbox_mode: str | None = None
     nickname_candidates: list[str] | None = None
 
@@ -90,9 +153,33 @@ class CodexAgentNative(StrictModel):
         return one_of("sandbox_mode", value, CODEX_SANDBOX_MODES)
 
 
-def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
+def _tree(
+    skill: SkillSource,
+    root: Path,
+    meta: dict[str, Any],
+    openai: CodexSkillMetadata | None,
+) -> OwnedTree:
     files, executables = bundled_files(skill.source_dir)
-    import yaml
+    if skill.disable_model_invocation or openai is not None:
+        metadata_path = Path("agents/openai.yaml")
+        metadata = yaml.safe_load(files.get(metadata_path, b"{}"))
+        if not isinstance(metadata, dict):
+            raise ValueError("agents/openai.yaml must contain a mapping")
+        for section, fields in (
+            openai.model_dump(exclude_none=True).items() if openai else ()
+        ):
+            existing = metadata.setdefault(section, {})
+            if not isinstance(existing, dict):
+                raise ValueError(f"agents/openai.yaml {section} must contain a mapping")
+            existing.update(fields)
+        if skill.disable_model_invocation:
+            policy = metadata.setdefault("policy", {})
+            if not isinstance(policy, dict):
+                raise ValueError("agents/openai.yaml policy must contain a mapping")
+            policy["allow_implicit_invocation"] = False
+        files[metadata_path] = yaml.safe_dump(
+            metadata, sort_keys=False, allow_unicode=True
+        ).encode()
 
     header = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
     files[Path("SKILL.md")] = f"---\n{header}\n---\n\n{skill.body.rstrip()}\n".encode()
@@ -175,7 +262,7 @@ def _agent_toml(
         "description": agent.description.strip(),
         "developer_instructions": agent.body.rstrip(),
     }
-    if agent.effort in {"low", "medium", "high", "xhigh"}:
+    if agent.effort:
         values["model_reasoning_effort"] = agent.effort
     values.update(native.model_dump(exclude_none=True))
     overlap = set(raw) & set(values)
@@ -257,11 +344,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 value,
                 {
                     *({"paths"} if skill.paths else set()),
-                    *(
-                        {"disable_model_invocation"}
-                        if skill.disable_model_invocation
-                        else set()
-                    ),
                 },
             )
         )
@@ -274,11 +356,14 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     **({"license": skill.license} if skill.license else {}),
                     **({"metadata": skill.metadata} if skill.metadata else {}),
                 },
-                native,
+                native.model_copy(update={"openai": None}),
                 value.raw,
             )
             diagnostics.extend(issues)
-            trees.append(_tree(skill, root / "skills", meta))
+            try:
+                trees.append(_tree(skill, root / "skills", meta, native.openai))
+            except (ValueError, yaml.YAMLError) as exc:
+                diagnostics.append(Diagnostic("error", str(exc), skill.path))
             skill_paths.append(f"~/.codex/skills/{skill.source_dir.name}")
     for command in sources.commands:
         if not applies_to(command, "codex"):
@@ -301,10 +386,42 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 {
                     *({"background"} if agent.background else set()),
                     *({"color"} if agent.color else set()),
-                    *({"effort"} if agent.effort == "max" else set()),
                 },
             )
         )
+        policy = resolve_model_policy(sources, agent, "codex")
+        if policy is not None:
+            conflicts = {"model", "model_reasoning_effort"} & (
+                value.native.keys() | value.raw.keys()
+            )
+            if agent.effort:
+                conflicts.add("effort")
+            if conflicts:
+                diagnostics.append(
+                    Diagnostic(
+                        "error",
+                        "model policy owns Codex fields: "
+                        + ", ".join(sorted(conflicts)),
+                        agent.path,
+                    )
+                )
+            if native:
+                native = native.model_copy(
+                    update={
+                        "model": policy.model,
+                        "model_reasoning_effort": policy.effort,
+                    }
+                )
+        if native and native.sandbox_mode:
+            diagnostics.append(
+                Diagnostic(
+                    "warning",
+                    "custom agent sandbox_mode does not override the parent "
+                    "sandbox in current ChatGPT/Codex; "
+                    "configure the parent session instead",
+                    agent.path,
+                )
+            )
         if native:
             try:
                 content = _agent_toml(agent, native, value.raw)

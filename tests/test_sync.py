@@ -119,15 +119,10 @@ def source_doc(
                 target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
                     "paths"
                 ] = "OpenCode skills have no path activation."
-        if meta.get("disable_model_invocation"):
-            if not only or "codex" in only:
-                target_blocks.setdefault("codex", {}).setdefault("omit", {})[
-                    "disable_model_invocation"
-                ] = "Codex skills have no invocation toggle."
-            if not only or "opencode" in only:
-                target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
-                    "disable_model_invocation"
-                ] = "OpenCode skills have no invocation toggle."
+        if meta.get("disable_model_invocation") and (not only or "opencode" in only):
+            target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
+                "disable_model_invocation"
+            ] = "OpenCode skills have no invocation toggle."
     if target_blocks:
         meta["targets"] = target_blocks
     yaml_text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
@@ -594,14 +589,6 @@ class SyncTests(unittest.TestCase):
                     "Bash(fd -x *)",
                     "Bash(fd * -x *)",
                     "Bash(fd * -x)",
-                    "Bash(/*/fd --exec *)",
-                    "Bash(/*/fd --exec)",
-                    "Bash(/*/fd * --exec *)",
-                    "Bash(/*/fd * --exec)",
-                    "Bash(/*/fd -x *)",
-                    "Bash(/*/fd -x)",
-                    "Bash(/*/fd * -x *)",
-                    "Bash(/*/fd * -x)",
                 ],
             )
             self.assertIn("Bash(gh api * -X DELETE *)", claude["permissions"]["ask"])
@@ -851,12 +838,7 @@ class SyncTests(unittest.TestCase):
                     "Bash(kubectl apply *)",
                     "Bash(kubectl --context* apply *)",
                     "Bash(kubectl --context* apply)",
-                    # Claude resolves no program path, and sees past neither a
-                    # leading redirect nor a wrapper run by path.
-                    "Bash(/*/kubectl apply *)",
-                    "Bash(/*/kubectl apply)",
-                    "Bash(/*/kubectl --context* apply *)",
-                    "Bash(/*/kubectl --context* apply)",
+                    # Claude does not see past a leading redirect.
                     *(f"Bash({pattern})" for pattern in CLAUDE_OPAQUE_COMMANDS),
                 ],
             )
@@ -1523,8 +1505,8 @@ class SyncTests(unittest.TestCase):
             )
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertIn("Bash(*EXAMPLE_TOKEN*)", claude["permissions"]["deny"])
-            self.assertIn("Bash(/*/shred *)", claude["permissions"]["deny"])
-            self.assertIn("Bash(/*/git push *)", claude["permissions"]["deny"])
+            self.assertIn("Bash(shred *)", claude["permissions"]["deny"])
+            self.assertIn("Bash(git push *)", claude["permissions"]["deny"])
             self.assertEqual(
                 claude["permissions"]["additionalDirectories"], ["~/Developer"]
             )
@@ -1692,8 +1674,6 @@ class SyncTests(unittest.TestCase):
                 claude["permissions"]["ask"],
                 [
                     "Bash(rmdir *)",
-                    "Bash(/*/rmdir *)",
-                    "Bash(/*/rmdir)",
                     "Bash(xargs * rmdir *)",
                     "Bash(xargs * rmdir)",
                 ],
@@ -2935,6 +2915,64 @@ class SyncTests(unittest.TestCase):
                     self.assertEqual(stat.S_IMODE(script.stat().st_mode), 0o700)
                     notes = root / "references/notes.md"
                     self.assertEqual(stat.S_IMODE(notes.stat().st_mode), 0o600)
+
+    def test_codex_explicit_skill_policy_preserves_bundled_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            skill = config_root / "skills" / "explicit"
+            write(
+                skill / "SKILL.md",
+                source_doc(
+                    "skill",
+                    "explicit",
+                    "explicit",
+                    "Body\n",
+                    description="Explicit invocation only",
+                    extra={"disable_model_invocation": True},
+                ),
+            )
+            write(
+                skill / "agents/openai.yaml",
+                "interface:\n  display_name: Explicit\n"
+                "policy:\n  allow_implicit_invocation: true\n"
+                "dependencies:\n  tools: []\n",
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                yaml.safe_load(
+                    (home / ".codex/skills/explicit/agents/openai.yaml").read_text()
+                ),
+                {
+                    "interface": {"display_name": "Explicit"},
+                    "policy": {"allow_implicit_invocation": False},
+                    "dependencies": {"tools": []},
+                },
+            )
+
+    def test_codex_explicit_skill_policy_without_bundled_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "skills/explicit/SKILL.md",
+                source_doc(
+                    "skill",
+                    "explicit",
+                    "explicit",
+                    "Body\n",
+                    extra={"disable_model_invocation": True},
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                yaml.safe_load(
+                    (home / ".codex/skills/explicit/agents/openai.yaml").read_text()
+                ),
+                {"policy": {"allow_implicit_invocation": False}},
+            )
 
     def test_resync_repairs_stale_script_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
