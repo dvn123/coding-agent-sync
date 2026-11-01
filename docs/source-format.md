@@ -127,11 +127,11 @@ from another target for one of these values.
 
 `execution.agent` asks Claude and OpenCode to invoke a named subagent.
 `execution.subtask: true` asks each to run the command as an isolated subtask.
-Codex requires `omit.command` when it remains in the emit set, because it has
-no generated user-command surface. Cursor receives a command as a skill the
-model cannot invoke by itself, and requires `omit.execution` for either field.
-Prefer `only: [claude, opencode]` when the command is never meant for the
-other hosts instead of repeating the omissions.
+Codex and Cursor receive a command as a skill the model cannot invoke by
+itself, and require `omit.execution` for either field. A command and a skill
+of the same name are rejected on every target that serves commands as skills.
+Prefer `only: [claude, opencode]` when delegation matters more than reaching
+the other hosts.
 
 ### Agents
 
@@ -275,7 +275,7 @@ Target compilers own their native schemas. The supported typed fields are:
 | --- | --- |
 | Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
 | Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills and commands: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. Agents: `model`, `readonly`. |
-| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`. See the target reference for nested fields. |
+| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern` (a token may list alternatives), `decision`, and optional `justification`. Skills and commands: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 
 The table is intentionally concrete, not a target extension API. Each target

@@ -91,6 +91,30 @@ def applies_to(source: Any, target: str) -> bool:
     return not only or target in only
 
 
+def skill_collisions(sources: SourceBundle, target: ToolName) -> set[str]:
+    """Commands this target lowers to skills that a skill already names.
+
+    The command and the skill would share one skill directory and one `/name`.
+    """
+    skill_names = {
+        skill.source_dir.name for skill in sources.skills if applies_to(skill, target)
+    }
+    return {
+        command.stem
+        for command in sources.commands
+        if applies_to(command, target) and command.stem in skill_names
+    }
+
+
+def collision_error(command: Any) -> Diagnostic:
+    return Diagnostic(
+        "error",
+        f"command {command.stem} collides with the skill of that name; both "
+        f"would answer /{command.stem}",
+        command.path,
+    )
+
+
 def block(source: Any, target: str) -> TargetBlock:
     return source.targets.root.get(target, TargetBlock())
 

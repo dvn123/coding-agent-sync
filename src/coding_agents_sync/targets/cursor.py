@@ -30,6 +30,7 @@ from .support import (
     applies_to,
     block,
     bundled_files,
+    collision_error,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
@@ -37,6 +38,7 @@ from .support import (
     native_patch,
     omissions,
     raw_files,
+    skill_collisions,
     strict_native,
     unhandled_target_block,
     with_skill_scripts,
@@ -323,8 +325,12 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             trees.append(_tree(skill, skills_root, meta))
     # Cursor's own migration turns a slash command into a skill the model
     # cannot invoke by itself.
+    collisions = skill_collisions(sources, "cursor")
     for command in sources.commands:
         if not applies_to(command, "cursor"):
+            continue
+        if command.stem in collisions:
+            diagnostics.append(collision_error(command))
             continue
         value = block(command, "cursor")
         native, issues = strict_native(command.path, "cursor", value, CursorSkillNative)

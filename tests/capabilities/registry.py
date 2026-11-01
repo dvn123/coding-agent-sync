@@ -627,6 +627,7 @@ SURFACES = (
             "agents",
             "skill-registrations",
             "agent-registrations",
+            "permission-profiles",
         ),
     ),
     *_surfaces(
@@ -635,7 +636,6 @@ SURFACES = (
         (
             "config",
             "mcp",
-            "permission-profiles",
             "model-providers",
             "hooks",
             "plugins",
