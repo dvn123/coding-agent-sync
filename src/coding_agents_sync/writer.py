@@ -261,8 +261,14 @@ def preflight_plan(plan: Plan) -> None:
                 if hash_ is None:
                     raise ManagedEntryConflict(f"Missing generated {mode}: {target}")
                 desired[name] = hash_
+            unstructured = {
+                stage / name
+                for name in current
+                if isinstance(producer := producers[root / name], OwnedFile)
+                and not producer.structured
+            }
             for path in stage.rglob("*"):
-                if path.is_file():
+                if path.is_file() and path not in unstructured:
                     _validate_structured(path)
         for name in current - set(previous):
             target = root / name

@@ -22,12 +22,32 @@ def test_desktop_registers_a_custom_subagent_provider() -> None:
     bundle = read(AGENT_EXEC_BUNDLE)
 
     assert re.search(
-        r"\.map\([\w$]+=>new [\w$]+\.([\w$]+)\([\w$]+,[\w$]+,\"workspace\","
-        r"[\w$]+\)\),[\w$]+=new [\w$]+\.\1\([\w$]+\.homedir\(\),[\w$]+,"
+        r"\.map\(\(?[\w$]+=>new (?:[\w$]+\.)?([\w$]+)\([\w$]+,[\w$]+,\"workspace\","
+        r"[\w$]+\)\)?\),[\w$]+=new (?:[\w$]+\.)?\1\([\w$]+\.homedir\(\),[\w$]+,"
         r"\"user\",[\w$]+\)",
         bundle,
     )
     assert "registerSubagentsProvider" in bundle
+
+
+@pytest.mark.capability_case("cursor-desktop.agents")
+@pytest.mark.capability_live
+def test_desktop_reads_agent_frontmatter_line_by_line() -> None:
+    """The compiler writes bare one-line values because Desktop splits each
+    frontmatter line at its first colon instead of parsing YAML."""
+    require_installed(AGENT_EXEC_BUNDLE)
+    bundle = read(AGENT_EXEC_BUNDLE)
+
+    assert re.search(
+        r"for\(const [\w$]+ of [\w$]+\.split\(\"\\n\"\)\)\{"
+        r"const [\w$]+=[\w$]+\.trim\(\);"
+        r".{0,120}const [\w$]+=[\w$]+\.indexOf\(\":\"\)",
+        bundle,
+    )
+    assert re.search(
+        r"\"true\"===\([\w$]+\.readonly\?\?\"\"\)\.trim\(\)\.toLowerCase\(\)", bundle
+    )
+    assert re.search(r"[\w$]+\.background\?\?[\w$]+\.is_background", bundle)
 
 
 @pytest.mark.capability_case("cursor-desktop.mcp")

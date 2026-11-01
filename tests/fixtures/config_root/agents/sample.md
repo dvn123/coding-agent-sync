@@ -14,8 +14,11 @@ targets:
     omit:
       color: Codex agents have no color field.
   cursor:
+    native:
+      readonly: true
     omit:
-      agent: Cursor Agent does not load user-scope agents.
+      effort: Cursor agents have no effort field.
+      color: Cursor agents have no color field.
   opencode:
     native:
       permissions:

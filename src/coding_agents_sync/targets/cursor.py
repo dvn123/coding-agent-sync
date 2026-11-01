@@ -20,6 +20,7 @@ from ..sources import (
     SourceBundle,
     StrictModel,
     describe_rule,
+    resolve_model_policy,
 )
 from .permissions import (
     cursor_shell_variants,
@@ -62,6 +63,21 @@ class CursorSkillNative(StrictModel):
         None, alias="disable-model-invocation"
     )
     metadata: dict[str, Any] | None = None
+
+
+class CursorAgentNative(StrictModel):
+    model: str | None = None
+    readonly: bool | None = None
+
+
+def _agent_file(meta: dict[str, str | bool], body: str) -> bytes:
+    """Desktop reads agent frontmatter line by line as `key: value`, not as
+    YAML: a value must sit bare on one line, and quotes would stay literal."""
+    lines = (
+        f"{key}: {str(value).lower() if isinstance(value, bool) else value}"
+        for key, value in meta.items()
+    )
+    return f"---\n{'\n'.join(lines)}\n---\n\n{body.rstrip()}\n".encode()
 
 
 def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
@@ -212,7 +228,10 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     sources = with_skill_scripts(sources, "cursor", root, ctx.home)
     rules_root = root / "rules"
     skills_root = root / "skills"
-    trees = declared_trees(root, (("rules", "file"), ("skills", "dir")))
+    agents_root = root / "agents"
+    trees = declared_trees(
+        root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
+    )
     files: list[OwnedFile] = []
     diagnostics: list[Diagnostic] = []
     for global_source in sources.globals[:1]:
@@ -302,18 +321,86 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
             diagnostics.extend(issues)
             trees.append(_tree(skill, skills_root, meta))
+    # Cursor's own migration turns a slash command into a skill the model
+    # cannot invoke by itself.
     for command in sources.commands:
         if not applies_to(command, "cursor"):
             continue
         value = block(command, "cursor")
-        diagnostics.extend(unhandled_target_block(command.path, "cursor", value))
-        diagnostics.extend(omissions(command.path, "cursor", value, {"command"}))
+        native, issues = strict_native(command.path, "cursor", value, CursorSkillNative)
+        diagnostics.extend(issues)
+        delegated = command.execution.agent or command.execution.subtask
+        diagnostics.extend(
+            omissions(
+                command.path, "cursor", value, {"execution"} if delegated else set()
+            )
+        )
+        if native:
+            meta, issues = frontmatter(
+                command.path,
+                {
+                    "name": command.stem,
+                    "description": command.description,
+                    "disable-model-invocation": True,
+                },
+                native,
+                value.raw,
+            )
+            diagnostics.extend(issues)
+            trees.append(
+                OwnedTree(
+                    skills_root / command.stem,
+                    ((Path("SKILL.md"), markdown(meta, command.body)),),
+                    skills_root,
+                )
+            )
     for agent in sources.agents:
         if not applies_to(agent, "cursor"):
             continue
         value = block(agent, "cursor")
-        diagnostics.extend(unhandled_target_block(agent.path, "cursor", value))
-        diagnostics.extend(omissions(agent.path, "cursor", value, {"agent"}))
+        native, issues = strict_native(agent.path, "cursor", value, CursorAgentNative)
+        diagnostics.extend(issues)
+        diagnostics.extend(
+            omissions(
+                agent.path,
+                "cursor",
+                value,
+                {
+                    *({"effort"} if agent.effort else set()),
+                    *({"color"} if agent.color else set()),
+                },
+            )
+        )
+        if value.raw:
+            diagnostics.append(
+                Diagnostic("error", "cursor raw fields are not valid here", agent.path)
+            )
+        policy = resolve_model_policy(sources, agent, "cursor")
+        if policy is not None and native and native.model is not None:
+            diagnostics.append(
+                Diagnostic(
+                    "error", "model policy owns Cursor fields: model", agent.path
+                )
+            )
+        if native:
+            model = native.model if policy is None else policy.model
+            meta: dict[str, str | bool] = {"name": agent.name}
+            if description := " ".join(agent.description.split()):
+                meta["description"] = description
+            if model:
+                meta["model"] = model
+            if native.readonly:
+                meta["readonly"] = True
+            if agent.background:
+                meta["background"] = True
+            files.append(
+                OwnedFile(
+                    agents_root / agent.path.name,
+                    _agent_file(meta, agent.body),
+                    agents_root,
+                    structured=False,
+                )
+            )
     if permissions := sources.permissions:
         value = block(permissions, "cursor")
         diagnostics.extend(

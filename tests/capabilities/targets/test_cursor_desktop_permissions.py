@@ -99,7 +99,7 @@ def test_desktop_lowers_the_terminal_allowlist_to_allows_with_no_deny_list() -> 
     require_installed(PERMISSIONS_SCHEMA, DESKTOP_BUNDLE, AGENT_EXEC_BUNDLE)
     bundle = read(AGENT_EXEC_BUNDLE)
 
-    assert re.search(r"\.map\([\w$]+=>`Shell\(\$\{[\w$]+\}\)`\)", bundle)
+    assert re.search(r"\.map\(\(?[\w$]+=>`Shell\(\$\{[\w$]+\}\)`\)?\)", bundle)
     assert re.search(r"\{allow:[\w$]+,deny:\[\]\}", bundle)
     assert re.search(
         r"getEffectiveTerminalAllowlist\(\)\.map\([\w$]+=>`Shell\(\$\{[\w$]+\}\)`\)",
