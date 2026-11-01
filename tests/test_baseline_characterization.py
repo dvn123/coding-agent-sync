@@ -45,6 +45,9 @@ V4_PORTABLE_ADDED = {
     ".cursor/.coding-agents-managed.json",
     # Shell denies rely on the bundled plugin to see through wrappers.
     ".config/opencode/plugins/opencode-unwrap.js",
+    ".config/opencode/rules/.coding-agents-managed.json",
+    ".config/opencode/rules/always.md",
+    ".config/opencode/rules/scoped.md",
 }
 V4_PORTABLE_REMOVED = {
     # Claude merged commands into skills; the fixture command is OpenCode-only.
@@ -62,8 +65,6 @@ V4_PORTABLE_CHANGED = {
     ".claude/skills/sample/SKILL.md",
     ".codex/skills/.coding-agents-managed.json",
     ".codex/skills/sample/SKILL.md",
-    # OpenCode 2 ignores `instructions`, so rules join the global AGENTS.md.
-    ".config/opencode/AGENTS.md",
     ".config/opencode/agents/.coding-agents-managed.json",
     ".config/opencode/agents/sample.md",
     # OpenCode 2 renamed `subtask` to `subagent`.
@@ -165,8 +166,12 @@ def test_isolated_home_matches_913bd2d_characterization(tmp_path: Path) -> None:
         for path, hash_ in baseline_portable.items()
         if path not in V4_PORTABLE_CHANGED | V4_PORTABLE_REMOVED
     }
-    for path in V4_PORTABLE_ADDED - {".config/opencode/plugins/opencode-unwrap.js"}:
-        assert json.loads((home / path).read_text()) == {"version": 1, "entries": {}}
+    for path in V4_PORTABLE_ADDED:
+        if path.endswith("/.coding-agents-managed.json") and "/rules/" not in path:
+            assert json.loads((home / path).read_text()) == {
+                "version": 1,
+                "entries": {},
+            }
 
     baseline_native = BASELINE["native_semantic_sha256"]
     assert {
@@ -182,9 +187,8 @@ def test_isolated_home_matches_913bd2d_characterization(tmp_path: Path) -> None:
         if path not in V4_NATIVE_CHANGED
     }
     codex = tomllib.loads((home / ".codex/config.toml").read_text())
-    assert codex["skills"]["config"] == [
-        {"path": "~/.codex/skills/sample", "enabled": True}
-    ]
+    assert "skills" not in codex
+    assert "agents" not in codex
     assert not (home / ".cursor/agents/sample.md").exists()
     manifest = json.loads((config_root / ".coding-agents-native.json").read_text())
     target_paths = {

@@ -89,7 +89,10 @@ pointer-owned and preserve unnamed siblings.
 | Skill | `<home>/.codex/skills/<directory>/` |
 | Command | no generated surface |
 | Agent | `<home>/.codex/agents/<stem>.toml` |
-| Registrations | owned pointers in `<home>/.codex/config.toml` |
+| Workspace directories | owned `sandbox_workspace_write.writable_roots` in `<home>/.codex/config.toml` |
+
+Codex discovers `skills/` and `agents/*.toml` below `<home>/.codex` itself, so
+`config.toml` carries no skill or agent registration.
 
 Global and rule bodies concatenate into `AGENTS.md`. A rule may separately use
 strict `targets.codex.native.rules` entries containing a non-empty literal
@@ -125,11 +128,11 @@ fields and is visibly unvalidated. Non-equivalent portable skill or agent
 fields require a reasoned omit acknowledgement.
 
 `patches/codex.yaml` targets `<home>/.codex/config.toml`; it may only use
-pointers disjoint from generated skill and agent registrations. Raw files below
+pointers disjoint from generated pointers. Raw files below
 `target-config/codex/raw/` mirror below `<home>/.codex`; `config.toml` and the
 generated rules file are reserved. Raw files are byte-preserved and
 manifest-owned.
 
-Codex ownership is pointer plus semantic hash for registrations and portable
+Codex ownership is pointer plus semantic hash for generated pointers and portable
 manifests for files. Unnamed TOML keys and unmanifested siblings remain
 Codex-owned.
