@@ -94,15 +94,6 @@ def fold_edit_write(
     )
 
 
-CURSOR_TOOL_PATTERNS = {"read": "Read(**)", "write": "Write(**)"}
-CURSOR_TOOL_FLAGS = {"websearch": "autoAcceptWebSearch"}
-# The CLI's approvalMode, which is the only one `unmatched` reaches; Desktop
-# is pinned to `allowlist` because it has no deny channel. The enum's third
-# value, `auto-review`, hands unlisted commands to a model classifier, which no
-# portable value asks for. `permissions.deny` binds under every value.
-CURSOR_APPROVAL_MODES = {"ask": "allowlist", "allow": "unrestricted"}
-
-
 def _home_spellings(command: str) -> tuple[str, ...]:
     """A glob matches the text as typed, and agents type a home path as `~/`
     or `$HOME/`, so a `~/` program lands under both."""
@@ -190,23 +181,17 @@ def glob_variants(
 
 
 def cursor_shell_variants(
-    rule: CommandPermission,
-    options: Sequence[str] = (),
-    wrapper: str | None = None,
+    rule: CommandPermission, options: Sequence[str] = ()
 ) -> tuple[str, ...]:
     if rule.text:
         return ()
-    program = wrapper or rule.command
-    lead = (rule.command,) if wrapper else ()
+    program = rule.command
     if rule.subcommand:
-        subcommand = (*lead, *rule.subcommand)
         heads: tuple[tuple[str, ...], ...] = (
-            subcommand,
-            *((*lead, option, *rule.subcommand) for option in options),
-            *((*lead, option, "*", *rule.subcommand) for option in options),
+            rule.subcommand,
+            *((option, *rule.subcommand) for option in options),
+            *((option, "*", *rule.subcommand) for option in options),
         )
-    elif lead:
-        heads = (lead,)
     elif rule.exact:
         # An empty head renders as `prog:`, the exact-bare form: the program
         # with no arguments, pinned by the bare-exact live scenarios.
@@ -215,8 +200,6 @@ def cursor_shell_variants(
         return (rule.command,)
     else:
         heads = ((),)
-    if wrapper:
-        heads = tuple(shaped for head in heads for shaped in (head, ("*", *head)))
     prefixes = heads
     if rule.tail:
         prefixes = tuple(
@@ -228,11 +211,19 @@ def cursor_shell_variants(
     rendered = tuple(dict.fromkeys(" ".join(prefix) for prefix in prefixes))
     if rule.exact:
         return tuple(f"{program}:{prefix}" for prefix in rendered)
+    # Cursor matches a plain entry as the whole command or a prefix of it at a
+    # word boundary, so one `prog sub` covers the bare command and any
+    # arguments. A hole needs the `prog:args` glob form, bare and with a
+    # trailing `*`, because that `*` is not optional.
     return tuple(
         dict.fromkeys(
             variant
             for prefix in rendered
-            for variant in (f"{program}:{prefix}", f"{program}:{prefix} *")
+            for variant in (
+                (f"{program}:{prefix}", f"{program}:{prefix} *")
+                if "*" in prefix
+                else (f"{program} {prefix}",)
+            )
         )
     )
 
@@ -323,27 +314,6 @@ def literal_directories(workspace: WorkspacePermissions) -> list[str]:
 
 def secret_name_variants(names: Iterable[str]) -> tuple[str, ...]:
     return tuple(f"*{name}*" for name in names)
-
-
-def rule_patterns(
-    permissions: PermissionSource,
-    lower: Callable[[CommandPermission, Sequence[str], str | None], Sequence[str]],
-    rules: Iterable[CommandPermission],
-) -> list[str]:
-    """Lower each rule bare and once per declared wrapper, with no blanket.
-
-    A bare wrapper allow (`Shell(env)`) would match any payload the wrapper
-    carries, so a wrapper form is only ever emitted attached to its rule.
-    """
-    commands = permissions.commands
-    return list(
-        dict.fromkeys(
-            variant
-            for rule in rules
-            for wrapper in (None, *permissions.wrappers)
-            for variant in lower(rule, commands.option_tokens(rule.command), wrapper)
-        )
-    )
 
 
 def bucket_entries(

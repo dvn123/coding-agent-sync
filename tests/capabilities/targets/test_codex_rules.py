@@ -223,16 +223,17 @@ def test_codex_compiled_agent_registration_is_used_by_spawned_agent(
     configure(paths, runtime)
     run_sync(config_root=config_root, home=paths.home)
 
+    # Codex discovers agents/*.toml itself, so config.toml registers nothing.
     config = (paths.home / ".codex" / "config.toml").read_text()
     agent = (paths.home / ".codex" / "agents" / f"{AGENT_NAME}.toml").read_text()
-    assert AGENT_DESCRIPTION in config
-    assert f'config_file = "~/.codex/agents/{AGENT_NAME}.toml"' in config
+    assert AGENT_DESCRIPTION not in config
+    assert "config_file" not in config
     assert AGENT_BODY in agent
     assert 'model = "gpt-5.2"' in agent
 
     runtime.responder.agent_type = AGENT_NAME
     requests = invoke(runtime, paths)
-    catalog = "\n".join(request.text("tool_search_output") for request in requests)
+    catalog = "\n".join(request.text() for request in requests)
     assert AGENT_NAME in catalog
     assert AGENT_DESCRIPTION in catalog
     spawned = [request for request in requests if AGENT_BODY in request.text()]

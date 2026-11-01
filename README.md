@@ -111,7 +111,9 @@ behavior.
 
 Portable generated roots use `.coding-agents-managed.json` manifests. The
 compiler prunes only previously manifested entries and rejects modified managed
-content. Unmanifested siblings remain untouched.
+content. Unmanifested siblings remain untouched. Files that using a tree leaves
+behind (`__pycache__`, `*.pyc`, `.DS_Store`) are neither content nor edits:
+they never cause drift or a conflict and are never copied from sources.
 
 Native configuration is reconciled at named JSON/TOML pointers, recorded in
 `config_root/.coding-agents-native.json`. A generated list (permission rules,
