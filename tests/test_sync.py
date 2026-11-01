@@ -459,6 +459,94 @@ class ModelPolicyTests(unittest.TestCase):
             self.assertIn("action: subagent", opencode)
 
 
+class NativeListOwnershipTests(unittest.TestCase):
+    """A generated list owns its own entries; tool-added entries survive."""
+
+    def test_tool_added_entry_survives_and_only_generated_entries_are_pruned(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, allow=[["git", "status"], ["git", "log"]])
+            run_sync(config_root=config_root, home=home)
+            settings = home / ".claude" / "settings.json"
+            document = json.loads(settings.read_text())
+            document["permissions"]["allow"].append("Bash(npm test)")
+            write(settings, json.dumps(document))
+
+            write_permissions(config_root, allow=[["git", "status"]])
+            run_sync(config_root=config_root, home=home)
+
+            allow = json.loads(settings.read_text())["permissions"]["allow"]
+            self.assertEqual(allow[0], "Bash(npm test)")
+            self.assertIn("Bash(git status *)", allow)
+            self.assertNotIn("Bash(git log *)", allow)
+            self.assertEqual(run_sync(config_root=config_root, home=home), ())
+
+    def test_first_claim_keeps_existing_entries_before_generated_ones(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "rules" / "a.md",
+                source_doc("rule", "a", "a", "Rule A\n"),
+            )
+            config = home / ".config" / "opencode" / "opencode.json"
+            write(config, json.dumps({"instructions": ["notes/*.md"]}))
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                json.loads(config.read_text())["instructions"],
+                ["notes/*.md", "~/.config/opencode/rules/*.md"],
+            )
+
+    def test_patch_extended_entries_are_owned_and_pruned_with_the_patch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "rules" / "a.md",
+                source_doc("rule", "a", "a", "Rule A\n"),
+            )
+            patch = config_root / "patches" / "opencode.yaml"
+            write(
+                patch,
+                "schema: coding-agents/patch/v1\n"
+                "extend:\n  /instructions: [extra/*.md]\n",
+            )
+            run_sync(config_root=config_root, home=home)
+            config = home / ".config" / "opencode" / "opencode.json"
+            self.assertEqual(
+                json.loads(config.read_text())["instructions"],
+                ["~/.config/opencode/rules/*.md", "extra/*.md"],
+            )
+
+            patch.unlink()
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                json.loads(config.read_text())["instructions"],
+                ["~/.config/opencode/rules/*.md"],
+            )
+
+    def test_first_claim_refuses_a_differing_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root, allow=[["git", "status"]])
+            cli_config = home / ".cursor" / "cli-config.json"
+            write(cli_config, json.dumps({"approvalMode": "unrestricted"}))
+
+            with self.assertRaisesRegex(
+                NativeConfigError, "existing native value differs"
+            ):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                json.loads(cli_config.read_text()), {"approvalMode": "unrestricted"}
+            )
+
+
 class ManifestTests(unittest.TestCase):
     def test_prunes_unchanged_stale_entry_and_preserves_unmanifested_sibling(
         self,
@@ -3439,8 +3527,11 @@ class SyncTests(unittest.TestCase):
             config = json.loads(opencode_json.read_text(encoding="utf-8"))
             self.assertEqual(config["$schema"], "https://opencode.ai/config.json")
             self.assertEqual(config["share"], "disabled")
-            # Rules land as files that one compiler-owned glob loads.
-            self.assertEqual(config["instructions"], ["~/.config/opencode/rules/*.md"])
+            # Rules land as files that one owned glob loads; the hand-written
+            # entry stays ahead of it.
+            self.assertEqual(
+                config["instructions"], ["old-rule", "~/.config/opencode/rules/*.md"]
+            )
             self.assertEqual(
                 (home / ".config/opencode/rules/a.md").read_text(), "Rule A\n"
             )

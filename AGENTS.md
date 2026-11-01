@@ -10,8 +10,9 @@
   translator under `targets/`, plan types in `plan.py`, and write/ownership
   behavior in `writer.py` or `runtime_config.py`. Keep `sync.py`
   orchestration-only.
-- Preserve manifested portable ownership and native pointer/hash ownership.
-  Never prune unmanifested siblings or unnamed native fields.
+- Preserve manifested portable ownership and native pointer ownership: whole
+  values by hash, generated lists by entry. Never prune unmanifested siblings,
+  foreign list entries, or unnamed native fields.
 - `config_root` owns sources, patches, target fragments, and the native
   manifest. `home` owns generated target files. Lower layers must not infer one
   from the other.

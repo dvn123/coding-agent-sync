@@ -16,8 +16,8 @@ it has moved to one, and the rest still passes through that migration.
 | Permissions | owned native `/permissions` rule list in `opencode.json` |
 | Permissions | `<home>/.config/opencode/plugins/opencode-unwrap.js`, the bundled wrapper plugin |
 
-The compiler owns the whole `instructions` list while rules exist; add other
-instruction files with a patch `extend` at `/instructions`. Rules have no
+The compiler owns only its glob in `instructions`; other entries, hand-written
+or added with a patch `extend`, sit beside it. Rules have no
 OpenCode-native fields. Typed skills use
 `name`, `description`, `license`, `metadata`, and `compatibility`; commands use
 `name`, `description`, `agent`, `subagent`, and `model`; agents use the native
