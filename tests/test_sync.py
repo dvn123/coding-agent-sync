@@ -70,14 +70,12 @@ def source_doc(
                 meta[key] = value
     if kind == "command":
         only = set(meta.get("only") or ())
-        if not only or "codex" in only:
-            target_blocks.setdefault("codex", {}).setdefault("omit", {})["command"] = (
-                "Codex has no native command delivery."
-            )
-        if meta.get("execution") and (not only or "cursor" in only):
-            target_blocks.setdefault("cursor", {}).setdefault("omit", {})[
-                "execution"
-            ] = "Cursor skills have no delegated execution."
+        if meta.get("execution"):
+            for target in ("codex", "cursor"):
+                if not only or target in only:
+                    target_blocks.setdefault(target, {}).setdefault("omit", {})[
+                        "execution"
+                    ] = "Explicit-only skills have no delegated execution."
     if kind == "agent":
         only = set(meta.get("only") or ())
         if not only or "cursor" in only:
@@ -156,19 +154,19 @@ def permission_policy_doc(
         targets.setdefault("cursor", {}).setdefault("omit", {})["tools"] = (
             "Cursor lacks one shared tool permission surface."
         )
-        targets.setdefault("codex", {}).setdefault("omit", {})["tools"] = (
-            "Codex has no portable permission surface."
-        )
+        if set(source["tools"].values()) - {"allow"}:
+            targets.setdefault("codex", {}).setdefault("omit", {})["tools"] = (
+                "Codex has no tool gate."
+            )
     workspace = source.get("workspace", {})
     if workspace.get("allow") or workspace.get("ask") or workspace.get("deny"):
         targets.setdefault("cursor", {}).setdefault("omit", {})["workspace"] = (
             "Cursor lacks one shared workspace permission surface."
         )
-    for key in ("ask", "deny"):
-        if workspace.get(key):
-            targets.setdefault("codex", {}).setdefault("omit", {})[
-                f"workspace.{key}"
-            ] = f"Codex has no workspace {key} channel."
+    if workspace.get("ask"):
+        targets.setdefault("codex", {}).setdefault("omit", {})["workspace.ask"] = (
+            "Codex has no workspace ask channel."
+        )
     if workspace.get("unmatched", "ask") != "ask":
         targets.setdefault("codex", {}).setdefault("omit", {})[
             "workspace.unmatched"
@@ -176,9 +174,6 @@ def permission_policy_doc(
     if source["secret_paths"]:
         targets.setdefault("cursor", {}).setdefault("omit", {})["secret_paths"] = (
             "Cursor lacks a shared secret-path channel."
-        )
-        targets.setdefault("codex", {}).setdefault("omit", {})["secret_paths"] = (
-            "Codex has no portable secret-path channel."
         )
     if source["secret_names"]:
         targets.setdefault("cursor", {}).setdefault("omit", {})["secret_names"] = (
@@ -193,7 +188,7 @@ def permission_policy_doc(
         )
     if source.get("unmatched", "ask") != "ask":
         targets.setdefault("codex", {}).setdefault("omit", {})["unmatched"] = (
-            "Codex gates unmatched commands by sandbox."
+            "Codex runs an unlisted command in its sandbox."
         )
         targets.setdefault("cursor", {}).setdefault("omit", {})["unmatched"] = (
             "Cursor Desktop has no deny channel; the CLI projects it."
@@ -1502,11 +1497,23 @@ class SyncTests(unittest.TestCase):
                     self.assertIn(rule, deny)
             self.assertIn("Edit(~/Developer/**)", claude["permissions"]["allow"])
             self.assertNotIn("Read(//**)", claude["permissions"]["allow"])
-            # Codex takes the allowed directories as absolute sandbox roots.
+            # Codex selects a profile on its workspace sandbox: allowed
+            # directories are written, denied paths unreadable at any depth.
             codex = tomllib.loads((home / ".codex/config.toml").read_text())
+            self.assertEqual(codex["default_permissions"], "coding-agents")
+            self.assertNotIn("approval_policy", codex)
             self.assertEqual(
-                codex["sandbox_workspace_write"]["writable_roots"],
-                [str(home / "Developer")],
+                codex["permissions"]["coding-agents"],
+                {
+                    "description": "permissions",
+                    "extends": ":workspace",
+                    "filesystem": {
+                        str(home / "Developer"): "write",
+                        str(home / ".ssh"): "deny",
+                        "/**/.env": "deny",
+                        str(home / ".aws/credentials"): "deny",
+                    },
+                },
             )
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
@@ -1544,7 +1551,8 @@ class SyncTests(unittest.TestCase):
             self.assertIn("Read(//d/vault/**)", claude["permissions"]["deny"])
             codex = tomllib.loads((home / ".codex/config.toml").read_text())
             self.assertEqual(
-                codex["sandbox_workspace_write"]["writable_roots"], ["C:/mise"]
+                codex["permissions"]["coding-agents"]["filesystem"],
+                {"C:/mise": "write", "D:/vault": "deny"},
             )
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
             self.assertEqual(
@@ -1737,6 +1745,48 @@ class SyncTests(unittest.TestCase):
                     self.assertNotIn(f'"{absent}"', codex_rules)
             self.assertIn("omitted deny rg ~--pre", stderr.getvalue())
             self.assertIn("omitted deny ls", stderr.getvalue())
+
+    def test_codex_rules_share_alternatives_across_wrappers_and_siblings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                ask=[["git", "push"]],
+                deny=[
+                    ["aws", "configure", "get"],
+                    ["aws", "configure", "export-credentials"],
+                    {"command": "aws", "subcommand": ["sso"], "reason": "use SSO"},
+                    {
+                        "command": "git",
+                        "subcommand": ["push"],
+                        "tail": ["-f", "--force"],
+                    },
+                ],
+                wrappers=["nohup", "env"],
+            )
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                (home / ".codex/rules/coding-agents.rules").read_text(),
+                "# Generated by coding-agents sync\n"
+                'prefix_rule(pattern=["aws", "configure", ["export-credentials", '
+                '"get"]], decision="forbidden")\n'
+                'prefix_rule(pattern=["aws", "sso"], decision="forbidden", '
+                'justification="use SSO")\n'
+                'prefix_rule(pattern=[["env", "nohup"], "aws", "configure", '
+                '["export-credentials", "get"]], decision="forbidden")\n'
+                'prefix_rule(pattern=[["env", "nohup"], "aws", "sso"], '
+                'decision="forbidden", justification="use SSO")\n'
+                'prefix_rule(pattern=[["env", "nohup"], "git", "push"], '
+                'decision="prompt")\n'
+                'prefix_rule(pattern=[["env", "nohup"], "git", "push", '
+                '["--force", "-f"]], decision="forbidden")\n'
+                'prefix_rule(pattern=["git", "push"], decision="prompt")\n'
+                'prefix_rule(pattern=["git", "push", ["--force", "-f"]], '
+                'decision="forbidden")\n',
+            )
 
     def test_local_command_fragments_merge_and_are_validated(self) -> None:
         """Work-specific commands stay out of committed sources.
@@ -2364,7 +2414,16 @@ class SyncTests(unittest.TestCase):
             parsed_codex_agent = tomllib.loads(codex_agent)
             self.assertEqual(parsed_codex_agent["developer_instructions"], "Agent body")
 
-            self.assertFalse((home / ".codex" / "skills" / "review-pr").exists())
+            codex_command = home / ".codex" / "skills" / "review-pr"
+            self.assertEqual(
+                (codex_command / "SKILL.md").read_text(),
+                "---\nname: review-pr\ndescription: Review a pull request\n---\n\n"
+                "Review pull request $ARGUMENTS.\n",
+            )
+            self.assertEqual(
+                yaml.safe_load((codex_command / "agents" / "openai.yaml").read_text()),
+                {"policy": {"allow_implicit_invocation": False}},
+            )
             codex_rules = (home / ".codex" / "rules" / "coding-agents.rules").read_text(
                 encoding="utf-8"
             )
@@ -3862,91 +3921,29 @@ body
             )
             self.assertEqual(claude_manifest["entries"], {})
 
-    def test_claude_rejects_a_command_named_like_a_skill(self) -> None:
-        """Claude serves commands as skills, so both would answer /one."""
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "skills" / "one" / "SKILL.md",
-                source_doc("skill", "one", "one", "body\n", description="skill"),
-            )
-            write(
-                config_root / "commands" / "one.md",
-                source_doc("command", "one-command", "one", "body\n"),
-            )
+    def test_a_command_named_like_a_skill_is_rejected(self) -> None:
+        """Claude, Codex, and Cursor serve commands as skills, so both would
+        answer one /one."""
+        for target in ("claude", "codex", "cursor"):
+            with self.subTest(target), tempfile.TemporaryDirectory() as tmp:
+                config_root, home = config_root_home(tmp)
+                write(
+                    config_root / "skills" / "one" / "SKILL.md",
+                    source_doc("skill", "one", "one", "body\n", description="skill"),
+                )
+                write(
+                    config_root / "commands" / "one.md",
+                    source_doc(
+                        "command",
+                        "one-command",
+                        "one",
+                        "body\n",
+                        extra={"only": [target]},
+                    ),
+                )
 
-            with self.assertRaisesRegex(ValueError, "collides with the skill"):
-                run_sync(config_root=config_root, home=home)
-
-    def test_codex_omits_commands_on_skill_name_collision(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "skills" / "one" / "SKILL.md",
-                source_doc(
-                    "skill", "one", "one", "Skill body\n", description="Skill one"
-                ),
-            )
-            write(
-                config_root / "commands" / "one.md",
-                source_doc(
-                    "command",
-                    "one-command",
-                    "one",
-                    "Command body\n",
-                    description="Command one",
-                    # Claude would serve it and the skill at one /one.
-                    extra={"only": ["opencode", "codex"]},
-                ),
-            )
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertEqual(
-                sorted(path.name for path in (home / ".codex" / "skills").iterdir()),
-                [".coding-agents-managed.json", "one"],
-            )
-
-    def test_codex_omits_all_commands_without_creating_collision_aliases(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "skills" / "one" / "SKILL.md",
-                source_doc(
-                    "skill", "one", "one", "Skill body\n", description="Skill one"
-                ),
-            )
-            write(
-                config_root / "commands" / "one.md",
-                source_doc(
-                    "command",
-                    "one-command",
-                    "one",
-                    "Command body\n",
-                    description="Command one",
-                    # Claude would serve it and the skill at one /one.
-                    extra={"only": ["opencode", "codex"]},
-                ),
-            )
-            write(
-                config_root / "commands" / "source-command-one.md",
-                source_doc(
-                    "command",
-                    "source-command-one-command",
-                    "source-command-one",
-                    "Second command body\n",
-                    description="Second command",
-                ),
-            )
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertEqual(
-                sorted(path.name for path in (home / ".codex" / "skills").iterdir()),
-                [".coding-agents-managed.json", "one"],
-            )
+                with self.assertRaisesRegex(ValueError, "collides with the skill"):
+                    run_sync(config_root=config_root, home=home)
 
     def test_prunes_stale_rules_agents_skills_and_codex_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

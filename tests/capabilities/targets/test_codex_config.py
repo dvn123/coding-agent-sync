@@ -18,6 +18,7 @@ from capabilities.harness import (
 from capabilities.protocols.responses import ResponsesRequest, responses_done
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
+from coding_agents_sync.sync import run_sync
 
 BASE_MODEL = "codex-config-resolution-probe"
 PROFILE_MODEL = "codex-profile-resolution-probe"
@@ -221,3 +222,69 @@ def test_codex_custom_permission_profile_denies_workspace_subpath(
     assert process.returncode != 0
     assert allowed.exists(), process.stderr
     assert not denied.exists()
+
+
+COMPILED_POLICY = """\
+schema: coding-agents/v1
+kind: permission-policy
+id: probe
+name: probe
+description: Compiled permission profile probe.
+secret_paths: ['**/.probe-secret', '~/vault/key']
+workspace:
+  allow: [~/shared]
+  deny: [~/private]
+targets:
+  cursor:
+    omit:
+      workspace: probe
+      secret_paths: probe
+"""
+
+
+@pytest.mark.capability_case("codex.permission-profiles")
+@pytest.mark.capability_live
+def test_codex_compiled_profile_denies_secret_reads_and_writes_allowed_roots(
+    runtime: Runtime,
+) -> None:
+    paths = paths_for(runtime, "compiled-profile")
+    config_root = paths.root / "sources"
+    (config_root / "permissions").mkdir(parents=True)
+    (config_root / "permissions" / "policy.yaml").write_text(COMPILED_POLICY)
+    run_sync(config_root=config_root, home=paths.home)
+    for path, text in {
+        paths.work / "readme": "ok",
+        paths.work / "app" / ".probe-secret": "secret",
+        paths.home / "vault" / "key": "secret",
+        paths.home / "private" / "note": "secret",
+    }.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (paths.home / "shared").mkdir()
+
+    def sandboxed(script: str) -> int:
+        return run_probe(
+            run,
+            runtime.codex,
+            "sandbox",
+            "-P",
+            "coding-agents",
+            "-C",
+            str(paths.work),
+            "/bin/sh",
+            "-c",
+            script,
+            cwd=paths.work,
+            env=environment(paths),
+            timeout=10,
+        ).returncode
+
+    assert sandboxed(f'/bin/cat "{paths.work / "readme"}"') == 0
+    for denied in (
+        paths.work / "app" / ".probe-secret",
+        paths.home / "vault" / "key",
+        paths.home / "private" / "note",
+    ):
+        assert sandboxed(f'/bin/cat "{denied}"') != 0, denied
+    assert sandboxed(f'/usr/bin/touch "{paths.home / "shared" / "new"}"') == 0
+    assert sandboxed(f'/usr/bin/touch "{paths.home / "outside"}"') != 0

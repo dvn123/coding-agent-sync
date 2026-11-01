@@ -87,9 +87,9 @@ pointer-owned and preserve unnamed siblings.
 | Global and rules | `<home>/.codex/AGENTS.md` |
 | Typed rule policy | `<home>/.codex/rules/coding-agents.rules` |
 | Skill | `<home>/.codex/skills/<directory>/` |
-| Command | no generated surface |
+| Command | `<home>/.codex/skills/<stem>/` with implicit invocation off |
 | Agent | `<home>/.codex/agents/<stem>.toml` |
-| Workspace directories | owned `sandbox_workspace_write.writable_roots` in `<home>/.codex/config.toml` |
+| Permissions | owned `default_permissions` and `permissions.coding-agents` in `<home>/.codex/config.toml` |
 
 Codex discovers `skills/` and `agents/*.toml` below `<home>/.codex` itself, so
 `config.toml` carries no skill or agent registration.
@@ -97,28 +97,62 @@ Codex discovers `skills/` and `agents/*.toml` below `<home>/.codex` itself, so
 Global and rule bodies concatenate into `AGENTS.md`. A rule may separately use
 strict `targets.codex.native.rules` entries containing a non-empty literal
 `pattern`, `decision` (`allow`, `prompt`, or `forbidden`), and optional
-`justification`. Unknown values are errors. Codex does not receive portable
-commands; sources must explicitly omit them.
+`justification`. A pattern token may be a list of alternatives for that
+position. Unknown values are errors.
+
+Codex 0.166 has no custom prompts, and its own command migration turns a
+command into a skill, so a command lowers to `skills/<stem>/` with
+`policy.allow_implicit_invocation: false`: the user invokes it, the model
+never does by itself. Codex skills do not expand `$ARGUMENTS` or `$1`, so such
+a placeholder stays literal and the user's text after the skill mention
+carries the arguments. `execution.agent` and `execution.subtask` have no
+skill equivalent and need `omit.execution`.
 
 ## Command permission projection
 
 Portable ask and deny rules land in the same rules file as `prompt` and
 `forbidden` prefix rules.
 Codex matches one flat argv by literal prefix and has no wildcard, so a rule
-projects as its head and each tail appended directly, bare and once per
-declared wrapper (`security find-generic-password`, `env security
-find-generic-password`). The option-hole heads and the tail-after-arguments
+projects as its head and each tail appended directly, bare and behind any
+declared wrapper. Codex reads a list token as alternatives for one position,
+so all wrappers share one lead token (`[["env", "nohup"], "security",
+"find-generic-password"]`), and patterns that differ only in their last token
+with the same decision and reason merge (`["git", "push", ["--force", "-f"]]`).
+A wrapper that takes arguments of its own (`timeout 5 …`) still falls through,
+because no prefix can skip them. Codex resolves an absolute program path to
+its basename itself. The option-hole heads and the tail-after-arguments
 spellings have no prefix form and fall to Codex's own approval flow; an ask
 or deny with a text predicate or an exact match is dropped with a warning.
 Allow rules never project and owe no omission: a Codex `allow` rule runs the
 command outside the sandbox, while an unlisted command already runs inside
-it. Secret paths and names still have no
-projection, and neither does the policy's `unmatched` decision: Codex gates an
-unmatched command by sandbox and approval policy, not by an allowlist, so a
-non-default value needs an omit here too. Literal `workspace.allow`
-directories land as absolute `sandbox_workspace_write.writable_roots`, which
-Codex applies in `workspace-write` mode; `workspace.ask`, `.deny`, and
-`.unmatched` have no channel and each need an omit.
+it.
+
+## Permission profile
+
+The policy lowers to a `coding-agents` permissions profile in `config.toml`,
+selected by `default_permissions`:
+
+- `extends = ":workspace"` inherits Codex's workspace sandbox: the project and
+  temp directories are writable and the rest of the disk readable.
+- Literal `workspace.allow` directories become absolute `write` entries.
+- `secret_paths` and `workspace.deny` directories become `deny` entries, which
+  block reads as well as writes inside the sandbox. A `**/` path becomes the
+  absolute glob `/**/…`, which macOS enforces natively; Linux warns that an
+  unbounded `**` needs `glob_scan_max_depth`.
+- `tools` decisions of `allow` are Codex's own behaviour and owe nothing; an
+  `ask` or `deny` has no channel and needs `omit.tools`.
+
+The profile carries no network settings: set
+`/permissions/coding-agents/network/enabled` in the `codex` patch. Legacy
+`sandbox_mode` and `sandbox_workspace_write` keys do not apply while a profile
+is selected. The ChatGPT app lists the profile, with the policy's description,
+in its permission picker and starts threads on it unless the user picks
+another mode; Codex keeps the read denials when a session switches to another
+profile. `workspace.ask`, `workspace.unmatched: allow`, and `secret_names`
+have no channel and each need an omit, and so does `unmatched: allow`: Codex
+0.166 retired the `untrusted` approval policy, and `on-request` already runs
+an unlisted command inside the sandbox, so the approval policy stays with the
+user's patch.
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,

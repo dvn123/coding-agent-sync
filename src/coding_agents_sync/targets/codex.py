@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import tomlkit
 import yaml
@@ -20,7 +20,6 @@ from ..plan import (
 from ..sources import (
     AgentSource,
     PermissionSource,
-    SkillSource,
     SourceBundle,
     StrictModel,
     describe_rule,
@@ -31,19 +30,22 @@ from .support import (
     applies_to,
     block,
     bundled_files,
+    collision_error,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
     native_patch,
     omissions,
     raw_files,
+    skill_collisions,
     strict_native,
     unhandled_target_block,
 )
 
 
 class CodexPrefixRule(StrictModel):
-    pattern: list[str] = Field(min_length=1)
+    # A list token is a set of alternatives for that position.
+    pattern: list[str | Annotated[list[str], Field(min_length=1)]] = Field(min_length=1)
     decision: Literal["allow", "prompt", "forbidden"] = "allow"
     justification: str | None = None
 
@@ -140,13 +142,17 @@ class CodexAgentNative(StrictModel):
 
 
 def _tree(
-    skill: SkillSource,
+    directory: str,
+    body: str,
     root: Path,
     meta: dict[str, Any],
     openai: CodexSkillMetadata | None,
+    *,
+    explicit_only: bool,
+    source_dir: Path | None = None,
 ) -> OwnedTree:
-    files, executables = bundled_files(skill.source_dir)
-    if skill.disable_model_invocation or openai is not None:
+    files, executables = bundled_files(source_dir) if source_dir else ({}, frozenset())
+    if explicit_only or openai is not None:
         metadata_path = Path("agents/openai.yaml")
         metadata = yaml.safe_load(files.get(metadata_path, b"{}"))
         if not isinstance(metadata, dict):
@@ -158,7 +164,7 @@ def _tree(
             if not isinstance(existing, dict):
                 raise ValueError(f"agents/openai.yaml {section} must contain a mapping")
             existing.update(fields)
-        if skill.disable_model_invocation:
+        if explicit_only:
             policy = metadata.setdefault("policy", {})
             if not isinstance(policy, dict):
                 raise ValueError("agents/openai.yaml policy must contain a mapping")
@@ -168,9 +174,9 @@ def _tree(
         ).encode()
 
     header = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
-    files[Path("SKILL.md")] = f"---\n{header}\n---\n\n{skill.body.rstrip()}\n".encode()
+    files[Path("SKILL.md")] = f"---\n{header}\n---\n\n{body.rstrip()}\n".encode()
     return OwnedTree(
-        root / skill.source_dir.name,
+        root / directory,
         tuple(sorted(files.items())),
         root,
         executables=executables,
@@ -185,8 +191,22 @@ def _rule_text(rules: list[tuple[str, CodexPrefixRule]]) -> bytes | None:
     def quoted(value: str) -> str:
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-    for _, rule in sorted(rules, key=lambda item: (item[0], item[1].pattern)):
-        pattern = "[" + ", ".join(quoted(item) for item in rule.pattern) + "]"
+    def listed(values: list[str]) -> str:
+        return "[" + ", ".join(quoted(value) for value in values) + "]"
+
+    def token(value: str | list[str]) -> str:
+        return quoted(value) if isinstance(value, str) else listed(value)
+
+    def order(item: tuple[str, CodexPrefixRule]) -> tuple[Any, ...]:
+        source, rule = item
+        tokens = [
+            (value,) if isinstance(value, str) else tuple(value)
+            for value in rule.pattern
+        ]
+        return (source, tokens)
+
+    for _, rule in sorted(rules, key=order):
+        pattern = "[" + ", ".join(token(item) for item in rule.pattern) + "]"
         args = [f"pattern={pattern}", f"decision={quoted(rule.decision)}"]
         if rule.justification:
             args.append(f"justification={quoted(rule.justification)}")
@@ -206,17 +226,27 @@ def _command_rules(
     """Lower the ask and deny buckets to `prompt` and `forbidden` prefix rules.
 
     Codex matches one flat argv by literal prefix, with no wildcard, so a rule
-    projects as its head and each tail appended directly, bare and behind each
+    projects as its head and each tail appended directly, bare and behind any
     declared wrapper. The option-hole and tail-after-arguments spellings fall to
     Codex's own approval flow. Text and exact predicates have no prefix form.
     A rule's `reason` becomes the `justification` Codex shows on rejection.
     Allows never project: a Codex `allow` rule runs the command outside the
     sandbox, while an unlisted command already runs inside it.
+
+    Codex takes a list token as alternatives for one position, so the wrappers
+    share one lead token, and patterns that differ only in their last token
+    with the same decision and reason merge into one rule.
     """
     if permissions is None:
         return [], []
-    rules: list[tuple[str, CodexPrefixRule]] = []
     diagnostics: list[Diagnostic] = []
+    wrappers = sorted(permissions.wrappers)
+    leads: list[tuple[str | tuple[str, ...], ...]] = [()]
+    if wrappers:
+        leads.append((wrappers[0] if len(wrappers) == 1 else tuple(wrappers),))
+    lasts: dict[
+        tuple[Literal["prompt", "forbidden"], str | None, tuple[Any, ...]], set[str]
+    ] = {}
     for bucket, decision in CODEX_DECISIONS.items():
         for rule in getattr(permissions.commands, bucket):
             if rule.text or rule.exact:
@@ -231,19 +261,24 @@ def _command_rules(
                 )
                 continue
             head = (rule.command, *rule.subcommand)
-            patterns = [(*head, *tail) for tail in sorted(rule.tail)] or [head]
-            rules.extend(
-                (
-                    "permissions",
-                    CodexPrefixRule(
-                        pattern=[*lead, *pattern],
-                        decision=decision,
-                        justification=rule.reason,
-                    ),
-                )
-                for pattern in patterns
-                for lead in ((), *((wrapper,) for wrapper in permissions.wrappers))
-            )
+            for *stem, last in [(*head, *tail) for tail in sorted(rule.tail)] or [head]:
+                for lead in leads:
+                    key = (decision, rule.reason, (*lead, *stem))
+                    lasts.setdefault(key, set()).add(last)
+    rules = [
+        (
+            "permissions",
+            CodexPrefixRule(
+                pattern=[
+                    *(list(item) if isinstance(item, tuple) else item for item in stem),
+                    last.pop() if len(last) == 1 else sorted(last),
+                ],
+                decision=decision,
+                justification=reason,
+            ),
+        )
+        for (decision, reason, stem), last in lasts.items()
+    ]
     return rules, diagnostics
 
 
@@ -269,6 +304,48 @@ def _agent_toml(
     for key, value in values.items():
         document.add(key, value)
     return tomlkit.dumps(document).encode()
+
+
+PROFILE = "coding-agents"
+
+
+def _permission_profile(
+    permissions: PermissionSource, home: Path, config: Path
+) -> list[NativeValue]:
+    """Select a permissions profile that extends Codex's `:workspace` sandbox.
+
+    The profile inherits the workspace filesystem rules, denies reads of the
+    secret paths and denied directories, and lets the allowed directories be
+    written. Codex keeps the read denials when the user switches to another
+    profile in the session. Network stays with the user's patch, at
+    `/permissions/coding-agents/network`.
+    """
+
+    def absolute(path: str) -> str:
+        if path.startswith("~/"):
+            return str(home / path.removeprefix("~/"))
+        # A `**/` secret path matches at any depth anywhere.
+        return f"/{path}" if path.startswith("**/") else path
+
+    filesystem = {
+        **{
+            absolute(path): "write"
+            for path in literal_directories(permissions.workspace)
+        },
+        **{
+            absolute(path): "deny"
+            for path in (*permissions.workspace.deny, *permissions.secret_paths)
+        },
+    }
+    profile = ("permissions", PROFILE)
+    return [
+        NativeValue("codex", config, ("default_permissions",), PROFILE),
+        NativeValue(
+            "codex", config, (*profile, "description"), permissions.description
+        ),
+        NativeValue("codex", config, (*profile, "extends"), ":workspace"),
+        NativeValue("codex", config, (*profile, "filesystem"), filesystem),
+    ]
 
 
 def _validate_patches(patch: NativePatch, generated: list[NativeValue]) -> None:
@@ -349,15 +426,60 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
             diagnostics.extend(issues)
             try:
-                trees.append(_tree(skill, root / "skills", meta, native.openai))
+                trees.append(
+                    _tree(
+                        skill.source_dir.name,
+                        skill.body,
+                        root / "skills",
+                        meta,
+                        native.openai,
+                        explicit_only=skill.disable_model_invocation,
+                        source_dir=skill.source_dir,
+                    )
+                )
             except (ValueError, yaml.YAMLError) as exc:
                 diagnostics.append(Diagnostic("error", str(exc), skill.path))
+    # Codex has no custom prompts left, so a command becomes a skill that only
+    # the user invokes.
+    collisions = skill_collisions(sources, "codex")
     for command in sources.commands:
         if not applies_to(command, "codex"):
             continue
+        if command.stem in collisions:
+            diagnostics.append(collision_error(command))
+            continue
         value = block(command, "codex")
-        diagnostics.extend(unhandled_target_block(command.path, "codex", value))
-        diagnostics.extend(omissions(command.path, "codex", value, {"command"}))
+        native, issues = strict_native(command.path, "codex", value, CodexSkillNative)
+        diagnostics.extend(issues)
+        delegated = command.execution.agent or command.execution.subtask
+        diagnostics.extend(
+            omissions(
+                command.path, "codex", value, {"execution"} if delegated else set()
+            )
+        )
+        if native:
+            meta, issues = frontmatter(
+                command.path,
+                {
+                    "name": command.stem,
+                    "description": command.description.replace("<", "").replace(
+                        ">", ""
+                    ),
+                },
+                native.model_copy(update={"openai": None}),
+                value.raw,
+            )
+            diagnostics.extend(issues)
+            trees.append(
+                _tree(
+                    command.stem,
+                    command.body,
+                    root / "skills",
+                    meta,
+                    native.openai,
+                    explicit_only=True,
+                )
+            )
     for agent in sources.agents:
         if not applies_to(agent, "codex"):
             continue
@@ -426,16 +548,21 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 "codex",
                 value,
                 {
-                    *({"tools"} if permissions.tools else set()),
+                    # Codex already allows every tool; only a gate needs one.
+                    *(
+                        {"tools"}
+                        if set(permissions.tools.values()) - {"allow"}
+                        else set()
+                    ),
                     *({"workspace.ask"} if permissions.workspace.ask else set()),
-                    *({"workspace.deny"} if permissions.workspace.deny else set()),
                     *(
                         {"workspace.unmatched"}
                         if permissions.workspace.unmatched != "ask"
                         else set()
                     ),
-                    *({"secret_paths"} if permissions.secret_paths else set()),
                     *({"secret_names"} if permissions.secret_names else set()),
+                    # `on-request`, the only approval policy that asks, runs an
+                    # unlisted command in the sandbox; Codex retired `untrusted`.
                     *({"unmatched"} if permissions.unmatched != "ask" else set()),
                 },
             )
@@ -443,22 +570,11 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(command_target_diagnostics(permissions, "codex"))
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
     # no registration for them.
-    native_values: list[NativeValue] = []
-    # Codex takes absolute roots, and applies them in `workspace-write` mode.
-    if sources.permissions and (
-        directories := literal_directories(sources.permissions.workspace)
-    ):
-        native_values.append(
-            NativeValue(
-                "codex",
-                root / "config.toml",
-                ("sandbox_workspace_write", "writable_roots"),
-                [
-                    str(ctx.home / d.removeprefix("~/")) if d.startswith("~/") else d
-                    for d in directories
-                ],
-            )
-        )
+    native_values = (
+        _permission_profile(sources.permissions, ctx.home, root / "config.toml")
+        if sources.permissions
+        else []
+    )
     patch, issues = native_patch(
         config_root=ctx.config_root,
         target="codex",

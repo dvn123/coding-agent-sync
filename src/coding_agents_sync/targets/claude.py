@@ -52,6 +52,7 @@ from .support import (
     applies_to,
     block,
     bundled_files,
+    collision_error,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
@@ -60,6 +61,7 @@ from .support import (
     omissions,
     one_of,
     raw_files,
+    skill_collisions,
     strict_native,
     unhandled_target_block,
     with_skill_scripts,
@@ -348,21 +350,12 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
             diagnostics.extend(issues)
             trees.append(_tree(skill, root / "skills", meta))
-    skill_names = {
-        skill.source_dir.name for skill in sources.skills if applies_to(skill, "claude")
-    }
+    collisions = skill_collisions(sources, "claude")
     for command in sources.commands:
         if not applies_to(command, "claude"):
             continue
-        if command.stem in skill_names:
-            diagnostics.append(
-                Diagnostic(
-                    "error",
-                    f"command {command.stem} collides with the skill of that "
-                    f"name; Claude serves both at /{command.stem}",
-                    command.path,
-                )
-            )
+        if command.stem in collisions:
+            diagnostics.append(collision_error(command))
             continue
         value = block(command, "claude")
         # Claude merged commands into skills: a skill answers the same
