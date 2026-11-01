@@ -54,8 +54,6 @@ description: permission rules
 deny:
   - {{command: {RECORDER}, reason: {REASON}}}
   - [{TOOL}, push]
-targets:
-  cursor: {{omit: {{commands.deny: Cursor Desktop has no deny channel.}}}}
 """
 ASK_POLICY = """\
 schema: coding-agents/v1
@@ -73,8 +71,6 @@ name: test
 description: permission rules
 allow:
   - [{TOOL}, status]
-targets:
-  codex: {{omit: {{commands.allow: Codex allow rules skip its sandbox approval.}}}}
 """
 # One per integration path: a wrapper, an assignment, and a program path in
 # front of a single-token deny, and a wrapper in front of a multi-token one.

@@ -69,7 +69,11 @@ def write_settings(runtime: Runtime, value: object) -> Path:
 
 
 def invoke(
-    runtime: Runtime, *, tool: str | None = None, outer_seatbelt: bool = True
+    runtime: Runtime,
+    *,
+    tool: str | None = None,
+    outer_seatbelt: bool = True,
+    env: dict[str, str] | None = None,
 ) -> list[AnthropicRequest]:
     runtime.responder.tool_call = (
         ("Bash", {"command": tool}, TOOL_ID) if tool is not None else None
@@ -95,7 +99,7 @@ def invoke(
         run,
         *(runtime.seatbelt.command(*command) if outer_seatbelt else command),
         cwd=runtime.paths.work,
-        env=environment(runtime.paths, runtime.stub.base_url),
+        env=environment(runtime.paths, runtime.stub.base_url, **(env or {})),
         timeout=20,
     )
     assert process.returncode == 0, process.stderr
@@ -150,3 +154,35 @@ def test_claude_sandbox_enforces_deny_write_from_user_settings(
     assert result is not None
     assert allowed.exists(), result
     assert not denied.exists()
+
+
+@pytest.mark.capability_case("claude.sandbox")
+@pytest.mark.capability_live
+def test_claude_sandbox_unsets_a_denied_credential_variable(runtime: Runtime) -> None:
+    dump = runtime.paths.work / "env.txt"
+    write_settings(
+        runtime,
+        {
+            "model": MODEL,
+            "permissions": {"allow": ["Bash(*)"]},
+            "sandbox": {
+                "enabled": True,
+                "failIfUnavailable": True,
+                "autoAllowBashIfSandboxed": True,
+                "allowUnsandboxedCommands": False,
+                "credentials": {"envVars": [{"name": "PROBE_SECRET", "mode": "deny"}]},
+            },
+        },
+    )
+
+    # Claude's macOS sandbox cannot initialize within a second Seatbelt profile.
+    invoke(
+        runtime,
+        tool=f"/usr/bin/env > {shlex.quote(str(dump))}",
+        outer_seatbelt=False,
+        env={"PROBE_SECRET": "hidden-value", "PROBE_PLAIN": "visible-value"},
+    )
+
+    variables = dump.read_text()
+    assert "PROBE_PLAIN=visible-value" in variables
+    assert "hidden-value" not in variables

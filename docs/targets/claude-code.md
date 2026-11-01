@@ -29,16 +29,26 @@ the settings file, so `**/` secret paths and absolute directories take the
 `//` root form, workspace directories receive `Edit(<dir>/**)` when edits are
 allowed, and `workspace.unmatched: allow` becomes `Read(//**)` and
 `Edit(//**)`. Denied workspace directories become Read and Edit denies.
-`workspace.ask` has no channel and needs an omit. Claude strips an absolute
+`workspace.ask` has no channel and needs an omit. A secret name becomes a
+`Bash(*NAME*)` deny and a `sandbox.credentials.envVars` deny, which unsets the
+variable for sandboxed commands so `env` cannot print it; that second half
+binds only while a patch enables `sandbox`. A Read deny also stops a shell
+read of the same literal path (`cat`, `cp`) with the sandbox off, which the
+`read-deny-shell` live scenarios pin. Claude strips an absolute
 program path, then peels leading assignments, `env` in every form, `sudo`,
 and `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, and
 `noglob` before it matches a deny or ask rule, and retries the rule behind a
 bare `xargs`. So `/usr/bin/git push -f` and `/usr/bin/env rm -rf x` need no
-copies, and neither do those wrappers; `xargs` with options still does. Claude
+copies, and neither do those wrappers; `xargs` with options still does. An
+allow strips only the assignments Claude lists as safe, so a declared
+`assignments` token lands in front of allow rules alone. Claude
 does not look past a leading redirect (`2>&1 rm -rf x`), so whenever the
 policy has a deny, every command of that shape is denied outright. The
-`deny-reach`, `ask-reach`, and `compiled-guard` live scenarios pin this, and
-the compiler targets the latest Claude Code release only. Generated pointers are semantic
+`deny-reach`, `ask-reach`, `allow-assign`, and `compiled-guard` live scenarios
+pin this. The compiler targets the latest Claude Code release and the copy the
+Claude app bundles for its Code tab (under
+`~/Library/Application Support/Claude/claude-code/`), which can trail the CLI;
+put that copy first on `PATH` to probe it. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
 
