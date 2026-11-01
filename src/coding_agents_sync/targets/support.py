@@ -11,7 +11,13 @@ from pydantic import BaseModel, ValidationError
 from ..io import MANAGED_MANIFEST
 from ..patches import load_patch, merge_patches
 from ..plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
-from ..sources import CommandPermission, PermissionSource, SourceBundle, TargetBlock
+from ..sources import (
+    CommandPermission,
+    PermissionSource,
+    SourceBundle,
+    TargetBlock,
+    ToolName,
+)
 
 
 def one_of(field: str, value: str | None, allowed: frozenset[str]) -> str | None:
@@ -142,7 +148,7 @@ def declared_trees(
 
 def command_target_diagnostics(
     permissions: PermissionSource,
-    target: str,
+    target: ToolName,
     required: Callable[[frozenset[str]], set[str]] = lambda _intent: set(),
 ) -> tuple[Diagnostic, ...]:
     """Check each command fragment's target block; `required` maps the

@@ -14,7 +14,7 @@ from typing import Annotated, Any, Never
 
 import typer
 
-from ..sync import run_sync
+from coding_agents_sync.sync import run_sync
 
 PROBE_SCHEMA = "coding-agents/cursor-desktop-probe/v1"
 PROBE_ROOT = Path("/tmp/coding-agents-cursor")
@@ -113,7 +113,7 @@ def _write_probe_source(config_root: Path, sentinel: str) -> None:
         "targets:\n"
         "  cursor:\n"
         "    native:\n"
-        "      always_apply: true\n"
+        "      alwaysApply: true\n"
         "---\n"
         f"{sentinel}\n",
         encoding="utf-8",

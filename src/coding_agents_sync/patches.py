@@ -8,31 +8,14 @@ from typing import Any, Literal
 
 import yaml
 
+from .io import load_yaml
+
 type Pointer = tuple[str, ...]
 type OperationKind = Literal["set", "replace", "delete", "extend", "overlay"]
 
 
 class PatchError(ValueError):
     pass
-
-
-class _UniqueLoader(yaml.SafeLoader):
-    pass
-
-
-def _mapping(
-    loader: yaml.Loader, node: yaml.Node, deep: bool = False
-) -> dict[Any, Any]:
-    result: dict[Any, Any] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in result:
-            raise PatchError("patch contains a duplicate mapping key")
-        result[key] = loader.construct_object(value_node, deep=deep)
-    return result
-
-
-_UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
 
 def decode_pointer(value: str) -> Pointer:
@@ -97,8 +80,8 @@ def load_patch(path: Path) -> Patch:
     if not path.exists():
         return Patch()
     try:
-        parsed = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueLoader)
-    except yaml.YAMLError, PatchError:
+        parsed = load_yaml(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
         raise PatchError(f"invalid patch: {path}") from None
     if not isinstance(parsed, dict) or parsed.get("schema") != "coding-agents/patch/v1":
         raise PatchError(f"invalid patch schema: {path}")

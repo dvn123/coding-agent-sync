@@ -7,6 +7,6 @@ description: Neutral always-on rule.
 targets:
   cursor:
     native:
-      always_apply: true
+      alwaysApply: true
 ---
 Apply the neutral always-on rule.

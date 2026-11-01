@@ -4,11 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import capabilities.cursor_desktop_probe as probe
 import pytest
-from typer.testing import CliRunner
-
-import coding_agents_sync.probes.cursor_desktop as probe
-from coding_agents_sync.probes.cursor_desktop import (
+from capabilities.cursor_desktop_probe import (
     PROBE_SCHEMA,
     ProbeError,
     ProbeState,
@@ -22,6 +20,7 @@ from coding_agents_sync.probes.cursor_desktop import (
     prepare_probe,
     verify_probe,
 )
+from typer.testing import CliRunner
 
 
 def state_at(path: Path) -> ProbeState:

@@ -79,7 +79,7 @@ def run_probe[T, **P](
 
 def version(target: Target) -> str:
     if target.name == "cursor-desktop":
-        from coding_agents_sync.probes.cursor_desktop import (
+        from capabilities.cursor_desktop_probe import (
             CURSOR_APP,
             ProbeUnavailable,
             _cursor_version,

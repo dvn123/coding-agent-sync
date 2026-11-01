@@ -7,7 +7,6 @@ from typing import Any
 
 from pydantic import (
     AliasChoices,
-    ConfigDict,
     Field,
     ValidationInfo,
     field_validator,
@@ -27,7 +26,9 @@ from ..plan import (
 from ..sources import (
     EFFORT_LEVELS,
     AgentSource,
+    Decision,
     PermissionSource,
+    PermissionTool,
     SkillSource,
     SourceBundle,
     StrictModel,
@@ -66,8 +67,6 @@ from .support import (
 
 
 class ClaudeSkillNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
     name: str | None = None
     description: str | None = None
     paths: list[str] | None = None
@@ -79,27 +78,11 @@ class ClaudeSkillNative(StrictModel):
         ),
     )
     when_to_use: str | None = None
-    argument_hint: str | None = Field(
-        None,
-        serialization_alias="argument-hint",
-        validation_alias=AliasChoices("argument-hint", "argument_hint"),
-    )
+    argument_hint: str | None = Field(None, alias="argument-hint")
     arguments: list[str] | None = None
-    user_invocable: bool | None = Field(
-        None,
-        serialization_alias="user-invocable",
-        validation_alias=AliasChoices("user-invocable", "user_invocable"),
-    )
-    allowed_tools: list[str] | None = Field(
-        None,
-        serialization_alias="allowed-tools",
-        validation_alias=AliasChoices("allowed-tools", "allowed_tools"),
-    )
-    disallowed_tools: list[str] | None = Field(
-        None,
-        serialization_alias="disallowed-tools",
-        validation_alias=AliasChoices("disallowed-tools", "disallowed_tools"),
-    )
+    user_invocable: bool | None = Field(None, alias="user-invocable")
+    allowed_tools: list[str] | None = Field(None, alias="allowed-tools")
+    disallowed_tools: list[str] | None = Field(None, alias="disallowed-tools")
     model: str | None = None
     effort: str | None = None
     context: str | None = None
@@ -142,37 +125,19 @@ def _tool_entries(value: str | list[str]) -> list[str]:
 
 
 class ClaudeAgentNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
     name: str | None = None
     description: str | None = None
     tools: str | list[str] | None = None
-    disallowed_tools: str | list[str] | None = Field(
-        None,
-        serialization_alias="disallowedTools",
-        validation_alias=AliasChoices("disallowedTools", "disallowed_tools"),
-    )
+    disallowed_tools: str | list[str] | None = Field(None, alias="disallowedTools")
     effort: str | None = None
     background: bool | None = None
     color: str | None = None
     model: str | None = None
-    permission_mode: str | None = Field(
-        None,
-        serialization_alias="permissionMode",
-        validation_alias=AliasChoices("permissionMode", "permission_mode"),
-    )
-    max_turns: int | None = Field(
-        None,
-        serialization_alias="maxTurns",
-        validation_alias=AliasChoices("maxTurns", "max_turns"),
-    )
+    permission_mode: str | None = Field(None, alias="permissionMode")
+    max_turns: int | None = Field(None, alias="maxTurns")
     isolation: str | None = None
     memory: str | None = None
-    initial_prompt: str | None = Field(
-        None,
-        serialization_alias="initialPrompt",
-        validation_alias=AliasChoices("initialPrompt", "initial_prompt"),
-    )
+    initial_prompt: str | None = Field(None, alias="initialPrompt")
     skills: list[str] | None = None
 
     @field_validator("tools", "disallowed_tools")
@@ -259,7 +224,7 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
 
 
 def _permission_values(
-    sources: SourceBundle, tools: Mapping[str, str]
+    sources: SourceBundle, tools: Mapping[PermissionTool, Decision]
 ) -> tuple[tuple[tuple[str, ...], Any], ...]:
     if not (permissions := sources.permissions):
         return ()

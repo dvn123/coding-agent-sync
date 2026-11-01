@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from coding_agents_sync.probes.cursor_desktop import CURSOR_APP
+from capabilities.cursor_desktop_probe import CURSOR_APP
 
 RESOURCES = CURSOR_APP / "Contents/Resources/app"
 EXTENSIONS = RESOURCES / "extensions"

@@ -4,8 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-
-from coding_agents_sync.audit import ClaudeRules, OpenCodeRules, unwrap_spellings
+from capabilities.audit import ClaudeRules, OpenCodeRules, unwrap_spellings
 
 # The live `deny-reach` scenarios in test_claude_permissions, replayed against
 # the model: a bare deny with everything else allowed.

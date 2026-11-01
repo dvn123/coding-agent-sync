@@ -76,8 +76,9 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Permission rules | `options`, `assignments`, `allow`, `ask`, `deny`. |
 
 `model-policy.yaml` is a strict compiler input with schema
-`coding-agents/model-policy/v1`. It contains a non-`inherit` `default` profile
-and named target profiles. Each profile may set only `model` and `effort` for
+`coding-agents/model-policy/v1`. It names a `default` profile and defines
+named target profiles; a profile without a `model` makes the agent inherit
+the invoking session's model. Each profile may set only `model` and `effort` for
 `claude`, `opencode`, `cursor`, and optionally `codex`. Codex effort values are
 model-defined strings; the other profiles use the portable effort vocabulary.
 An absent `codex` entry preserves existing native agent model settings. An
@@ -278,7 +279,7 @@ Target compilers own their native schemas. The supported typed fields are:
 | Target | Source kinds and typed fields |
 | --- | --- |
 | Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
-| Cursor | Rules: `description`, `globs`, `always_apply`; `globs` requires `always_apply: false`. Skills: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. |
+| Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. |
 | Codex / ChatGPT Desktop | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 
