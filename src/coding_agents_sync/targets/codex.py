@@ -330,7 +330,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         files.append(
             OwnedFile(root / "rules" / "coding-agents.rules", content, root / "rules")
         )
-    skill_paths: list[str] = []
     for skill in sources.skills:
         if not applies_to(skill, "codex"):
             continue
@@ -364,14 +363,12 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 trees.append(_tree(skill, root / "skills", meta, native.openai))
             except (ValueError, yaml.YAMLError) as exc:
                 diagnostics.append(Diagnostic("error", str(exc), skill.path))
-            skill_paths.append(f"~/.codex/skills/{skill.source_dir.name}")
     for command in sources.commands:
         if not applies_to(command, "codex"):
             continue
         value = block(command, "codex")
         diagnostics.extend(unhandled_target_block(command.path, "codex", value))
         diagnostics.extend(omissions(command.path, "codex", value, {"command"}))
-    agents = []
     for agent in sources.agents:
         if not applies_to(agent, "codex"):
             continue
@@ -433,7 +430,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                         root / "agents" / f"{agent.stem}.toml", content, root / "agents"
                     )
                 )
-                agents.append(agent)
                 if value.raw:
                     diagnostics.append(
                         Diagnostic(
@@ -474,14 +470,9 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 },
             )
         )
-    native_values = [
-        NativeValue(
-            "codex",
-            root / "config.toml",
-            ("skills", "config"),
-            [{"path": path, "enabled": True} for path in sorted(skill_paths)],
-        )
-    ]
+    # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
+    # no registration for them.
+    native_values: list[NativeValue] = []
     # Codex takes absolute roots, and applies them in `workspace-write` mode.
     if sources.permissions and (
         directories := literal_directories(sources.permissions.workspace)
@@ -497,24 +488,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 ],
             )
         )
-    native_values.extend(
-        value
-        for agent in agents
-        for value in (
-            NativeValue(
-                "codex",
-                root / "config.toml",
-                ("agents", agent.stem, "description"),
-                agent.description.strip(),
-            ),
-            NativeValue(
-                "codex",
-                root / "config.toml",
-                ("agents", agent.stem, "config_file"),
-                f"~/.codex/agents/{agent.stem}.toml",
-            ),
-        )
-    )
     patch, issues = native_patch(
         config_root=ctx.config_root,
         target="codex",

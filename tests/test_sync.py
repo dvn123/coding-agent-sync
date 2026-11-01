@@ -2470,18 +2470,9 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("subagent:", claude_command)
             self.assertIn("Review pull request $ARGUMENTS.", claude_command)
 
-            codex_cfg = home / ".codex" / "config.toml"
-            self.assertTrue(codex_cfg.exists())
-            cfg = codex_cfg.read_text(encoding="utf-8")
-            self.assertIn("[[skills.config]]", cfg)
-            self.assertIn('path = "~/.codex/skills/s1"', cfg)
-            self.assertIn("[agents.reviewer]", cfg)
-            self.assertIn('config_file = "~/.codex/agents/reviewer.toml"', cfg)
-            parsed_codex_cfg = tomllib.loads(cfg)
-            self.assertEqual(
-                parsed_codex_cfg["agents"]["reviewer"]["description"],
-                "Review code\nacross multiple lines",
-            )
+            # Codex discovers skills/ and agents/ itself: nothing to register.
+            self.assertFalse((home / ".codex" / "config.toml").exists())
+            self.assertTrue((home / ".codex" / "skills" / "s1" / "SKILL.md").exists())
 
             codex_agent = (home / ".codex" / "agents" / "reviewer.toml").read_text(
                 encoding="utf-8"
@@ -3592,13 +3583,15 @@ class SyncTests(unittest.TestCase):
             config = json.loads(opencode_json.read_text(encoding="utf-8"))
             self.assertEqual(config["$schema"], "https://opencode.ai/config.json")
             self.assertEqual(config["share"], "disabled")
-            # OpenCode 2 never resolves `instructions`, so rules join the
-            # global AGENTS.md and a hand-written list is left alone.
-            self.assertEqual(config["instructions"], ["old-rule"])
+            # Rules land as files that one compiler-owned glob loads.
+            self.assertEqual(config["instructions"], ["~/.config/opencode/rules/*.md"])
             self.assertEqual(
-                (home / ".config/opencode/AGENTS.md").read_text(),
-                "Rule A\n\nRule B\n",
+                (home / ".config/opencode/rules/a.md").read_text(), "Rule A\n"
             )
+            self.assertEqual(
+                (home / ".config/opencode/rules/b.md").read_text(), "Rule B\n"
+            )
+            self.assertFalse((home / ".config/opencode/AGENTS.md").exists())
 
     def test_invalid_opencode_json_fails_without_modification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3698,11 +3691,7 @@ approval_policy = "on-request"
 
             run_sync(config_root=config_root, home=home)
             cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('model = "gpt-5.4"', cfg)
-            self.assertIn('approval_policy = "on-request"', cfg)
-            self.assertIn("[[skills.config]]", cfg)
-            self.assertIn("[agents.reviewer]", cfg)
-            self.assertIn('config_file = "~/.codex/agents/reviewer.toml"', cfg)
+            self.assertEqual(cfg, 'model = "gpt-5.4"\napproval_policy = "on-request"\n')
 
     def test_codex_target_fragment_is_no_longer_a_runtime_input(
         self,
@@ -3725,14 +3714,7 @@ hooks = false
 
             run_sync(config_root=config_root, home=home)
 
-            cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            parsed = tomllib.loads(cfg)
-            self.assertNotIn("model", parsed)
-            self.assertNotIn("web_search", parsed)
-            self.assertNotIn("features", parsed)
-            self.assertEqual(
-                parsed["skills"]["config"][0]["path"], "~/.codex/skills/s1"
-            )
+            self.assertFalse((home / ".codex" / "config.toml").exists())
 
     def test_sync_does_not_rewrite_unchanged_generated_text_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3768,8 +3750,6 @@ hooks = false
 
             run_sync(config_root=config_root, home=home)
 
-            cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('path = "~/.codex/skills/s1"', cfg)
             source = (config_root / "skills" / "s1" / "SKILL.md").read_text(
                 encoding="utf-8"
             )
@@ -4178,11 +4158,9 @@ body
 
             run_sync(config_root=config_root, home=home)
 
-            cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('path = "~/.codex/skills/one"', cfg)
-            self.assertNotIn('path = "~/.codex/skills/source-command-one"', cfg)
-            self.assertFalse(
-                (home / ".codex" / "skills" / "source-command-one").exists()
+            self.assertEqual(
+                sorted(path.name for path in (home / ".codex" / "skills").iterdir()),
+                [".coding-agents-managed.json", "one"],
             )
 
     def test_codex_omits_all_commands_without_creating_collision_aliases(
@@ -4221,9 +4199,10 @@ body
 
             run_sync(config_root=config_root, home=home)
 
-            cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            self.assertIn('path = "~/.codex/skills/one"', cfg)
-            self.assertNotIn("source-command-one", cfg)
+            self.assertEqual(
+                sorted(path.name for path in (home / ".codex" / "skills").iterdir()),
+                [".coding-agents-managed.json", "one"],
+            )
 
     def test_prunes_stale_rules_agents_skills_and_codex_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

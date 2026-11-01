@@ -8,15 +8,17 @@ it has moved to one, and the rest still passes through that migration.
 
 | Source | Output |
 | --- | --- |
-| Global and rules | `<home>/.config/opencode/AGENTS.md`, the global body followed by each rule |
+| Global | `<home>/.config/opencode/AGENTS.md` |
+| Rule | `<home>/.config/opencode/rules/<stem>.md`, loaded by an owned `instructions` glob in `opencode.json` |
 | Skill | `<home>/.config/opencode/skills/<directory>/` |
 | Command | `<home>/.config/opencode/commands/<source-file>.md` |
 | Agent | `<home>/.config/opencode/agents/<source-file>.md` |
 | Permissions | owned native `/permissions` rule list in `opencode.json` |
 | Permissions | `<home>/.config/opencode/plugins/opencode-unwrap.js`, the bundled wrapper plugin |
 
-OpenCode 2 loads only AGENTS.md files and never resolves the `instructions`
-config list, so rules have no OpenCode-native fields. Typed skills use
+The compiler owns the whole `instructions` list while rules exist; add other
+instruction files with a patch `extend` at `/instructions`. Rules have no
+OpenCode-native fields. Typed skills use
 `name`, `description`, `license`, `metadata`, and `compatibility`; commands use
 `name`, `description`, `agent`, `subagent`, and `model`; agents use the native
 `ConfigAgent.Info` fields `description`, `model` (`provider/model#variant`),

@@ -180,6 +180,18 @@ def _serialize(surface: _Surface, document: MutableMapping[str, Any]) -> bytes:
     return content
 
 
+def _delete_with_empty_parents(
+    document: MutableMapping[str, Any], pointer: Pointer
+) -> None:
+    """Delete a stale owned pointer and the parent tables it leaves empty."""
+    apply_operations(document, Patch((Operation("delete", pointer),)))
+    for depth in range(len(pointer) - 1, 0, -1):
+        _, parent = get_value(document, pointer[:depth])
+        if parent != {}:
+            break
+        apply_operations(document, Patch((Operation("delete", pointer[:depth]),)))
+
+
 def _surfaces(
     native_values: tuple[NativeValue, ...], native_patches: tuple[NativePatch, ...]
 ) -> tuple[_Surface, ...]:
@@ -254,7 +266,7 @@ def prepare_plan_native(
                     f"{display_pointer(pointer)}"
                 )
             if pointer not in generated and present:
-                apply_operations(document, Patch((Operation("delete", pointer),)))
+                _delete_with_empty_parents(document, pointer)
         apply_operations(
             document,
             Patch(

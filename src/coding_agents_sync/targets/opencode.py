@@ -281,26 +281,37 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
     config = root / "opencode.json"
     files: list[OwnedFile] = []
     trees = declared_trees(
-        root, (("skills", "dir"), ("commands", "file"), ("agents", "file"))
+        root,
+        (
+            ("rules", "file"),
+            ("skills", "dir"),
+            ("commands", "file"),
+            ("agents", "file"),
+        ),
     )
     diagnostics = []
-    # OpenCode 2 loads only AGENTS.md files: it accepts an `instructions` list
-    # but never resolves it, so rule bodies follow the global one here.
     globals_ = [item for item in sources.globals if applies_to(item, "opencode")]
     rules_ = [item for item in sources.rules if applies_to(item, "opencode")]
     for source in (*globals_[:1], *rules_):
         value = block(source, "opencode")
         diagnostics.extend(unhandled_target_block(source.path, "opencode", value))
         diagnostics.extend(omissions(source.path, "opencode", value, set()))
-    if globals_ or rules_:
-        parts = [source.body.rstrip() for source in (*globals_[:1], *rules_)]
+    if globals_:
         files.append(
-            OwnedFile(root / "AGENTS.md", ("\n\n".join(parts) + "\n").encode())
+            OwnedFile(root / "AGENTS.md", (globals_[0].body.rstrip() + "\n").encode())
         )
-    elif sources.globals or sources.rules:
-        # Every global and rule was filtered by `only`; the host file is
-        # compiler-owned whenever those sources exist, so retire it.
+    elif sources.globals:
+        # The global was filtered by `only`; the host file is compiler-owned
+        # whenever a global exists, so retire it.
         files.append(OwnedFile(root / "AGENTS.md", None))
+    files.extend(
+        OwnedFile(
+            root / "rules" / f"{rule.stem}.md",
+            (rule.body.rstrip() + "\n").encode(),
+            root / "rules",
+        )
+        for rule in rules_
+    )
     for skill in sources.skills:
         if not applies_to(skill, "opencode"):
             continue
@@ -456,7 +467,15 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             else None,
         )
     )
-    native_values = (*_permissions(sources, config, folded[0]),)
+    rules_glob = f"~/{(root / 'rules').relative_to(ctx.home).as_posix()}/*.md"
+    native_values = (
+        *_permissions(sources, config, folded[0]),
+        *(
+            (NativeValue("opencode", config, ("instructions",), [rules_glob]),)
+            if rules_
+            else ()
+        ),
+    )
     patch, issues = native_patch(
         config_root=ctx.config_root,
         target="opencode",

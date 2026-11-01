@@ -109,8 +109,8 @@ compiler prunes only previously manifested entries and rejects modified managed
 content. Unmanifested siblings remain untouched.
 
 Native configuration is reconciled at named JSON/TOML pointers. Patch
-operations own only their named paths. Generated permission paths, OpenCode
-instructions, and Codex skill/agent registrations use semantic hashes recorded
+operations own only their named paths. Generated permission paths, the OpenCode
+`instructions` glob, and Codex writable roots use semantic hashes recorded
 in `config_root/.coding-agents-native.json`. Unnamed native fields remain
 tool-owned.
 

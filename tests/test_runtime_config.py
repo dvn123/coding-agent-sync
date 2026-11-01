@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,42 @@ def test_native_plan_removes_stale_owned_pointer_but_not_siblings(
         )
     )
     assert json.loads(path.read_text()) == {"unknown": "keep"}
+
+
+def test_native_plan_removes_parent_tables_a_stale_pointer_leaves_empty(
+    tmp_path: Path,
+) -> None:
+    config_root = tmp_path / "config"
+    path = tmp_path / "home/config.toml"
+    stale = (
+        NativeValue("fixture", path, ("agents", "one", "config_file"), "one.toml"),
+        NativeValue("fixture", path, ("agents", "two", "config_file"), "two.toml"),
+    )
+    apply_native_plan(
+        prepare_plan_native(
+            config_root=config_root, native_values=stale, native_patches=()
+        )
+    )
+    write(path, 'model = "keep"\n' + path.read_text())
+    apply_native_plan(
+        prepare_plan_native(
+            config_root=config_root,
+            native_values=(stale[1],),
+            native_patches=(),
+        )
+    )
+    assert tomllib.loads(path.read_text()) == {
+        "model": "keep",
+        "agents": {"two": {"config_file": "two.toml"}},
+    }
+    apply_native_plan(
+        prepare_plan_native(
+            config_root=config_root,
+            native_values=(),
+            native_patches=(NativePatch("fixture", path, (), config_root / "patch"),),
+        )
+    )
+    assert tomllib.loads(path.read_text()) == {"model": "keep"}
 
 
 def test_native_patch_is_applied_without_target_schema_validation(
