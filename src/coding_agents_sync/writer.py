@@ -14,6 +14,7 @@ from .io import (
     ManagedEntryConflict,
     entry_hash,
     load_manifest,
+    split_frontmatter,
     sync_manifested_entries,
     write_bytes,
 )
@@ -39,10 +40,9 @@ def _validate_structured(path: Path) -> None:
                 raise ValueError
         elif path.suffix in {".yaml", ".yml"}:
             yaml.safe_load(content)
-        elif path.suffix == ".md" and content.startswith("---\n"):
-            _, frontmatter, _ = content.split("---", 2)
-            parsed = yaml.safe_load(frontmatter)
-            if not isinstance(parsed, dict):
+        elif path.suffix == ".md":
+            header, _ = split_frontmatter(content)
+            if header is not None and not isinstance(yaml.safe_load(header), dict):
                 raise ValueError
     except OSError, ValueError, yaml.YAMLError:
         raise ManagedEntryConflict(

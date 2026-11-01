@@ -13,7 +13,7 @@
 
 Cursor has one shared MDC rule delivery path for Desktop and Agent. The global
 rule filename is reserved. Typed rule fields are `description`, `globs`, and
-`always_apply`; a scoped rule must state `always_apply: false`. Typed skill
+`alwaysApply`; a scoped rule must state `alwaysApply: false`. Typed skill
 fields are `name`, `description`, `paths`, `disable-model-invocation`, and
 `metadata`.
 

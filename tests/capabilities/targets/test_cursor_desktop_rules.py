@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from coding_agents_sync.probes.cursor_desktop import (
+from capabilities.cursor_desktop_probe import (
     ProbeStatus,
     ProbeUnavailable,
     cleanup_probe,

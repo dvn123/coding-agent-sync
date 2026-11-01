@@ -368,7 +368,7 @@ def test_surface_report_unverifies_mixed_expectations(
 def test_desktop_version_comes_from_the_desktop_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import coding_agents_sync.probes.cursor_desktop as desktop_probe
+    import capabilities.cursor_desktop_probe as desktop_probe
 
     monkeypatch.setattr(desktop_probe, "_cursor_version", lambda _app: "3.14.15")
     assert capability_harness.version(TARGETS["cursor-desktop"]) == "3.14.15"

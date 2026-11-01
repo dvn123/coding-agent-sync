@@ -24,15 +24,15 @@ from typing import Annotated
 
 import typer
 
-from .sources import (
+from coding_agents_sync.sources import (
     CommandPermission,
     PermissionSource,
     SourceBundle,
     describe_rule,
     load_sources,
 )
-from .targets import claude, opencode
-from .targets.permissions import fold_edit_write
+from coding_agents_sync.targets import claude, opencode
+from coding_agents_sync.targets.permissions import fold_edit_write
 
 UNMATCHED = ("ask", "allow")
 BUCKETS = ("deny", "ask", "allow")
@@ -704,3 +704,7 @@ def origins_command(
         typer.echo(f"{target}: {sum(counts.values())}")
         for key, count in counts.most_common():
             typer.echo(f"  {key:24} {count}")
+
+
+if __name__ == "__main__":
+    main()

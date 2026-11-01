@@ -24,10 +24,15 @@ coding-agents-sync
 coding-agents-sync --check
 ```
 
-`--check` reports drift and exits nonzero without writing. The additional
-`coding-agents-cursor-desktop-probe` command runs the isolated Cursor Desktop
-capability probe, and `coding-agents-check` runs this repository's development
-validation suite.
+`--check` reports drift and exits nonzero without writing.
+`coding-agents-check` runs this repository's development validation suite. The
+permission audit and the Cursor Desktop probe are development tools in
+`tests/capabilities/`:
+
+```sh
+uv run --locked python tests/capabilities/audit.py --help
+uv run --locked python tests/capabilities/cursor_desktop_probe.py --help
+```
 
 ## Configuration
 

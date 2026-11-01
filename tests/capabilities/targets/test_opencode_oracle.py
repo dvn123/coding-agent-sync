@@ -1,6 +1,6 @@
 """The audit's OpenCode model agrees with OpenCode on a real policy.
 
-`coding-agents-audit decisions` predicts every probe command from a model of
+`audit.py decisions` predicts every probe command from a model of
 OpenCode's matcher and the opencode-unwrap plugin. This compiles the policy
 under `CODING_AGENTS_AUDIT_ROOT` with `unmatched: allow`, runs a seeded
 sample of probes through OpenCode with that ruleset and the plugin, and
@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from capabilities import audit
 from capabilities.harness import (
     Paths,
     recorded_server,
@@ -32,7 +33,6 @@ from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.opencode import config as opencode_config
 from capabilities.targets.opencode import environment
-from coding_agents_sync import audit
 from coding_agents_sync.targets import opencode
 from coding_agents_sync.targets.permissions import fold_edit_write
 

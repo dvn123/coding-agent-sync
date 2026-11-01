@@ -7,7 +7,9 @@ import shutil
 import stat
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+import yaml
 
 MANAGED_MANIFEST = ".coding-agents-managed.json"
 
@@ -16,6 +18,41 @@ type Manifest = dict[str, str]
 
 class ManagedEntryConflict(RuntimeError):
     pass
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """A SafeLoader that rejects duplicate and non-scalar mapping keys."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> Any:
+        seen: set[str] = set()
+        for key, _ in node.value:
+            if key.tag == "tag:yaml.org,2002:merge":
+                continue
+            if not isinstance(key, yaml.ScalarNode):
+                raise yaml.constructor.ConstructorError(
+                    None, None, "mapping key must be scalar", key.start_mark
+                )
+            if key.value in seen:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"duplicate YAML key `{key.value}`", key.start_mark
+                )
+            seen.add(key.value)
+        return super().construct_mapping(node, deep=deep)
+
+
+def load_yaml(text: str) -> Any:
+    return yaml.load(text, Loader=_StrictLoader)
+
+
+def split_frontmatter(text: str) -> tuple[str | None, str]:
+    """A Markdown document's YAML frontmatter, if any, and its body."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip() != "---":
+        return None, text
+    for index, line in enumerate(lines[1:], 1):
+        if line.rstrip() in {"---", "..."}:
+            return "".join(lines[1:index]), "".join(lines[index + 1 :])
+    return None, text
 
 
 def owner_execute_mode(path: Path, executable: bool) -> int:

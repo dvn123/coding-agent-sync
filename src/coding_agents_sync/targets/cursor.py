@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import AliasChoices, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 
 from ..models import SyncContext
 from ..patches import (
@@ -48,26 +48,18 @@ from .support import (
 
 
 class CursorRuleNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
     description: str | None = None
     globs: list[str] = Field(default_factory=list)
-    always_apply: bool = Field(
-        True,
-        serialization_alias="alwaysApply",
-        validation_alias=AliasChoices("alwaysApply", "always_apply"),
-    )
+    always_apply: bool = Field(True, alias="alwaysApply")
 
     @model_validator(mode="after")
     def _validate_scope(self) -> CursorRuleNative:
         if self.always_apply and self.globs:
-            raise ValueError("scoped Cursor rules must set always_apply: false")
+            raise ValueError("scoped Cursor rules must set alwaysApply: false")
         return self
 
 
 class CursorSkillNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
     name: str | None = None
     description: str | None = None
     paths: list[str] | None = None

@@ -1,34 +1,30 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from itertools import combinations
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
-import frontmatter
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     RootModel,
+    StringConstraints,
     ValidationError,
-    computed_field,
     field_validator,
     model_validator,
 )
 
-
-def to_snake(name: str) -> str:
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
+from .io import load_yaml, split_frontmatter
 
 SCHEMA = "coding-agents/v1"
-type SourceKind = Literal["global", "rule", "skill", "command", "agent"]
 
-TOOL_NAMES: frozenset[str] = frozenset({"claude", "cursor", "opencode", "codex"})
-COMMON_KEYS: frozenset[str] = frozenset({"schema", "kind", "id", "name", "description"})
+type ToolName = Literal["claude", "cursor", "opencode", "codex"]
+TOOL_NAMES: frozenset[str] = frozenset(get_args(ToolName.__value__))
 RESERVED_RULE_STEMS: frozenset[str] = frozenset({"coding-agents-global"})
 
 
@@ -36,50 +32,39 @@ class SourceSchemaError(ValueError):
     pass
 
 
-def _reject_duplicate_yaml_keys(path: Path, node: yaml.Node) -> None:
-    if isinstance(node, yaml.MappingNode):
-        seen: set[str] = set()
-        for key, value in node.value:
-            if not isinstance(key, yaml.ScalarNode):
-                raise SourceSchemaError(
-                    f"{path}:{key.start_mark.line + 1}: mapping key must be scalar"
-                )
-            if key.value in seen:
-                raise SourceSchemaError(
-                    f"{path}:{key.start_mark.line + 1}: "
-                    f"duplicate YAML key `{key.value}`"
-                )
-            seen.add(key.value)
-            _reject_duplicate_yaml_keys(path, value)
-    elif isinstance(node, yaml.SequenceNode):
-        for value in node.value:
-            _reject_duplicate_yaml_keys(path, value)
-
-
-def _reject_normalized_yaml_key_collisions(
-    path: Path, value: Any, *, target_block: bool = False
-) -> None:
-    if target_block:
-        return
-    if isinstance(value, dict):
-        seen: set[str] = set()
-        for key, child in value.items():
-            normalized = to_snake(str(key))
-            if normalized in seen:
-                raise SourceSchemaError(
-                    f"{path}: normalized YAML key collision `{normalized}`"
-                )
-            seen.add(normalized)
-            _reject_normalized_yaml_key_collisions(
-                path, child, target_block=key == "targets"
-            )
-    elif isinstance(value, list):
-        for child in value:
-            _reject_normalized_yaml_key_collisions(path, child)
+def _parse_yaml(path: Path, text: str, *, first_line: int = 1) -> Any:
+    """Parse strict YAML, reporting errors at their line in `path`."""
+    try:
+        return load_yaml(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f"{path}:{mark.line + first_line}" if mark else str(path)
+        problem = getattr(exc, "problem", None) or "invalid YAML"
+        raise SourceSchemaError(f"{where}: {problem}") from None
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def _unique[T](value: tuple[T, ...]) -> tuple[T, ...]:
+    if len(set(value)) != len(value):
+        raise ValueError("entries must be unique")
+    return value
+
+
+Unique = AfterValidator(_unique)
+# Non-empty, without leading or trailing whitespace, on one line.
+type Line = Annotated[str, StringConstraints(pattern=r"^\S(?:.*\S)?$")]
+type NonEmpty = Annotated[str, StringConstraints(min_length=1)]
+# One literal argv token. The alphabet includes ~ so a rule can match
+# home-relative command text exactly as the agent types it
+# (`~/.config/tool/run.sh`); tokens are compared literally and the tilde is
+# never expanded by any target.
+type Token = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_./,@%+=~-]+$")]
+type Decision = Literal["allow", "ask", "deny"]
+type Effort = Literal["low", "medium", "high", "xhigh", "max"]
+EFFORT_LEVELS: frozenset[str] = frozenset(get_args(Effort.__value__))
 
 
 class TargetBlock(StrictModel):
@@ -87,36 +72,14 @@ class TargetBlock(StrictModel):
 
     native: dict[str, Any] = Field(default_factory=dict)
     raw: dict[str, Any] = Field(default_factory=dict)
-    omit: dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("omit")
-    @classmethod
-    def _validate_omissions(cls, value: dict[str, str]) -> dict[str, str]:
-        for path, reason in value.items():
-            if (
-                not path
-                or path != path.strip()
-                or not all(
-                    part and part.replace("_", "").isalnum() for part in path.split(".")
-                )
-                or not isinstance(reason, str)
-                or not reason.strip()
-                or reason != reason.strip()
-            ):
-                raise ValueError(
-                    "omit must map a dotted portable path to a non-empty trimmed reason"
-                )
-        return value
+    # A dotted portable path, such as `workspace.ask`, to the reason it is lost.
+    omit: dict[Annotated[str, StringConstraints(pattern=r"^\w+(?:\.\w+)*$")], Line] = (
+        Field(default_factory=dict)
+    )
 
 
-class TargetBlocks(RootModel[dict[str, TargetBlock]]):
+class TargetBlocks(RootModel[dict[ToolName, TargetBlock]]):
     model_config = ConfigDict(frozen=True)
-
-    @model_validator(mode="after")
-    def _validate_targets(self) -> TargetBlocks:
-        if unknown := set(self.root) - TOOL_NAMES:
-            raise ValueError(f"unknown targets: {sorted(unknown)}")
-        return self
 
 
 class CommandExecution(StrictModel):
@@ -126,19 +89,20 @@ class CommandExecution(StrictModel):
 
 # One shell word, quoted as typed (`IFS=$'\t'`), with no whitespace or glob
 # character, so its pattern matches that exact text and nothing wider.
-ASSIGNMENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=[^\s*?]*")
-
-
-def _portable_tokens(value: tuple[str, ...]) -> bool:
-    # The alphabet includes ~ so a rule can match home-relative command text
-    # exactly as the agent types it (`~/.config/tool/run.sh`); tokens are
-    # compared literally and the tilde is never expanded by any target.
-    return bool(value) and all(
-        token
-        and token == token.strip()
-        and re.fullmatch(r"[A-Za-z0-9_./,@%+=~-]+", token) is not None
-        for token in value
-    )
+# A literal value only, so its pattern matches that exact text: a wildcard
+# value would span into the command.
+type AssignmentToken = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*=[^\s*?]*$")
+]
+# A leading token that is not option-shaped is a subcommand and belongs in a
+# rule; tolerating it would open a hole at an arbitrary argument position.
+type OptionToken = Annotated[
+    str, StringConstraints(pattern=r"^-[A-Za-z0-9_./,@%+=~-]*$")
+]
+# Literal text anywhere in the segment, edged by at most one space a side.
+type LiteralText = Annotated[
+    str, StringConstraints(pattern=r"^ ?[^\s*?()](?:[^*?()]*[^\s*?()])? ?$")
+]
 
 
 class CommandPermission(StrictModel):
@@ -153,33 +117,14 @@ class CommandPermission(StrictModel):
     not a predicate.
     """
 
-    command: str
-    subcommand: tuple[str, ...] = ()
-    tail: tuple[tuple[str, ...], ...] = ()
-    text: tuple[str, ...] = ()
+    command: Token
+    subcommand: tuple[Token, ...] = ()
+    tail: Annotated[
+        tuple[Annotated[tuple[Token, ...], Field(min_length=1)], ...], Unique
+    ] = ()
+    text: Annotated[tuple[LiteralText, ...], Unique] = ()
     exact: bool = False
-    reason: str | None = None
-
-    @field_validator("reason")
-    @classmethod
-    def _validate_reason(cls, value: str | None) -> str | None:
-        if value is not None and (not value.strip() or "\n" in value):
-            raise ValueError("reason must be one non-empty line")
-        return value
-
-    @field_validator("command")
-    @classmethod
-    def _validate_command(cls, value: str) -> str:
-        if not _portable_tokens((value,)):
-            raise ValueError("command must be one portable literal argv token")
-        return value
-
-    @field_validator("subcommand")
-    @classmethod
-    def _validate_subcommand(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if value and not _portable_tokens(value):
-            raise ValueError("subcommand must contain portable literal argv tokens")
-        return value
+    reason: Line | None = None
 
     @field_validator("subcommand", "text", mode="before")
     @classmethod
@@ -191,34 +136,6 @@ class CommandPermission(StrictModel):
     def _wrap_single_tokens(cls, value: Any) -> Any:
         if isinstance(value, list | tuple):
             return [(item,) if isinstance(item, str) else item for item in value]
-        return value
-
-    @field_validator("tail")
-    @classmethod
-    def _validate_tail(
-        cls, value: tuple[tuple[str, ...], ...]
-    ) -> tuple[tuple[str, ...], ...]:
-        if any(not _portable_tokens(sequence) for sequence in value):
-            raise ValueError("tail must contain non-empty portable literal argv tokens")
-        if len(set(value)) != len(value):
-            raise ValueError("tail must be unique")
-        return value
-
-    @field_validator("text")
-    @classmethod
-    def _validate_text(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if any(
-            not (core := text.removeprefix(" ").removesuffix(" "))
-            or core != core.strip()
-            or any(c in text for c in "*?()")
-            for text in value
-        ):
-            raise ValueError(
-                "text must contain non-empty literal text without wildcards "
-                "or parentheses, edged by at most one space on each side"
-            )
-        if len(set(value)) != len(value):
-            raise ValueError("text must be unique")
         return value
 
     @property
@@ -258,6 +175,7 @@ type CommandPermissionEntry = (
 
 
 BUCKET_STRICTNESS = {"allow": 0, "ask": 1, "deny": 2}
+type Vocabulary[T] = Annotated[tuple[T, ...], Field(min_length=1), Unique]
 
 
 class CommandPermissions(StrictModel):
@@ -266,8 +184,8 @@ class CommandPermissions(StrictModel):
     allow: tuple[CommandPermission, ...] = ()
     ask: tuple[CommandPermission, ...] = ()
     deny: tuple[CommandPermission, ...] = ()
-    options: dict[str, tuple[str, ...]] = Field(default_factory=dict)
-    assignments: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    options: dict[Token, Vocabulary[OptionToken]] = Field(default_factory=dict)
+    assignments: dict[Token, Vocabulary[AssignmentToken]] = Field(default_factory=dict)
 
     @property
     def buckets(self) -> tuple[tuple[str, tuple[CommandPermission, ...]], ...]:
@@ -283,54 +201,6 @@ class CommandPermissions(StrictModel):
 
     def assignment_tokens(self, command: str) -> tuple[str, ...]:
         return self.assignments.get(command, ())
-
-    @field_validator("assignments")
-    @classmethod
-    def _validate_assignments(
-        cls, value: dict[str, tuple[str, ...]]
-    ) -> dict[str, tuple[str, ...]]:
-        for command, tokens in value.items():
-            if not _portable_tokens((command,)):
-                raise ValueError(
-                    f"assignments key {command!r} must be one portable literal "
-                    "argv token"
-                )
-            if not tokens or len(set(tokens)) != len(tokens):
-                raise ValueError(
-                    f"assignments for {command} must be non-empty and unique"
-                )
-            # A literal value only: a wildcard value would span into the command.
-            if not all(ASSIGNMENT_TOKEN.fullmatch(token) for token in tokens):
-                raise ValueError(
-                    f"assignments for {command} must be literal NAME=value tokens"
-                )
-        return value
-
-    @field_validator("options")
-    @classmethod
-    def _validate_options(
-        cls, value: dict[str, tuple[str, ...]]
-    ) -> dict[str, tuple[str, ...]]:
-        for command, tokens in value.items():
-            if not _portable_tokens((command,)):
-                raise ValueError(
-                    f"options key {command!r} must be one portable literal argv token"
-                )
-            if not tokens or not _portable_tokens(tokens):
-                raise ValueError(
-                    f"options for {command} must be non-empty portable literal tokens"
-                )
-            if len(set(tokens)) != len(tokens):
-                raise ValueError(f"options for {command} must be unique")
-            if any(not token.startswith("-") for token in tokens):
-                # A leading token that is not option-shaped is a subcommand and
-                # belongs in a rule; tolerating it would open a hole at an
-                # arbitrary argument position.
-                raise ValueError(
-                    f"options for {command} must be leading option tokens "
-                    "beginning with '-'"
-                )
-        return value
 
     @model_validator(mode="after")
     def _validate_rules(self) -> CommandPermissions:
@@ -391,119 +261,57 @@ def describe_rule(rule: CommandPermission) -> str:
     return " ".join(parts)
 
 
-PERMISSION_TOOLS = ("read", "edit", "write", "webfetch", "websearch")
-PERMISSION_DECISIONS = ("allow", "ask", "deny")
+type PermissionTool = Literal["read", "edit", "write", "webfetch", "websearch"]
 # A Windows directory outside the home, forward-slashed like every other path.
 WINDOWS_DRIVE = re.compile(r"[A-Za-z]:/")
+type Directory = Annotated[
+    str, StringConstraints(pattern=r"^(?:~/|/|[A-Za-z]:/)(?:.*\S)?$")
+]
+# A literal environment variable name, matched anywhere in a command.
+type SecretName = Annotated[
+    str, StringConstraints(pattern=r"^[^\s*?()](?:[^*?()]*[^\s*?()])?$")
+]
+# A `**/`-anywhere or `~/`-home pattern without whitespace or parentheses.
+type SecretPath = Annotated[str, StringConstraints(pattern=r"^(?:\*\*/|~/)[^\s()]*$")]
 
 
 class WorkspacePermissions(StrictModel):
     """Directories the agent may reach outside the current project."""
 
     unmatched: Literal["ask", "allow"] = "ask"
-    allow: tuple[str, ...] = ()
-    ask: tuple[str, ...] = ()
-    deny: tuple[str, ...] = ()
+    allow: tuple[Directory, ...] = ()
+    ask: tuple[Directory, ...] = ()
+    deny: tuple[Directory, ...] = ()
 
     @model_validator(mode="after")
     def _validate_directories(self) -> WorkspacePermissions:
-        seen = [*self.allow, *self.ask, *self.deny]
-        if len(seen) != len(set(seen)):
-            raise ValueError(
-                "workspace directories must be unique across allow, ask, and deny"
-            )
-        if any(not path or path != path.strip() for path in seen):
-            raise ValueError("workspace directories must be non-empty and trimmed")
-        if any(
-            not path.startswith(("~/", "/")) and not WINDOWS_DRIVE.match(path)
-            for path in seen
-        ):
-            raise ValueError(
-                "workspace directories must be absolute (/ or C:/) or ~-relative"
-            )
+        _unique((*self.allow, *self.ask, *self.deny))
         return self
 
 
 class PermissionPolicyDocument(StrictModel):
     schema_: Literal["coding-agents/v1"] = Field(alias="schema")
     kind: Literal["permission-policy"]
-    id: str
-    name: str
+    id: NonEmpty
+    name: NonEmpty
     description: str = ""
-    wrappers: tuple[str, ...] = ()
+    wrappers: Annotated[tuple[Token, ...], Unique] = ()
     unmatched: Literal["ask", "allow"] = "ask"
-    tools: dict[str, str] = Field(default_factory=dict)
+    tools: dict[PermissionTool, Decision] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
-    secret_paths: tuple[str, ...] = ()
-    secret_names: tuple[str, ...] = ()
+    secret_paths: Annotated[tuple[SecretPath, ...], Unique] = ()
+    secret_names: Annotated[tuple[SecretName, ...], Unique] = ()
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
-
-    @field_validator("tools")
-    @classmethod
-    def _validate_tools(cls, value: dict[str, str]) -> dict[str, str]:
-        for tool, decision in value.items():
-            if tool not in PERMISSION_TOOLS:
-                raise ValueError(
-                    f"unknown tool {tool!r}; expected one of {PERMISSION_TOOLS}"
-                )
-            if decision not in PERMISSION_DECISIONS:
-                raise ValueError(
-                    f"tool {tool} decision must be one of "
-                    f"{PERMISSION_DECISIONS}, got {decision!r}"
-                )
-        return value
-
-    @field_validator("wrappers")
-    @classmethod
-    def _validate_wrappers(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("wrappers must be unique")
-        if value and not _portable_tokens(value):
-            raise ValueError("wrappers must be portable literal argv tokens")
-        return value
-
-    @field_validator("secret_names")
-    @classmethod
-    def _validate_secret_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("secret_names must be unique")
-        if any(
-            not name or name != name.strip() or any(c in name for c in "*?()")
-            for name in value
-        ):
-            raise ValueError(
-                "secret_names must contain non-empty literal environment "
-                "variable names without wildcards or parentheses"
-            )
-        return value
-
-    @field_validator("secret_paths")
-    @classmethod
-    def _validate_secret_paths(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("secret_paths must be unique")
-        if any(
-            not path
-            or path != path.strip()
-            or any(character.isspace() or character in "()" for character in path)
-            or not path.startswith(("**/", "~/"))
-            for path in value
-        ):
-            raise ValueError(
-                "secret_paths must be `**/`-anywhere or `~/`-home patterns "
-                "without whitespace or parentheses"
-            )
-        return value
 
 
 class PermissionRulesDocument(StrictModel):
     schema_: Literal["coding-agents/v1"] = Field(alias="schema")
     kind: Literal["permission-rules"]
-    id: str
-    name: str
+    id: NonEmpty
+    name: NonEmpty
     description: str = ""
-    options: dict[str, tuple[str, ...]] = Field(default_factory=dict)
-    assignments: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    options: dict[Token, Vocabulary[OptionToken]] = Field(default_factory=dict)
+    assignments: dict[Token, Vocabulary[AssignmentToken]] = Field(default_factory=dict)
     allow: tuple[CommandPermissionEntry, ...] = ()
     ask: tuple[CommandPermissionEntry, ...] = ()
     deny: tuple[CommandPermissionEntry, ...] = ()
@@ -522,104 +330,80 @@ def _resolve_permission_entries(
     )
 
 
-class GlobalExtra(StrictModel):
-    pass
-
-
-class RuleExtra(StrictModel):
-    pass
-
-
-class SkillExtra(StrictModel):
-    paths: list[str] = Field(default_factory=list)
-    disable_model_invocation: bool = False
-    license: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class CommandExtra(StrictModel):
-    execution: CommandExecution = Field(default_factory=CommandExecution)
-
-
-EFFORT_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh", "max"})
-
-
-class AgentExtra(StrictModel):
-    model_policy: str | None = None
-    effort: str | None = None
-    background: bool = False
-    color: str | None = None
-
-    @field_validator("effort")
-    @classmethod
-    def _validate_effort(cls, value: str | None) -> str | None:
-        if value is not None and value not in EFFORT_LEVELS:
-            raise ValueError(f"effort must be one of {sorted(EFFORT_LEVELS)}")
-        return value
-
-
-class SourceModel(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class SourceModel(StrictModel):
+    """A Markdown source: its frontmatter fields, its path, and its body."""
 
     path: Path
-    id: str
-    name: str
-    description: str
-    only: tuple[str, ...] = ()
-    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
     body: str
+    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
+    id: NonEmpty
+    name: NonEmpty
+    description: Annotated[str, BeforeValidator(lambda value: value or "")] = ""
+    # Restrict which targets receive this artifact. Absent or empty means all.
+    only: Annotated[tuple[ToolName, ...], Unique] = ()
+    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
+    # Source-author bookkeeping, never compiled.
+    internal: Any = Field(default=None, exclude=True)
 
-    @computed_field
     @property
     def stem(self) -> str:
         return self.path.stem
 
+    @model_validator(mode="after")
+    def _validate_only(self) -> SourceModel:
+        if self.only and (extra := set(self.targets.root) - set(self.only)):
+            raise ValueError(f"targets outside only: {sorted(extra)}")
+        return self
+
 
 class GlobalSource(SourceModel):
-    pass
+    kind: Literal["global"]
 
 
 class RuleSource(SourceModel):
-    pass
+    kind: Literal["rule"]
+
+    @model_validator(mode="after")
+    def _validate_stem(self) -> RuleSource:
+        if self.stem in RESERVED_RULE_STEMS:
+            raise ValueError(f"reserved rule filename `{self.path.name}`")
+        return self
 
 
 class SkillSource(SourceModel):
-    source_dir: Path = Field(default_factory=Path)
+    kind: Literal["skill"]
     paths: list[str] = Field(default_factory=list)
     disable_model_invocation: bool = False
     license: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @property
+    def source_dir(self) -> Path:
+        return self.path.parent
+
 
 class CommandSource(SourceModel):
+    kind: Literal["command"]
     execution: CommandExecution = Field(default_factory=CommandExecution)
 
 
 class AgentSource(SourceModel):
+    kind: Literal["agent"]
     model_policy: str | None = None
-    effort: str | None = None
+    effort: Effort | None = None
     background: bool = False
     color: str | None = None
 
 
 class ModelPolicyTarget(StrictModel):
     model: str | None = None
+    effort: Effort | None = None
+
+
+class CodexModelPolicyTarget(StrictModel):
+    model: str | None = None
+    # Codex accepts model-defined effort values beyond the portable vocabulary.
     effort: str | None = None
-
-    @field_validator("effort")
-    @classmethod
-    def _validate_effort(cls, value: str | None) -> str | None:
-        if value is not None and value not in EFFORT_LEVELS:
-            raise ValueError(f"effort must be one of {sorted(EFFORT_LEVELS)}")
-        return value
-
-
-class CodexModelPolicyTarget(ModelPolicyTarget):
-    @field_validator("effort")
-    @classmethod
-    def _validate_effort(cls, value: str | None) -> str | None:
-        # Codex accepts model-defined effort values beyond the portable vocabulary.
-        return value
 
 
 class ModelPolicyProfile(StrictModel):
@@ -630,11 +414,7 @@ class ModelPolicyProfile(StrictModel):
 
 
 class ModelPolicyDocument(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
-    schema_: Literal["coding-agents/model-policy/v1"] = Field(
-        validation_alias="schema", serialization_alias="schema"
-    )
+    schema_: Literal["coding-agents/model-policy/v1"] = Field(alias="schema")
     default: str
     profiles: dict[str, ModelPolicyProfile]
 
@@ -644,30 +424,6 @@ class ModelPolicyDocument(StrictModel):
             raise ValueError("profiles must not be empty")
         if self.default not in self.profiles:
             raise ValueError(f"default profile {self.default!r} is not defined")
-        if self.default == "inherit":
-            raise ValueError("default profile must pin a model")
-        if "sweet-spot" not in self.profiles:
-            raise ValueError("profiles must define `sweet-spot`")
-        if "inherit" not in self.profiles:
-            raise ValueError("profiles must define `inherit`")
-        inherit = self.profiles["inherit"]
-        if any(
-            target.model or target.effort
-            for target in (
-                inherit.claude,
-                inherit.cursor,
-                inherit.opencode,
-                inherit.codex,
-            )
-            if target is not None
-        ):
-            raise ValueError("inherit profile must not pin a model or effort")
-        sweet = self.profiles["sweet-spot"]
-        if any(
-            target.model and re.search(r"fable[\s._-]*5[\s._-]*1", target.model, re.I)
-            for target in (sweet.claude, sweet.cursor, sweet.opencode)
-        ):
-            raise ValueError("sweet-spot must not select Claude Fable 5.1")
         return self
 
 
@@ -679,8 +435,8 @@ class PermissionSource(BaseModel):
     name: str
     description: str
     wrappers: tuple[str, ...]
-    unmatched: str
-    tools: dict[str, str]
+    unmatched: Literal["ask", "allow"]
+    tools: dict[PermissionTool, Decision]
     workspace: WorkspacePermissions
     secret_paths: tuple[str, ...]
     secret_names: tuple[str, ...]
@@ -705,199 +461,40 @@ def _model_error(path: Path, exc: ValidationError) -> SourceSchemaError:
     return SourceSchemaError(f"{path}: {exc}")
 
 
-def _parse_only(path: Path, value: Any) -> tuple[str, ...]:
-    """Restrict which targets receive this artifact. Absent or empty means all."""
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise SourceSchemaError(f"{path}: `only` must be a list of target names")
-    if not all(isinstance(item, str) and item for item in value):
-        raise SourceSchemaError(
-            f"{path}: `only` entries must be non-empty target name strings"
-        )
-    if unknown := set(value) - TOOL_NAMES:
-        raise SourceSchemaError(f"{path}: unknown only targets: {sorted(unknown)}")
-    if len(value) != len(set(value)):
-        raise SourceSchemaError(f"{path}: `only` must not contain duplicates")
-    return tuple(value)
-
-
-def _split_frontmatter(
-    path: Path, meta: dict[str, Any]
-) -> tuple[dict[str, Any], TargetBlocks, tuple[str, ...]]:
-    """Separate portable fields from exact-key target blocks.
-
-    `raw` is intentionally never normalized. Target compilers own typed-field
-    validation, while this layer only makes the three target block names and
-    omission reasons structurally safe.
-    """
-    remaining = dict(meta)
-    target_data = remaining.pop("targets", {})
-    only = _parse_only(path, remaining.pop("only", None))
-    remaining.pop("internal", None)
-    if not isinstance(target_data, dict):
-        raise SourceSchemaError(f"{path}: `targets` must be a mapping")
-    try:
-        targets = TargetBlocks.model_validate(target_data)
-    except ValidationError as exc:
-        raise _model_error(path, exc) from exc
-    if only and (extra := set(targets.root) - set(only)):
-        raise SourceSchemaError(f"{path}: targets outside only: {sorted(extra)}")
-    return (
-        {key: value for key, value in remaining.items() if key not in COMMON_KEYS},
-        targets,
-        only,
-    )
-
-
-def _validate_markdown_frontmatter(path: Path) -> None:
-    """Reject duplicate YAML keys before python-frontmatter collapses them."""
-
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    except OSError:
-        raise SourceSchemaError(f"{path}: invalid Markdown source") from None
-    if not lines or lines[0].strip() != "---":
-        return
-    for index, line in enumerate(lines[1:], 1):
-        if line.strip() not in {"---", "..."}:
-            continue
-        try:
-            node = yaml.compose("".join(lines[1:index]), Loader=yaml.SafeLoader)
-        except yaml.YAMLError:
-            raise SourceSchemaError(f"{path}: invalid YAML frontmatter") from None
-        if node is not None:
-            _reject_duplicate_yaml_keys(path, node)
-        return
-
-
-def _parse_common(
-    path: Path, expected_kind: SourceKind
-) -> tuple[dict[str, Any], dict[str, Any], TargetBlocks, str]:
-    _validate_markdown_frontmatter(path)
-    post = frontmatter.loads(path.read_text(encoding="utf-8"))
-    meta = dict(post.metadata or {})
-
-    if meta.get("schema") != SCHEMA:
-        raise SourceSchemaError(f"{path}: missing or invalid schema `{SCHEMA}`")
-    if meta.get("kind") != expected_kind:
-        raise SourceSchemaError(f"{path}: expected kind `{expected_kind}`")
-    for required in ("id", "name"):
-        if not meta.get(required):
-            raise SourceSchemaError(f"{path}: missing required field `{required}`")
-
-    remaining, targets, only = _split_frontmatter(path, meta)
-
-    common = {
-        "id": str(meta["id"]),
-        "name": str(meta["name"]),
-        "description": str(meta.get("description") or ""),
-        "only": only,
-    }
-    return common, remaining, targets, (post.content or "").lstrip("\n")
-
-
-def load_global(path: Path) -> GlobalSource:
-    common, remaining, targets, body = _parse_common(path, "global")
-    try:
-        GlobalExtra.model_validate(remaining)
-    except ValidationError as exc:
-        raise _model_error(path, exc) from exc
-    return GlobalSource(path=path, targets=targets, body=body, **common)
-
-
-def load_rule(path: Path) -> RuleSource:
-    if path.stem in RESERVED_RULE_STEMS:
-        raise SourceSchemaError(f"{path}: reserved rule filename `{path.name}`")
-    common, remaining, targets, body = _parse_common(path, "rule")
-    try:
-        RuleExtra.model_validate(remaining)
-    except ValidationError as exc:
-        raise _model_error(path, exc) from exc
-    return RuleSource(path=path, targets=targets, body=body, **common)
-
-
-def load_skill(path: Path) -> SkillSource:
-    common, remaining, targets, body = _parse_common(path, "skill")
-    try:
-        extra = SkillExtra.model_validate(remaining)
-    except ValidationError as exc:
-        raise _model_error(path, exc) from exc
-    return SkillSource(
-        path=path,
-        targets=targets,
-        body=body,
-        source_dir=path.parent,
-        paths=extra.paths,
-        disable_model_invocation=extra.disable_model_invocation,
-        license=extra.license,
-        metadata=extra.metadata,
-        **common,
-    )
-
-
-def load_command(path: Path) -> CommandSource:
-    common, remaining, targets, body = _parse_common(path, "command")
-    try:
-        extra = CommandExtra.model_validate(remaining)
-    except ValidationError as exc:
-        raise _model_error(path, exc) from exc
-    return CommandSource(
-        path=path, targets=targets, body=body, execution=extra.execution, **common
-    )
-
-
-def load_agent(path: Path) -> AgentSource:
-    common, remaining, targets, body = _parse_common(path, "agent")
-    try:
-        extra = AgentExtra.model_validate(remaining)
-    except ValidationError as exc:
-        raise _model_error(path, exc) from exc
-    return AgentSource(
-        path=path,
-        targets=targets,
-        body=body,
-        model_policy=extra.model_policy,
-        effort=extra.effort,
-        background=extra.background,
-        color=extra.color,
-        **common,
-    )
-
-
-def _snake_source_keys(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            to_snake(str(key)): (
-                child if key == "targets" else _snake_source_keys(child)
-            )
-            for key, child in value.items()
-        }
-    if isinstance(value, list):
-        return [_snake_source_keys(child) for child in value]
-    return value
-
-
-def _load_yaml(path: Path, *, normalize_keys: bool = True) -> dict[str, Any]:
+def load_markdown[S: SourceModel](path: Path, model: type[S]) -> S:
     try:
         text = path.read_text(encoding="utf-8")
-        node = yaml.compose(text, Loader=yaml.SafeLoader)
-        if node is not None:
-            _reject_duplicate_yaml_keys(path, node)
-        parsed = yaml.safe_load(text)
-    except OSError, yaml.YAMLError:
+    except OSError:
+        raise SourceSchemaError(f"{path}: invalid Markdown source") from None
+    header, body = split_frontmatter(text)
+    meta = _parse_yaml(path, header, first_line=2) if header is not None else None
+    if not isinstance(meta, dict):
+        meta = {}
+    if meta.get("schema") != SCHEMA:
+        raise SourceSchemaError(f"{path}: missing or invalid schema `{SCHEMA}`")
+    kind = model.model_fields["kind"].annotation
+    if meta.get("kind") not in get_args(kind):
+        raise SourceSchemaError(f"{path}: expected kind `{get_args(kind)[0]}`")
+    try:
+        return model.model_validate({**meta, "path": path, "body": body.strip("\n")})
+    except ValidationError as exc:
+        raise _model_error(path, exc) from exc
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         raise SourceSchemaError(f"{path}: invalid YAML") from None
+    parsed = _parse_yaml(path, text)
     if not isinstance(parsed, dict):
         raise SourceSchemaError(f"{path}: source must be a mapping")
-    _reject_normalized_yaml_key_collisions(path, parsed)
-    return _snake_source_keys(parsed) if normalize_keys else parsed
+    return parsed
 
 
 def load_model_policy(path: Path) -> ModelPolicyDocument:
     try:
-        return ModelPolicyDocument.model_validate(
-            _load_yaml(path, normalize_keys=False)
-        )
+        return ModelPolicyDocument.model_validate(_load_yaml(path))
     except ValidationError as exc:
         raise _model_error(path, exc) from exc
 
@@ -932,8 +529,6 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         policy = PermissionPolicyDocument.model_validate(_load_yaml(policy_path))
     except ValidationError as exc:
         raise _model_error(policy_path, exc) from exc
-    if not policy.id or not policy.name:
-        raise SourceSchemaError(f"{policy_path}: id and name must be non-empty")
 
     local_paths = (
         sorted(local_root.glob("*.yaml"))
@@ -946,8 +541,6 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
             fragment = PermissionRulesDocument.model_validate(_load_yaml(path))
         except ValidationError as exc:
             raise _model_error(path, exc) from exc
-        if not fragment.id or not fragment.name:
-            raise SourceSchemaError(f"{path}: id and name must be non-empty")
         fragments.append((path, fragment))
     ids = [fragment.id for _, fragment in fragments]
     if len(ids) != len(set(ids)):
@@ -1031,14 +624,14 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
     )
 
 
-def _load_many[T](
-    paths: list[Path], loader: Callable[[Path], T]
-) -> tuple[list[T], list[str]]:
+def _load_many[S: SourceModel](
+    paths: list[Path], model: type[S]
+) -> tuple[list[S], list[str]]:
     loaded = []
     errors = []
     for path in paths:
         try:
-            loaded.append(loader(path))
+            loaded.append(load_markdown(path, model))
         except SourceSchemaError as exc:
             errors.append(str(exc))
     return loaded, errors
@@ -1058,16 +651,16 @@ def load_sources(config_root: Path) -> SourceBundle:
         if (config_root / "global" / "AGENTS.md").exists()
         else []
     )
-    globals_, global_errors = _load_many(global_paths, load_global)
-    rules, rule_errors = _load_many(sorted(config_root.glob("rules/*.md")), load_rule)
+    globals_, global_errors = _load_many(global_paths, GlobalSource)
+    rules, rule_errors = _load_many(sorted(config_root.glob("rules/*.md")), RuleSource)
     skills, skill_errors = _load_many(
-        sorted(config_root.glob("skills/*/SKILL.md")), load_skill
+        sorted(config_root.glob("skills/*/SKILL.md")), SkillSource
     )
     commands, command_errors = _load_many(
-        sorted(config_root.glob("commands/*.md")), load_command
+        sorted(config_root.glob("commands/*.md")), CommandSource
     )
     agents, agent_errors = _load_many(
-        sorted(config_root.glob("agents/*.md")), load_agent
+        sorted(config_root.glob("agents/*.md")), AgentSource
     )
     if model_policy is not None:
         for agent in agents:

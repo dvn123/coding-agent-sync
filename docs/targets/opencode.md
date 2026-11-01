@@ -39,8 +39,8 @@ OpenCode applies ahead of the native list, and may extend `/permissions` with
 any rule except one whose action matches `shell`, since command policy has one
 writer.
 
-Named agents resolve `model_policy` before rendering. The `sweet-spot` profile
-emits its model and `reasoningEffort`; `inherit` emits neither, so the agent
+Named agents resolve `model_policy` before rendering. A profile with a model
+emits it and its `reasoningEffort`; one without emits neither, so the agent
 inherits the invoking primary agent's model and effort.
 
 Command denies and secret names land as bash `deny` entries after every allow

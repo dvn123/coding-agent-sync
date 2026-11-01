@@ -6,7 +6,9 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from ..sources import (
     WINDOWS_DRIVE,
     CommandPermission,
+    Decision,
     PermissionSource,
+    PermissionTool,
     WorkspacePermissions,
 )
 
@@ -63,25 +65,30 @@ CLAUDE_TOOL_PATTERNS = {
 }
 # Portable tool classes that collapse onto one gate on Claude and OpenCode, so
 # they cannot carry different decisions there. Strictest first.
-FOLDED_TOOLS = ("edit", "write")
-DECISION_STRICTNESS = ("deny", "ask", "allow")
+FOLDED_TOOLS: tuple[PermissionTool, ...] = ("edit", "write")
+DECISION_STRICTNESS: tuple[Decision, ...] = ("deny", "ask", "allow")
 
 
 def fold_edit_write(
-    tools: Mapping[str, str], target: str
-) -> tuple[dict[str, str], str | None]:
+    tools: Mapping[PermissionTool, Decision], target: str
+) -> tuple[dict[PermissionTool, Decision], str | None]:
     """Resolve `edit` and `write` onto one decision, keeping the stricter one.
 
     Neither Claude nor OpenCode has a gate for writing alone: Claude's Edit
     rules cover every file-editing tool, and OpenCode's write tool asks for its
     `edit` permission. Returns the resolved map, and a note when it narrowed.
     """
-    folded = {tool: tools[tool] for tool in FOLDED_TOOLS if tool in tools}
+    folded: dict[PermissionTool, Decision] = {
+        tool: tools[tool] for tool in FOLDED_TOOLS if tool in tools
+    }
     if len(set(folded.values())) <= 1:
         return dict(tools), None
     strictest = min(folded.values(), key=DECISION_STRICTNESS.index)
     spelled = ", ".join(f"{tool}: {value}" for tool, value in folded.items())
-    return {**tools, **dict.fromkeys(folded, strictest)}, (
+    resolved = dict(tools)
+    for tool in folded:
+        resolved[tool] = strictest
+    return resolved, (
         f"{target} has no gate for writing alone, so {spelled} fold onto one "
         f"edit decision; applying the stricter {strictest}"
     )
@@ -231,7 +238,9 @@ def cursor_shell_variants(
 
 
 def tool_patterns(
-    tools: Mapping[str, str], native: Mapping[str, str], decision: str
+    tools: Mapping[PermissionTool, Decision],
+    native: Mapping[str, str],
+    decision: str,
 ) -> tuple[str, ...]:
     # Deduplicated, because several portable classes can share one native
     # pattern.

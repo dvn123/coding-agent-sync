@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import tomlkit
 import yaml
-from pydantic import AliasChoices, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
@@ -84,17 +84,11 @@ class CodexSkillMetadata(StrictModel):
 
 
 class CodexSkillNative(StrictModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
-
     name: str | None = None
     description: str | None = None
     license: str | None = None
     metadata: dict[str, Any] | None = None
-    allowed_tools: list[str] | None = Field(
-        None,
-        serialization_alias="allowed-tools",
-        validation_alias=AliasChoices("allowed-tools", "allowed_tools"),
-    )
+    allowed_tools: list[str] | None = Field(None, alias="allowed-tools")
     openai: CodexSkillMetadata | None = None
 
 

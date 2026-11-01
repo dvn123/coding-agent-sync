@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from capabilities.audit import OpenCodeRules
 
 from coding_agents_sync import run_sync
-from coding_agents_sync.audit import OpenCodeRules
 from coding_agents_sync.io import (
     MANAGED_MANIFEST,
     ManagedEntryConflict,
@@ -99,7 +99,7 @@ def source_doc(
             )
     if kind == "rule" and isinstance(activation := meta.pop("activation", None), dict):
         native = target_blocks.setdefault("cursor", {}).setdefault("native", {})
-        native["always_apply"] = activation.get("always") is not False
+        native["alwaysApply"] = activation.get("always") is not False
         if activation.get("globs"):
             native["globs"] = activation["globs"]
     if kind == "skill":
@@ -357,7 +357,7 @@ class ModelPolicyTests(unittest.TestCase):
             self.assertIn('model_reasoning_effort = "high"', codex_cheap)
             self.assertFalse((home / ".cursor/agents").exists())
 
-    def test_model_policy_rejects_unknown_profiles_and_fable_sweet_spot(self) -> None:
+    def test_model_policy_rejects_unknown_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(config_root / "model-policy.yaml", model_policy_doc())
@@ -372,14 +372,6 @@ class ModelPolicyTests(unittest.TestCase):
                 ),
             )
             with self.assertRaisesRegex(SourceSchemaError, "unknown model policy"):
-                run_sync(config_root=config_root, home=home)
-
-            write(
-                config_root / "model-policy.yaml",
-                model_policy_doc(sweet_model="claude-fable-5-1"),
-            )
-            (config_root / "agents" / "unknown.md").unlink()
-            with self.assertRaisesRegex(SourceSchemaError, "Fable 5.1"):
                 run_sync(config_root=config_root, home=home)
 
     def test_model_policy_rejects_native_model_override(self) -> None:
@@ -1294,8 +1286,8 @@ class SyncTests(unittest.TestCase):
 
     def test_an_assignment_value_is_literal(self) -> None:
         for assignments, message in (
-            ({"tool": ["EDITOR=*"]}, "literal NAME=value"),
-            ({"tool": ["EDITOR=a b"]}, "literal NAME=value"),
+            ({"tool": ["EDITOR=*"]}, "String should match pattern"),
+            ({"tool": ["EDITOR=a b"]}, "String should match pattern"),
             ({"other": ["EDITOR=true"]}, "assignments declared for other"),
         ):
             with (
@@ -3437,7 +3429,7 @@ class SyncTests(unittest.TestCase):
                         "license": "MIT",
                         "opencode:compatibility": "opencode",
                         "metadata": {"owner": "platform"},
-                        "claude:allowed_tools": ["Read"],
+                        "claude:allowed-tools": ["Read"],
                     },
                 ),
             )
@@ -3712,14 +3704,14 @@ approval_policy = "on-request"
                         "paths": ["docs/**"],
                         "disable_model_invocation": True,
                         "claude:when_to_use": "Use when editing docs.",
-                        "claude:argument_hint": "[path]",
-                        "claude:user_invocable": False,
-                        "claude:allowed_tools": ["Read", "Grep"],
+                        "claude:argument-hint": "[path]",
+                        "claude:user-invocable": False,
+                        "claude:allowed-tools": ["Read", "Grep"],
                         "claude:model": "sonnet",
                         "claude:effort": "high",
                         "claude:context": "fork",
                         "claude:agent": "Explore",
-                        "claude:disallowed_tools": ["Bash"],
+                        "claude:disallowed-tools": ["Bash"],
                         "claude:shell": "bash",
                     },
                 ),
@@ -3769,7 +3761,7 @@ body
                     extra={"only": ["cursor", "nope"]},
                 ),
             )
-            with self.assertRaisesRegex(ValueError, "unknown only targets"):
+            with self.assertRaisesRegex(ValueError, "Input should be .claude."):
                 run_sync(config_root=config_root, home=home)
 
     def test_only_rejects_targets_outside_the_list(self) -> None:

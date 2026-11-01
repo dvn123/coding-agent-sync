@@ -9,6 +9,6 @@ targets:
     native:
       globs:
         - "**/*.py"
-      always_apply: false
+      alwaysApply: false
 ---
 Apply the neutral scoped rule.

@@ -27,7 +27,9 @@ from ..plan import (
     Plan,
 )
 from ..sources import (
+    Decision,
     PermissionSource,
+    PermissionTool,
     SkillSource,
     SourceBundle,
     StrictModel,
@@ -208,7 +210,7 @@ def deny_reasons(permissions: PermissionSource) -> dict[str, str]:
 
 
 def _permissions(
-    sources: SourceBundle, config: Path, tools: Mapping[str, str]
+    sources: SourceBundle, config: Path, tools: Mapping[PermissionTool, Decision]
 ) -> tuple[NativeValue, ...]:
     if not (permissions := sources.permissions):
         return ()
