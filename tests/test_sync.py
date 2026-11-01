@@ -1170,8 +1170,15 @@ class SyncTests(unittest.TestCase):
                 "Bash($HOME/bin/tool status *)", claude["permissions"]["allow"]
             )
 
-    def test_a_declared_assignment_prefixes_every_rule_of_its_command(self) -> None:
-        """A literal `NAME=value` agents type before a command decides nothing."""
+    def test_a_declared_assignment_prefixes_every_rule_its_target_does_not_peel(
+        self,
+    ) -> None:
+        """A literal `NAME=value` agents type before a command decides nothing.
+
+        Claude strips any assignment before an ask or deny, and the
+        opencode-unwrap plugin before a deny, so only the other rules get
+        copies behind it.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write_permissions(config_root)
@@ -1179,6 +1186,7 @@ class SyncTests(unittest.TestCase):
                 config_root / "permissions" / "commands" / "test.yaml",
                 permission_rules_doc(
                     allow=[["tool", "status"]],
+                    ask=[["tool", "push"]],
                     deny=[["tool", "reset"]],
                     extra={
                         "assignments": {"tool": ["EDITOR=true", "IFS=", "IFS=$'\\t'"]}
@@ -1195,13 +1203,77 @@ class SyncTests(unittest.TestCase):
                 "IFS= tool status -v": "allow",
                 "IFS=$'\\t' tool status": "allow",
                 "EDITOR=true tool reset": "deny",
+                "EDITOR=true tool push": "ask",
                 "EDITOR=false tool status": "ask",
                 "OTHER=1 tool status": "ask",
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
+            self.assertEqual(
+                {
+                    effect
+                    for resource, effect in bash.items()
+                    if resource.startswith("EDITOR=true ")
+                },
+                {"allow", "ask"},
+            )
             claude = json.loads((home / ".claude/settings.json").read_text())
-            self.assertIn("Bash(IFS= tool status *)", claude["permissions"]["allow"])
+            self.assertEqual(
+                {
+                    bucket: [
+                        rule for rule in rules if rule.startswith("Bash(EDITOR=true ")
+                    ]
+                    for bucket, rules in claude["permissions"].items()
+                    if bucket in ("allow", "ask", "deny")
+                },
+                {
+                    "allow": ["Bash(EDITOR=true tool status *)"],
+                    "ask": [],
+                    "deny": [],
+                },
+            )
+
+    def test_a_text_rule_absorbs_the_token_rules_it_covers_on_glob_targets(
+        self,
+    ) -> None:
+        """Codex keeps the token rule, its only reach; the glob targets drop it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(config_root)
+            write(
+                config_root / "permissions" / "commands" / "test.yaml",
+                permission_rules_doc(
+                    deny=[
+                        {
+                            "command": "kube",
+                            "subcommand": ["get"],
+                            "tail": [["-oyaml"]],
+                        },
+                        {"command": "kube", "subcommand": ["get"], "text": ["yaml"]},
+                    ]
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            claude = json.loads((home / ".claude/settings.json").read_text())
+            self.assertEqual(
+                [rule for rule in claude["permissions"]["deny"] if "kube" in rule],
+                ["Bash(kube get*yaml*)"],
+            )
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            self.assertEqual(
+                {
+                    resource: effect
+                    for resource, effect in opencode_rules(opencode, "shell").items()
+                    if "kube" in resource
+                },
+                {"kube get*yaml*": "deny"},
+            )
+            self.assertIn(
+                'prefix_rule(pattern=["kube", "get", "-oyaml"], decision="forbidden")',
+                (home / ".codex/rules/coding-agents.rules").read_text(),
+            )
 
     def test_an_assignment_value_is_literal(self) -> None:
         for assignments, message in (
@@ -1462,6 +1534,14 @@ class SyncTests(unittest.TestCase):
             )
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertIn("Bash(*EXAMPLE_TOKEN*)", claude["permissions"]["deny"])
+            self.assertEqual(
+                claude["sandbox"],
+                {
+                    "credentials": {
+                        "envVars": [{"name": "EXAMPLE_TOKEN", "mode": "deny"}]
+                    }
+                },
+            )
             self.assertIn("Bash(shred *)", claude["permissions"]["deny"])
             self.assertIn("Bash(git push *)", claude["permissions"]["deny"])
             self.assertEqual(

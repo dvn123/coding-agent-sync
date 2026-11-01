@@ -282,6 +282,19 @@ SCENARIOS = {
         {"file_path": "{work}/.env.example"},
         {"allow": ("Read(**/.env.example)",), "deny": ("Read(**/.env*)",)},
     ),
+    # Whether a Read deny reaches a shell read of the same file with the
+    # sandbox off; `cp` writes a copy the recorder can check.
+    **{
+        f"read-deny-shell-{name}": Scenario(
+            "Bash",
+            {"command": command},
+            {"allow": ("Bash",), "deny": ("Read(**/.env)",)},
+        )
+        for name, command in (
+            ("cat", "cat {work}/.env"),
+            ("copy", "cp {work}/.env {work}/copied"),
+        )
+    },
     # Which spellings a bare deny reaches on its own, so the compiler emits
     # copies only for the rest. Everything else is allowed, so a denial can
     # only come from the one deny rule.
@@ -295,6 +308,7 @@ SCENARIOS = {
             ("plain", f"{COMMAND} arg"),
             ("mention", f"echo {COMMAND} arg"),
             ("assign", f"FOO=bar {COMMAND} arg"),
+            ("assign-dangerous", f"GIT_EDITOR=true {COMMAND} arg"),
             ("env", f"env {COMMAND} arg"),
             ("env-assign", f"env FOO=bar {COMMAND} arg"),
             ("env-unset", f"env -u HOME {COMMAND} arg"),
@@ -351,6 +365,24 @@ SCENARIOS = {
         for name, command in (
             ("program-absolute", f"{{bin}}/{COMMAND} arg"),
             ("env-absolute", f"/usr/bin/env {COMMAND} arg"),
+            ("assign", f"FOO=bar {COMMAND} arg"),
+            ("assign-dangerous", f"GIT_EDITOR=true {COMMAND} arg"),
+        )
+    },
+    # An allow strips only the assignments Claude lists as safe; any other
+    # assignment must be spelled in the rule.
+    **{
+        f"allow-assign-{name}": Scenario(
+            "Bash", {"command": command}, {"allow": (f"Bash({rule})",)}
+        )
+        for name, command, rule in (
+            ("safe", f"PYTHONDONTWRITEBYTECODE=1 {COMMAND} arg", f"{COMMAND} *"),
+            ("dangerous", f"GIT_EDITOR=true {COMMAND} arg", f"{COMMAND} *"),
+            (
+                "dangerous-spelled",
+                f"GIT_EDITOR=true {COMMAND} arg",
+                f"GIT_EDITOR=true {COMMAND} *",
+            ),
         )
     },
     # The compiled guards: a command that starts with a redirect is denied, and
@@ -516,6 +548,10 @@ EXPECTED = {
     "probe-var-wrapper": {"exit-zero": True, "executed": False},
     "deny-env": {"exit-zero": True, "result-error": True},
     "deny-env-example": {"exit-zero": True, "result-error": True},
+    **{
+        f"read-deny-shell-{name}": {"exit-zero": True, "denied": True}
+        for name in ("cat", "copy")
+    },
     # A deny peels assignments, `env` in every form, `sudo`, the resolved
     # wrappers, and a quoted or escaped program name, and retries itself behind
     # a bare `xargs`, and it strips an absolute program path first, so a
@@ -527,6 +563,7 @@ EXPECTED = {
             ("plain", True),
             ("mention", False),
             ("assign", True),
+            ("assign-dangerous", True),
             ("env", True),
             ("env-assign", True),
             ("env-unset", True),
@@ -571,7 +608,15 @@ EXPECTED = {
     },
     **{
         f"ask-reach-{name}": {"exit-zero": True, "executed": False, "denied": True}
-        for name in ("program-absolute", "env-absolute")
+        for name in ("program-absolute", "env-absolute", "assign", "assign-dangerous")
+    },
+    **{
+        f"allow-assign-{name}": {"exit-zero": True, "executed": executed}
+        for name, executed in (
+            ("safe", True),
+            ("dangerous", False),
+            ("dangerous-spelled", True),
+        )
     },
     **{
         f"compiled-guard-{name}": {"exit-zero": True, "denied": denied}

@@ -98,10 +98,8 @@ CLAUDE_MCP_WILDCARD = "mcp__*"
 CLAUDE_AGENT_TOOL = re.compile(
     r"[A-Z][A-Za-z0-9]*|mcp__[\w.-]+(?:__(?:[\w.-]+|\*))?", re.ASCII
 )
-# Closed vocabularies from the subagent frontmatter reference. `model` is
+# Closed vocabularies of Claude's agent frontmatter schema. `model` is
 # excluded: it also accepts any full model ID, so it has no closed set.
-# `isolation` documents only `worktree` for frontmatter; `remote` is the Agent
-# tool's other isolation value and is accepted rather than risk a false reject.
 CLAUDE_AGENT_VOCABULARIES = {
     "permission_mode": frozenset(
         {
@@ -275,6 +273,15 @@ def _permission_values(
         values.append((("permissions", "deny"), deny))
     if directories := literal_directories(permissions.workspace):
         values.append((("permissions", "additionalDirectories"), directories))
+    # The deny above only stops a command that names the variable; the sandbox
+    # also unsets it, so `env` cannot print it either.
+    if permissions.secret_names:
+        values.append(
+            (
+                ("sandbox", "credentials", "envVars"),
+                [{"name": name, "mode": "deny"} for name in permissions.secret_names],
+            )
+        )
     return tuple(values)
 
 

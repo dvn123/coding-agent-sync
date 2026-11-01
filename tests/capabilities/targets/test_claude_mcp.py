@@ -65,6 +65,8 @@ def runtime(
         stub.base_url,
         XDG_DATA_HOME=str(paths.data),
         XDG_CACHE_HOME=str(paths.cache),
+        # Tool search would defer the MCP tool out of the first request.
+        ENABLE_TOOL_SEARCH="false",
     )
     value = Runtime(
         claude,

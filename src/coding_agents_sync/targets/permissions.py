@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
 from ..sources import (
@@ -330,9 +331,10 @@ def bucket_entries(
     get no wrapper form: a blanket `env *` would allow any payload the wrapper
     carries, so a wrapped allowed command falls to `unmatched`. `peeled` are
     wrapper prefixes the target strips before it matches a deny, and before an
-    ask too unless `peels_ask` is false. Every rule, allows
-    included, also lands behind each literal `NAME=value` its command declares
-    in `assignments`: a fixed value spans nothing, unlike a wrapper's `*`.
+    ask too unless `peels_ask` is false; such a target strips leading
+    assignments there as well. Every other rule, allows included, lands behind
+    each literal `NAME=value` its command declares in `assignments`: a fixed
+    value spans nothing, unlike a wrapper's `*`.
     """
     commands = permissions.commands
     wrapped = [
@@ -346,11 +348,14 @@ def bucket_entries(
         # an ask or deny.
         if bucket == "allow" and permissions.unmatched == "allow":
             continue
+        peels = bool(peeled) and (bucket == "deny" or (bucket == "ask" and peels_ask))
         for rule in rules:
             options = commands.option_tokens(rule.command)
-            assigned = [
-                f"{token} " for token in commands.assignment_tokens(rule.command)
-            ]
+            assigned = (
+                []
+                if peels
+                else [f"{token} " for token in commands.assignment_tokens(rule.command)]
+            )
             for origin, patterns in (
                 ("base", lower(rule, (), "")),
                 ("option", lower(rule, options, "")),
@@ -362,7 +367,7 @@ def bucket_entries(
             ):
                 yield from ((bucket, origin, pattern) for pattern in patterns)
             if bucket != "allow":
-                skip = peeled if bucket == "deny" or peels_ask else frozenset()
+                skip = peeled if peels else frozenset()
                 for origin, prefix in wrapped:
                     if prefix not in skip:
                         yield from (
@@ -371,8 +376,45 @@ def bucket_entries(
                         )
 
 
+def _glob(pattern: str) -> re.Pattern[str]:
+    return re.compile(".*".join(map(re.escape, pattern.split("*"))), re.DOTALL)
+
+
+def _uncovered(patterns: list[str]) -> list[str]:
+    """Drop each pattern another one in the bucket already matches.
+
+    A `*`-only glob covers another when it matches that one's text with each
+    `*` read as a literal: its own `*` then absorbs whatever the other's
+    stands for. Only a glob with a `*` before a word, as a `text` rule
+    emits (`kubectl get secret*yaml*`), spans what token rules spell out,
+    so only those are tried. An equivalent pair keeps both.
+    """
+    wide = [
+        (pattern, max(pattern.split("*"), key=len), _glob(pattern))
+        for pattern in patterns
+        if re.search(r"\*[^\s*]", pattern)
+    ]
+    return [
+        pattern
+        for pattern in patterns
+        if not any(
+            other != pattern
+            and literal in pattern
+            and glob.fullmatch(pattern)
+            and not _glob(pattern).fullmatch(other)
+            for other, literal, glob in wide
+        )
+    ]
+
+
 def bucket_patterns(entries: Iterable[tuple[str, str, str]]) -> dict[str, list[str]]:
+    """Each bucket's distinct glob patterns, minus those another one covers.
+
+    A covered pattern decides nothing: whatever it matches, the pattern that
+    covers it matches with the same decision, and on OpenCode, whose last
+    match wins, from the same contiguous bucket.
+    """
     patterns: dict[str, dict[str, None]] = {"allow": {}, "ask": {}, "deny": {}}
     for bucket, _, pattern in entries:
         patterns[bucket][pattern] = None
-    return {bucket: list(emitted) for bucket, emitted in patterns.items()}
+    return {bucket: _uncovered(list(emitted)) for bucket, emitted in patterns.items()}

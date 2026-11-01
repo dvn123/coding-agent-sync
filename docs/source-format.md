@@ -198,8 +198,9 @@ never expands it. Claude and OpenCode, which match the typed text, also receive
 a `~/` command under its `$HOME/` spelling, and a subcommand token holding a
 `/` single- and double-quoted. `assignments` maps a command to literal
 `NAME=value` tokens (`git: [GIT_EDITOR=true]`) that agents type in front of it
-and that change nothing a rule decides; those two targets land every rule for
-the command behind each one too. A value is one literal shell word, quoted as
+and that change nothing a rule decides; those two targets land the command's
+rules behind each one too, except where the target strips assignments itself:
+Claude before an ask or deny, OpenCode's unwrap plugin before a deny. A value is one literal shell word, quoted as
 typed (`IFS=$'\t'`), with no whitespace or glob character, because a wildcard
 would span into the command; Cursor and Codex receive nothing, so such a command
 falls to their default. Like `options`, a command's `assignments` have one
