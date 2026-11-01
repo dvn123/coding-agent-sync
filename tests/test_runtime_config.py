@@ -86,7 +86,7 @@ def test_operations_are_structural_and_local_overrides_replace_exact_pointers() 
 def test_native_plan_preserves_unknown_values_and_file_mode(tmp_path: Path) -> None:
     config_root = tmp_path / "config"
     path = tmp_path / "home/settings.json"
-    write(path, json.dumps({"unknown": {"nested": True}, "managed": "old"}), 0o640)
+    write(path, json.dumps({"unknown": {"nested": True}}), 0o640)
     plan = prepare_plan_native(
         config_root=config_root,
         native_values=(NativeValue("fixture", path, ("managed",), "new"),),

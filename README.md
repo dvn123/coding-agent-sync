@@ -108,11 +108,13 @@ Portable generated roots use `.coding-agents-managed.json` manifests. The
 compiler prunes only previously manifested entries and rejects modified managed
 content. Unmanifested siblings remain untouched.
 
-Native configuration is reconciled at named JSON/TOML pointers. Patch
-operations own only their named paths. Generated permission paths, the OpenCode
-`instructions` glob, and Codex writable roots use semantic hashes recorded
-in `config_root/.coding-agents-native.json`. Unnamed native fields remain
-tool-owned.
+Native configuration is reconciled at named JSON/TOML pointers, recorded in
+`config_root/.coding-agents-native.json`. A generated list (permission rules,
+the OpenCode `instructions` glob, Codex writable roots) owns only its own
+entries: entries a tool or person adds are kept ahead of the generated ones,
+and patch `extend` entries are owned with them. Any other generated value is
+owned whole by semantic hash, and an existing value that differs is refused
+rather than overwritten. Unnamed native fields remain tool-owned.
 
 Generated targets remain rooted below `home`:
 

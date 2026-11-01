@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,36 +93,69 @@ def _parse(surface: _Surface) -> MutableMapping[str, Any]:
     return parsed
 
 
-def _load_manifest(path: Path, targets: set[str]) -> dict[tuple[str, Pointer], str]:
+@dataclass(frozen=True)
+class OwnedItems:
+    """The hashes of the entries the compiler owns in a generated list."""
+
+    hashes: frozenset[str]
+
+
+# A whole owned value is recorded by its hash; a generated list by its items.
+type Ownership = str | OwnedItems
+
+HASH = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _load_manifest(
+    path: Path, targets: set[str]
+) -> dict[tuple[str, Pointer], Ownership]:
     if not path.exists():
         return {}
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(parsed.get("entries"), list):
             raise ValueError
-        result: dict[tuple[str, Pointer], str] = {}
+        result: dict[tuple[str, Pointer], Ownership] = {}
         for entry in parsed["entries"]:
+            fields = set(entry) - {"target", "pointer"}
             if (
-                not isinstance(entry, dict)
-                or set(entry) != {"target", "pointer", "hash"}
-                or entry["target"] not in targets
+                entry["target"] not in targets
                 or not isinstance(entry["pointer"], str)
-                or not isinstance(entry["hash"], str)
-                or not entry["hash"].startswith("sha256:")
-                or len(entry["hash"]) != 71
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in entry["hash"][7:]
-                )
+                or fields not in ({"hash"}, {"items"})
             ):
                 raise ValueError
+            ownership: Ownership
+            if "hash" in entry:
+                ownership = entry["hash"]
+                if not isinstance(ownership, str) or not HASH.fullmatch(ownership):
+                    raise ValueError
+            else:
+                items = entry["items"]
+                if not isinstance(items, list) or not all(
+                    isinstance(item, str) and HASH.fullmatch(item) for item in items
+                ):
+                    raise ValueError
+                ownership = OwnedItems(frozenset(items))
             key = (entry["target"], decode_pointer(entry["pointer"]))
             if key in result:
                 raise ValueError
-            result[key] = entry["hash"]
+            result[key] = ownership
         return result
     except OSError, ValueError, KeyError, TypeError:
         raise NativeConfigError(f"invalid native manifest: {path}") from None
+
+
+def _foreign_items(current: list[Any], ownership: Ownership | None) -> list[Any]:
+    """Entries of an existing list that the compiler does not own.
+
+    An unclaimed list, or a wholly owned one that was edited, keeps every entry:
+    the generated ones are deduplicated when the list is rebuilt.
+    """
+    if isinstance(ownership, OwnedItems):
+        return [item for item in current if semantic_hash(item) not in ownership.hashes]
+    if ownership is not None and semantic_hash(current) == ownership:
+        return []
+    return list(current)
 
 
 def _validate_candidate(
@@ -175,6 +209,11 @@ def _serialize(surface: _Surface, document: MutableMapping[str, Any]) -> bytes:
     if not isinstance(parsed, Mapping):
         raise NativeConfigError(f"candidate is not a mapping: {surface.path}")
     return content
+
+
+def _with_foreign(value: Any, foreign: list[Any] | None) -> Any:
+    """Foreign entries first, so generated rules win where the last match does."""
+    return [*foreign, *value] if foreign else value
 
 
 def _delete_with_empty_parents(
@@ -237,38 +276,67 @@ def prepare_plan_native(
     manifest_path = config_root / MANIFEST_NAME
     previous = _load_manifest(manifest_path, set(values))
     candidates: list[NativeCandidate] = []
-    hashes: dict[tuple[str, Pointer], str] = {}
+    owned: dict[tuple[str, Pointer], Ownership] = {}
     drift: set[Path] = set()
     for surface in surfaces:
         generated = values[surface.target]
         patch = Patch(tuple(patches[surface.target]))
         previous_for_target = {
-            pointer: hash_
-            for (target, pointer), hash_ in previous.items()
+            pointer: ownership
+            for (target, pointer), ownership in previous.items()
             if target == surface.target
         }
         if not patch.operations and not generated and not previous_for_target:
             continue
         document = _parse(surface)
         original = _plain(document)
-        for pointer, expected in previous_for_target.items():
+        foreign: dict[Pointer, list[Any]] = {}
+        for pointer in previous_for_target.keys() | generated.keys():
             present, current = get_value(document, pointer)
-            desired = generated.get(pointer)
-            allowed = {expected}
-            if desired is not None:
-                allowed.add(semantic_hash(desired))
-            if present and semantic_hash(current) not in allowed:
+            if not present:
+                continue
+            ownership = previous_for_target.get(pointer)
+            current = _plain(current)
+            if isinstance(current, list) and (
+                isinstance(ownership, OwnedItems)
+                or isinstance(generated.get(pointer), list)
+            ):
+                foreign[pointer] = _foreign_items(current, ownership)
+            elif ownership is None:
+                if current != _plain(generated[pointer]):
+                    raise NativeConfigError(
+                        f"existing native value differs: {surface.target} "
+                        f"{display_pointer(pointer)}"
+                    )
+            elif semantic_hash(current) not in {
+                ownership,
+                *((semantic_hash(generated[pointer]),) if pointer in generated else ()),
+            }:
                 raise NativeConfigError(
                     f"modified generated native path: {surface.target} "
                     f"{display_pointer(pointer)}"
                 )
-            if pointer not in generated and present:
+        for pointer, value in generated.items():
+            if pointer in foreign:
+                # An entry the compiler also generates is owned from now on.
+                generated_items = _plain(value)
+                foreign[pointer] = [
+                    item for item in foreign[pointer] if item not in generated_items
+                ]
+        for pointer in previous_for_target.keys() - generated.keys():
+            if foreign.get(pointer):
+                apply_operations(
+                    document, Patch((Operation("set", pointer, foreign[pointer]),))
+                )
+            elif get_value(document, pointer)[0]:
                 _delete_with_empty_parents(document, pointer)
         apply_operations(
             document,
             Patch(
                 tuple(
-                    Operation("set", pointer, value)
+                    Operation(
+                        "set", pointer, _with_foreign(value, foreign.get(pointer))
+                    )
                     for pointer, value in generated.items()
                 )
             ),
@@ -286,13 +354,33 @@ def prepare_plan_native(
                     f"generated native value missing at {surface.path} "
                     f"{display_pointer(pointer)}"
                 )
-            hashes[(surface.target, pointer)] = semantic_hash(current)
+            current = _plain(current)
+            owned[(surface.target, pointer)] = (
+                OwnedItems(
+                    frozenset(semantic_hash(item) for item in current)
+                    - frozenset(
+                        semantic_hash(item) for item in foreign.get(pointer, [])
+                    )
+                )
+                if isinstance(generated[pointer], list)
+                else semantic_hash(current)
+            )
         candidates.append(NativeCandidate(surface.path, content, changed))
 
     manifest = {
         "entries": [
-            {"target": target, "pointer": display_pointer(pointer), "hash": hash_}
-            for (target, pointer), hash_ in sorted(hashes.items())
+            {
+                "target": target,
+                "pointer": display_pointer(pointer),
+                **(
+                    {"items": sorted(ownership.hashes)}
+                    if isinstance(ownership, OwnedItems)
+                    else {"hash": ownership}
+                ),
+            }
+            for (target, pointer), ownership in sorted(
+                owned.items(), key=lambda item: item[0]
+            )
         ],
     }
     manifest_content = (json.dumps(manifest, indent=2) + "\n").encode()

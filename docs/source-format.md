@@ -343,7 +343,9 @@ reconciles manifests and native semantic hashes, writes portable and native
 content atomically, then publishes manifests last.
 
 Portable manifests preserve unmanifested siblings and refuse to claim or
-replace modified output. Native ownership is pointer plus semantic hash in
-`config_root/.coding-agents-native.json`; modified generated pointers are
-refused, while unnamed pointers remain native-tool-owned. A failed preflight
+replace modified output. Native ownership is recorded per pointer in
+`config_root/.coding-agents-native.json`: a generated list owns its own entries
+and keeps foreign ones ahead of them; any other value is owned whole by
+semantic hash, and a modified or differing existing value is refused. Unnamed
+pointers remain native-tool-owned. A failed preflight
 makes no generated writes.
