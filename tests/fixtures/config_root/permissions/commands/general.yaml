@@ -17,11 +17,3 @@ deny:
   - command: fixture-tool
     subcommand: remove
     exact: true
-targets:
-  codex:
-    omit:
-      commands.allow: Codex allow rules would skip its sandbox approval.
-      commands.ask: Codex prompts by sandbox, not by rule.
-  cursor:
-    omit:
-      commands.deny: Cursor Desktop has no deny channel; the CLI projects it.

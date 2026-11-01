@@ -102,17 +102,17 @@ commands; sources must explicitly omit them.
 
 ## Command permission projection
 
-Portable deny rules land in the same rules file as `forbidden` prefix rules.
+Portable ask and deny rules land in the same rules file as `prompt` and
+`forbidden` prefix rules.
 Codex matches one flat argv by literal prefix and has no wildcard, so a rule
 projects as its head and each tail appended directly, bare and once per
 declared wrapper (`security find-generic-password`, `env security
 find-generic-password`). The option-hole heads and the tail-after-arguments
-spellings have no prefix form and fall to Codex's own approval flow; a deny
-with a text predicate or an exact match is dropped with a warning. Allow and
-ask rules never project: an allow would skip the sandbox approval Codex
-already applies, and an ask would add prompts the sandbox does not need, so
-fragments carrying them acknowledge `targets.codex.omit.commands.allow` and
-`targets.codex.omit.commands.ask`. Secret paths and names still have no
+spellings have no prefix form and fall to Codex's own approval flow; an ask
+or deny with a text predicate or an exact match is dropped with a warning.
+Allow rules never project and owe no omission: a Codex `allow` rule runs the
+command outside the sandbox, while an unlisted command already runs inside
+it. Secret paths and names still have no
 projection, and neither does the policy's `unmatched` decision: Codex gates an
 unmatched command by sandbox and approval policy, not by an allowlist, so a
 non-default value needs an omit here too. Literal `workspace.allow`

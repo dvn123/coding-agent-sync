@@ -223,18 +223,6 @@ def permission_rules_doc(
     }
     if extra:
         source.update(extra)
-    targets: dict[str, dict[str, Any]] = {}
-    for bucket in ("allow", "ask"):
-        if source[bucket]:
-            targets.setdefault("codex", {}).setdefault("omit", {})[
-                f"commands.{bucket}"
-            ] = f"Codex projects only deny rules; {bucket} stays with its sandbox."
-    if source["deny"]:
-        targets["cursor"] = {
-            "omit": {"commands.deny": "Cursor Desktop has no deny channel."}
-        }
-    if targets:
-        source["targets"] = targets
     return yaml.safe_dump(source, sort_keys=False)
 
 
@@ -526,8 +514,8 @@ class NativeListOwnershipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write_permissions(config_root, allow=[["git", "status"]])
-            cli_config = home / ".cursor" / "cli-config.json"
-            write(cli_config, json.dumps({"approvalMode": "unrestricted"}))
+            desktop = home / ".cursor" / "permissions.json"
+            write(desktop, json.dumps({"approvalMode": "unrestricted"}))
 
             with self.assertRaisesRegex(
                 NativeConfigError, "existing native value differs"
@@ -535,8 +523,34 @@ class NativeListOwnershipTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertEqual(
-                json.loads(cli_config.read_text()), {"approvalMode": "unrestricted"}
+                json.loads(desktop.read_text()), {"approvalMode": "unrestricted"}
             )
+
+
+class IncidentalFileTests(unittest.TestCase):
+    def test_caches_a_skill_leaves_behind_are_neither_drift_nor_a_conflict(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            skill = config_root / "skills" / "tool" / "SKILL.md"
+            write(skill, source_doc("skill", "tool", "tool", "body\n"))
+            write(skill.parent / "run.py", "print('hi')\n")
+            run_sync(config_root=config_root, home=home)
+            deployed = home / ".claude" / "skills" / "tool"
+            write(deployed / "__pycache__" / "run.cpython-314.pyc", "bytecode")
+            write(deployed / ".DS_Store", "finder")
+
+            self.assertEqual(
+                run_sync(config_root=config_root, home=home, check=True), ()
+            )
+            run_sync(config_root=config_root, home=home)
+            self.assertTrue((deployed / "__pycache__" / "run.cpython-314.pyc").exists())
+
+            skill.unlink()
+            (skill.parent / "run.py").unlink()
+            run_sync(config_root=config_root, home=home)
+            self.assertFalse(deployed.exists())
 
 
 class ManifestTests(unittest.TestCase):
@@ -677,38 +691,7 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(fd)",
-                    "Shell(gh:api)",
-                    "Shell(gh:api *)",
-                    "Shell(terraform:show)",
-                    "Shell(terraform:show *)",
-                ],
-            )
-            self.assertEqual(
-                cursor_cli["permissions"]["deny"],
-                [
-                    "Shell(fd:--exec)",
-                    "Shell(fd:--exec *)",
-                    "Shell(fd:* --exec)",
-                    "Shell(fd:* --exec *)",
-                    "Shell(fd:-x)",
-                    "Shell(fd:-x *)",
-                    "Shell(fd:* -x)",
-                    "Shell(fd:* -x *)",
-                    "Shell(gh:api -X DELETE)",
-                    "Shell(gh:api -X DELETE *)",
-                    "Shell(gh:api * -X DELETE)",
-                    "Shell(gh:api * -X DELETE *)",
-                    "Shell(terraform:show -json)",
-                    "Shell(terraform:show -json *)",
-                    "Shell(terraform:show * -json)",
-                    "Shell(terraform:show * -json *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             # Every allow rule is narrowed, so Desktop's allowlist is empty
             # and its file is not emitted at all.
             self.assertFalse((home / ".cursor/permissions.json").exists())
@@ -774,22 +757,12 @@ class SyncTests(unittest.TestCase):
             }.items():
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(mytool:run --dry-run)",
-                    "Shell(mytool:run --dry-run *)",
-                    "Shell(mytool:run * --dry-run)",
-                    "Shell(mytool:run * --dry-run *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(
                 desktop["terminalAllowlist"],
                 [
-                    "mytool:run --dry-run",
-                    "mytool:run --dry-run *",
+                    "mytool run --dry-run",
                     "mytool:run * --dry-run",
                     "mytool:run * --dry-run *",
                 ],
@@ -840,33 +813,15 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(git:status)",
-                    "Shell(git:status *)",
-                    "Shell(git:-C status)",
-                    "Shell(git:-C status *)",
-                    "Shell(git:--no-pager status)",
-                    "Shell(git:--no-pager status *)",
-                    "Shell(git:-C * status)",
-                    "Shell(git:-C * status *)",
-                    "Shell(git:--no-pager * status)",
-                    "Shell(git:--no-pager * status *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(desktop["approvalMode"], "allowlist")
             self.assertEqual(
                 desktop["terminalAllowlist"],
                 [
-                    "git:status",
-                    "git:status *",
-                    "git:-C status",
-                    "git:-C status *",
-                    "git:--no-pager status",
-                    "git:--no-pager status *",
+                    "git status",
+                    "git -C status",
+                    "git --no-pager status",
                     "git:-C * status",
                     "git:-C * status *",
                     "git:--no-pager * status",
@@ -913,37 +868,13 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(kubectl:get)",
-                    "Shell(kubectl:get *)",
-                    "Shell(kubectl:--context get)",
-                    "Shell(kubectl:--context get *)",
-                    "Shell(kubectl:--context * get)",
-                    "Shell(kubectl:--context * get *)",
-                ],
-            )
-            self.assertEqual(
-                cursor_cli["permissions"]["deny"],
-                [
-                    "Shell(kubectl:apply)",
-                    "Shell(kubectl:apply *)",
-                    "Shell(kubectl:--context apply)",
-                    "Shell(kubectl:--context apply *)",
-                    "Shell(kubectl:--context * apply)",
-                    "Shell(kubectl:--context * apply *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(
                 desktop["terminalAllowlist"],
                 [
-                    "kubectl:get",
-                    "kubectl:get *",
-                    "kubectl:--context get",
-                    "kubectl:--context get *",
+                    "kubectl get",
+                    "kubectl --context get",
                     "kubectl:--context * get",
                     "kubectl:--context * get *",
                 ],
@@ -980,12 +911,10 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["approvalMode"], "unrestricted")
-            self.assertIn("Shell(kubectl:apply)", cursor_cli["permissions"]["deny"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(desktop["approvalMode"], "allowlist")
-            self.assertNotIn("kubectl:apply", desktop["terminalAllowlist"])
+            self.assertNotIn("kubectl apply", desktop["terminalAllowlist"])
 
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertNotIn("defaultMode", claude["permissions"])
@@ -1028,9 +957,7 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["permissions"]["allow"], ["Shell(fd:)"])
-            self.assertEqual(cursor_cli["permissions"]["deny"], ["Shell(shred:)"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(desktop["terminalAllowlist"], ["fd:"])
 
@@ -1062,23 +989,7 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertIn("guarded overlap terraform show -json", stderr.getvalue())
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(terraform:show -json)",
-                    "Shell(terraform:show -json *)",
-                    "Shell(terraform:show * -json)",
-                    "Shell(terraform:show * -json *)",
-                ],
-            )
-            self.assertEqual(
-                cursor_cli["permissions"]["deny"],
-                [
-                    "Shell(terraform:show -json)",
-                    "Shell(terraform:show -json *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_a_distinct_subcommand_ask_stays_standalone(self) -> None:
@@ -1096,16 +1007,27 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertNotIn("guarded overlap", stderr.getvalue())
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                ["Shell(git:status)", "Shell(git:status *)"],
-            )
-            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                desktop["terminalAllowlist"], ["git:status", "git:status *"]
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
+
+    def test_a_narrowing_deny_withholds_its_allow_from_cursor(self) -> None:
+        """Cursor's shared allowlist has no deny channel, so an allow a deny
+        narrows leaves it and the denied variant prompts instead of running."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "push"], ["git", "status"]],
+                deny=[{"command": "git", "subcommand": ["push"], "tail": ["--force"]}],
             )
+
+            run_sync(config_root=config_root, home=home)
+
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(desktop["approvalMode"], "allowlist")
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
 
     def test_a_narrowing_excludes_only_the_colliding_rule_on_desktop(self) -> None:
         """Desktop keeps the family's safe rules when one rule is narrowed.
@@ -1130,29 +1052,9 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(git:push)",
-                    "Shell(git:push *)",
-                    "Shell(git:status)",
-                    "Shell(git:status *)",
-                ],
-            )
-            self.assertEqual(
-                cursor_cli["permissions"]["deny"],
-                [
-                    "Shell(git:push --force)",
-                    "Shell(git:push --force *)",
-                    "Shell(git:push * --force)",
-                    "Shell(git:push * --force *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                desktop["terminalAllowlist"], ["git:status", "git:status *"]
-            )
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
 
     def test_a_text_ask_unlowers_only_the_colliding_rule(self) -> None:
         """A text guard costs the colliding rule, not the command family.
@@ -1177,16 +1079,9 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                ["Shell(kubectl:logs)", "Shell(kubectl:logs *)"],
-            )
-            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                desktop["terminalAllowlist"], ["kubectl:logs", "kubectl:logs *"]
-            )
+            self.assertEqual(desktop["terminalAllowlist"], ["kubectl logs"])
 
             opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
             bash = opencode_rules(opencode, "shell")
@@ -1213,11 +1108,7 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                ["Shell(~/.config/coding-agents/sync.sh)"],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             claude = json.loads((home / ".claude/settings.json").read_text())
             self.assertIn(
                 "Bash(~/.config/coding-agents/sync.sh *)",
@@ -1356,15 +1247,9 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertIn(
-                "Shell(local-tool:--profile status)",
-                cursor_cli["permissions"]["allow"],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                desktop["terminalAllowlist"], ["git:status", "git:status *"]
-            )
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
 
     def test_an_interpreter_allow_is_never_projected(self) -> None:
         """Shell(sh) would allow every payload the interpreter runs.
@@ -1392,15 +1277,9 @@ class SyncTests(unittest.TestCase):
                         "an interpreter payload",
                         warnings,
                     )
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                ["Shell(git:status)", "Shell(git:status *)"],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                desktop["terminalAllowlist"], ["git:status", "git:status *"]
-            )
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
 
     def test_an_option_embedding_ask_is_a_guarded_overlap(self) -> None:
         """`git -C foo status` rides the emitted `git:-C * status` head.
@@ -1423,18 +1302,7 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertIn("guarded overlap git -C foo status", stderr.getvalue())
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["deny"],
-                [
-                    "Shell(git:-C foo status)",
-                    "Shell(git:-C foo status *)",
-                    "Shell(git:-C -C foo status)",
-                    "Shell(git:-C -C foo status *)",
-                    "Shell(git:-C * -C foo status)",
-                    "Shell(git:-C * -C foo status *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_an_undeclared_leading_token_ask_stays_standalone(self) -> None:
@@ -1453,8 +1321,7 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertNotIn("guarded overlap", stderr.getvalue())
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             self.assertTrue((home / ".cursor/permissions.json").exists())
 
     def test_an_exact_allow_admits_nothing_for_an_extending_ask_to_overlap(
@@ -1475,9 +1342,7 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertNotIn("guarded overlap", stderr.getvalue())
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(cursor_cli["permissions"]["allow"], ["Shell(git:status)"])
-            self.assertNotIn("deny", cursor_cli["permissions"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(desktop["terminalAllowlist"], ["git:status"])
 
@@ -1497,12 +1362,15 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertIn(
-                "omitted deny git push ~--force: Cursor's token matcher "
-                "cannot hold a text predicate",
+                "omitted deny git push ~--force: Codex prefix rules cannot hold a "
+                "text predicate",
                 stderr.getvalue(),
             )
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertNotIn("deny", cursor_cli["permissions"])
+            # Cursor withholds guarded allows rather than lowering the deny, so
+            # a text deny needs no form there and an unrelated allow stays.
+            desktop = json.loads((home / ".cursor/permissions.json").read_text())
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
 
     def test_opencode_orders_buckets_so_the_strictest_decision_matches_last(
         self,
@@ -1715,8 +1583,8 @@ class SyncTests(unittest.TestCase):
         needs no copy for them, and retries a guard behind a bare `xargs`, so
         it receives only the `xargs` copy that carries options. A blanket
         `env *` allow would match any payload the wrapper carries, so a wrapped
-        allowed command falls to `unmatched` on the glob targets, while Cursor
-        receives rule-attached wrapper allows.
+        allowed command falls to `unmatched` on the glob targets and prompts on
+        Cursor, which lists no wrapped spelling.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -1767,54 +1635,23 @@ class SyncTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(resolve_opencode_bash(bash, command), decision)
 
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(git:status)",
-                    "Shell(git:status *)",
-                    "Shell(timeout:git status)",
-                    "Shell(timeout:git status *)",
-                    "Shell(timeout:* git status)",
-                    "Shell(timeout:* git status *)",
-                    "Shell(env:git status)",
-                    "Shell(env:git status *)",
-                    "Shell(env:* git status)",
-                    "Shell(env:* git status *)",
-                    "Shell(xargs:git status)",
-                    "Shell(xargs:git status *)",
-                    "Shell(xargs:* git status)",
-                    "Shell(xargs:* git status *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
             self.assertEqual(
                 desktop["terminalAllowlist"],
-                [
-                    "git:status",
-                    "git:status *",
-                    "timeout:git status",
-                    "timeout:git status *",
-                    "timeout:* git status",
-                    "timeout:* git status *",
-                    "env:git status",
-                    "env:git status *",
-                    "env:* git status",
-                    "env:* git status *",
-                    "xargs:git status",
-                    "xargs:git status *",
-                    "xargs:* git status",
-                    "xargs:* git status *",
-                ],
+                # A wrapped spelling is not listed, so it prompts.
+                ["git status"],
             )
 
-    def test_codex_receives_only_deny_rules_as_forbidden(self) -> None:
-        """Denies land as forbidden prefixes beside the hand-authored Starlark.
+    def test_codex_receives_asks_as_prompt_and_denies_as_forbidden(self) -> None:
+        """Asks and denies land as native prefixes beside the hand-authored
+        Starlark.
 
         Codex exec policy has no wildcards and lapses entirely on any `$VAR`
-        or substitution, so it is not a containment boundary; a forbidden
-        prefix still stops the plain spelling. Allow and ask stay with the
-        sandbox, and predicates with no prefix form are dropped with a warning.
+        or substitution, so it is not a containment boundary; a prefix still
+        governs the plain spelling. Allows stay with the sandbox, because a
+        Codex allow rule runs outside it, and predicates with no prefix form
+        are dropped with a warning.
         """
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -1857,10 +1694,12 @@ class SyncTests(unittest.TestCase):
                 'prefix_rule(pattern=["shred"], decision="forbidden")',
                 'prefix_rule(pattern=["env", "shred"], decision="forbidden")',
                 'pattern=["gh", "auth", "status", "-t"], decision="forbidden"',
+                'prefix_rule(pattern=["rmdir"], decision="prompt")',
+                'prefix_rule(pattern=["env", "rmdir"], decision="prompt")',
             ):
                 with self.subTest(present=present):
                     self.assertIn(present, codex_rules)
-            for absent in ("git", "rmdir", "rg", "ls", "EXAMPLE_TOKEN", ".env"):
+            for absent in ("git", "rg", "ls", "EXAMPLE_TOKEN", ".env"):
                 with self.subTest(absent=absent):
                     self.assertNotIn(f'"{absent}"', codex_rules)
             self.assertIn("omitted deny rg ~--pre", stderr.getvalue())
@@ -1892,15 +1731,7 @@ class SyncTests(unittest.TestCase):
                 "  subcommand: [status]\n"
                 "  tail: [[--destroy]]\n"
                 "deny:\n"
-                "- [local-tool, wipe]\n"
-                "targets:\n"
-                "  cursor:\n"
-                "    omit:\n"
-                "      commands.deny: Cursor Desktop has no deny channel.\n"
-                "  codex:\n"
-                "    omit:\n"
-                "      commands.allow: Codex allow rules would skip its sandbox.\n"
-                "      commands.ask: Codex prompts by sandbox, not by rule.\n",
+                "- [local-tool, wipe]\n",
             )
 
             run_sync(config_root=config_root, home=home)
@@ -1922,48 +1753,10 @@ class SyncTests(unittest.TestCase):
                 "Bash(local-tool status --destroy *)", claude["permissions"]["ask"]
             )
             self.assertIn("Bash(local-tool wipe *)", claude["permissions"]["deny"])
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertEqual(
-                cursor_cli["permissions"]["allow"],
-                [
-                    "Shell(git:status)",
-                    "Shell(git:status *)",
-                    "Shell(local-tool:status)",
-                    "Shell(local-tool:status *)",
-                    "Shell(local-tool:--profile status)",
-                    "Shell(local-tool:--profile status *)",
-                    "Shell(local-tool:--profile * status)",
-                    "Shell(local-tool:--profile * status *)",
-                ],
-            )
-            self.assertEqual(
-                cursor_cli["permissions"]["deny"],
-                [
-                    "Shell(local-tool:wipe)",
-                    "Shell(local-tool:wipe *)",
-                    "Shell(local-tool:--profile wipe)",
-                    "Shell(local-tool:--profile wipe *)",
-                    "Shell(local-tool:--profile * wipe)",
-                    "Shell(local-tool:--profile * wipe *)",
-                    "Shell(local-tool:status --destroy)",
-                    "Shell(local-tool:status --destroy *)",
-                    "Shell(local-tool:status * --destroy)",
-                    "Shell(local-tool:status * --destroy *)",
-                    "Shell(local-tool:--profile status --destroy)",
-                    "Shell(local-tool:--profile status --destroy *)",
-                    "Shell(local-tool:--profile status * --destroy)",
-                    "Shell(local-tool:--profile status * --destroy *)",
-                    "Shell(local-tool:--profile * status --destroy)",
-                    "Shell(local-tool:--profile * status --destroy *)",
-                    "Shell(local-tool:--profile * status * --destroy)",
-                    "Shell(local-tool:--profile * status * --destroy *)",
-                ],
-            )
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             # The narrowed local-tool rule leaves Desktop's allowlist.
             desktop = json.loads((home / ".cursor/permissions.json").read_text())
-            self.assertEqual(
-                desktop["terminalAllowlist"], ["git:status", "git:status *"]
-            )
+            self.assertEqual(desktop["terminalAllowlist"], ["git status"])
 
     def test_local_command_fragment_conflicting_with_committed_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2002,28 +1795,8 @@ class SyncTests(unittest.TestCase):
     def test_command_fragment_omissions_track_each_targets_projection_gap(
         self,
     ) -> None:
-        # Cursor projects allows losslessly, so only Codex owes an omission,
-        # and only for the allow bucket it does not project.
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(config_root / "permissions/policy.yaml", permission_policy_doc())
-            write(
-                config_root / "permissions/commands/nonempty.yaml",
-                "schema: coding-agents/v1\n"
-                "kind: permission-rules\n"
-                "id: nonempty\n"
-                "name: Nonempty\n"
-                "allow: [[git, status]]\n",
-            )
-
-            with self.assertRaisesRegex(
-                ValueError, "commands.allow is unsupported on codex"
-            ):
-                run_sync(config_root=config_root, home=home)
-
-        # Desktop has no deny channel, so a deny fragment owes the Cursor
-        # commands.deny omission even though the CLI projects it. Codex
-        # projects the deny, so it owes nothing.
+        # Cursor withholds the allows a deny narrows and Codex projects it, so
+        # a deny fragment owes no target an omission.
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
@@ -2036,10 +1809,9 @@ class SyncTests(unittest.TestCase):
                 "deny: [[git, push]]\n",
             )
 
-            with self.assertRaisesRegex(
-                ValueError, "commands.deny is unsupported on cursor"
-            ):
-                run_sync(config_root=config_root, home=home)
+            run_sync(config_root=config_root, home=home)
+
+            self.assertTrue((home / ".codex/rules/coding-agents.rules").exists())
 
     def test_patch_cannot_contribute_command_permissions(self) -> None:
         """Command decisions have one writer, so the patch route is closed."""
@@ -2111,8 +1883,7 @@ class SyncTests(unittest.TestCase):
             # The guard's text predicate has no token-matcher form, so the
             # colliding kubectl get rule leaves the CLI allowlist rather than
             # letting the secret dump ride it. Desktop loses it too.
-            cursor_cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertNotIn("permissions", cursor_cli)
+            self.assertFalse((home / ".cursor/cli-config.json").exists())
             self.assertFalse((home / ".cursor/permissions.json").exists())
 
     def test_a_patch_may_add_non_command_grants_to_generated_permissions(self) -> None:
@@ -2172,9 +1943,9 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
+            # The CLI carries no generated shell entries; the grant is the patch's.
             cli = json.loads((home / ".cursor/cli-config.json").read_text())
-            self.assertIn("Shell(git:status)", cli["permissions"]["allow"])
-            self.assertIn("Mcp(looker-mcp:get_*)", cli["permissions"]["allow"])
+            self.assertEqual(cli["permissions"]["allow"], ["Mcp(looker-mcp:get_*)"])
 
     def test_a_patch_may_overlay_the_generated_workspace_roots(self) -> None:
         """A patch adds keys the portable workspace block cannot express.

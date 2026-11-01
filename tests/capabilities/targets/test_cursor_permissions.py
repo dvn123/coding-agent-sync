@@ -82,6 +82,12 @@ SCENARIOS = {
     "trailing-exact": (f"{TRAILING} status", "success", (TRAILING,), False),
     "trailing-arguments": (f"{TRAILING} status --short", "success", (TRAILING,), False),
     "trailing-near-prefix": (f"{TRAILING} statusx", "rejected", (), False),
+    "trailing-path-argument": (
+        f"{TRAILING} status /tmp/x --short",
+        "success",
+        (TRAILING,),
+        False,
+    ),
     "unmatched": (UNMATCHED, "rejected", (), False),
     "unmatched-forced": (UNMATCHED, "success", (UNMATCHED,), True),
     "chain-and": (f"{ALLOWED} a && {UNMATCHED} b", "rejected", (), False),
@@ -264,8 +270,10 @@ def runtime(
                     "allow": [
                         f"Shell({ALLOWED})",
                         f"Shell({EXACT}:status)",
-                        f"Shell({TRAILING}:status)",
-                        f"Shell({TRAILING}:status *)",
+                        # One plain entry matches the bare command and any
+                        # arguments, like the `prog:status` + `prog:status *`
+                        # pair it replaces.
+                        f"Shell({TRAILING} status)",
                         # Allowlisting an interpreter asks whether the engine
                         # inspects the payload it carries.
                         "Shell(sh)",
@@ -282,8 +290,7 @@ def runtime(
                         # A wrapper allow attached to its rule, with and
                         # without the wrapper's own arguments. Never a bare
                         # `Shell(twrap2)`, which would allow any payload.
-                        f"Shell({WRAP2}:{ALLOWED})",
-                        f"Shell({WRAP2}:{ALLOWED} *)",
+                        f"Shell({WRAP2} {ALLOWED})",
                         f"Shell({WRAP2}:* {ALLOWED})",
                         f"Shell({WRAP2}:* {ALLOWED} *)",
                         # Allowlisted, then clawed back by the hook below.

@@ -107,14 +107,11 @@ example, skill `paths` requires omissions for Codex and OpenCode, while
 requires omissions for Codex and OpenCode; agent `color` requires an omission
 for Codex and a native override for OpenCode unless its value is already an
 OpenCode color. Codex projects every portable effort, including `max`.
-Cursor projects command allow and deny rules to its
-CLI and Desktop surfaces; only the deny side requires an omission
-acknowledgment (Desktop has no deny channel), so a permission-rule fragment
-containing deny rules must acknowledge
-`targets.cursor.omit.commands.deny`. Codex projects only deny rules, as
-`forbidden` prefix rules, so a fragment containing allow or ask rules must
-acknowledge `targets.codex.omit.commands.allow` or
-`targets.codex.omit.commands.ask`. Commands and agents that intentionally never
+Cursor projects allows to the allowlist its Desktop app and CLI share and
+guards asks and denies by withholding the allows they narrow, so a guarded
+command prompts there. Codex projects ask and deny rules as
+`prompt` and `forbidden` prefix rules and leaves allows to its sandbox, so it
+owes no command omission. Commands and agents that intentionally never
 reach Cursor or Codex can set `only: [claude, opencode]` instead of repeating
 those surface omissions.
 
@@ -165,14 +162,14 @@ provider, so unknown keys there are passthrough by design.
 `unmatched` is the decision for a shell command no rule matches: `ask`, the
 default, or `allow`. It lands only where the guard rules still outrank it:
 OpenCode's `*` bash entry, which every rule is written after, Claude's bare
-`Bash` allow, which every deny outranks, and the Cursor CLI's `approvalMode`,
-whose deny list survives `unrestricted`. Cursor Desktop and Codex each need
-an omit for `unmatched: allow`: Desktop has no deny channel to keep the guards
-binding, and Codex gates an unmatched command by sandbox. There is no `deny`
+`Bash` allow, which every deny outranks. Cursor and Codex each need an omit
+for `unmatched: allow`: Cursor's shared allowlist has no deny channel to keep
+the guards binding, and Codex gates an unmatched command by sandbox. There is no `deny`
 value: a blanket command denial is not a policy any target can run under.
 Declared `wrappers` get wrapped copies of every ask and deny rule, never a
 blanket allow, so a wrapped allowed command falls to `unmatched`; a target
-that peels a wrapper itself gets no copies for it. Claude strips a program
+that peels a wrapper itself gets no copies for it, and Cursor, which guards
+by withholding allows, gets none. Claude strips a program
 path itself, and OpenCode's bundled plugin does, as the OpenCode target
 reference describes.
 
@@ -226,14 +223,6 @@ deny:
     subcommand: [push]
     tail: [[--force]]
     reason: use --force-with-lease
-targets:
-  cursor:
-    omit:
-      commands.deny: Cursor Desktop has no deny channel; the CLI projects it.
-  codex:
-    omit:
-      commands.allow: Codex allow rules would skip its sandbox approval.
-      commands.ask: Codex prompts by sandbox, not by rule.
 ```
 
 Fragments are merged before validation. Duplicate rules, contradictory

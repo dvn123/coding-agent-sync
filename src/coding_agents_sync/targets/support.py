@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from ..io import MANAGED_MANIFEST
+from ..io import MANAGED_MANIFEST, is_incidental
 from ..patches import load_patch, merge_patches
 from ..plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
 from ..sources import (
@@ -32,7 +32,9 @@ def bundled_files(source_dir: Path) -> tuple[dict[Path, bytes], frozenset[Path]]
     paths = [
         path
         for path in source_dir.rglob("*")
-        if path.is_file() and not path.is_symlink()
+        if path.is_file()
+        and not path.is_symlink()
+        and not is_incidental(path.relative_to(source_dir))
     ]
     return (
         {path.relative_to(source_dir): path.read_bytes() for path in paths},

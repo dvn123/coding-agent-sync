@@ -194,49 +194,56 @@ def _rule_text(rules: list[tuple[str, CodexPrefixRule]]) -> bytes | None:
     return ("\n".join(lines) + "\n").encode()
 
 
-def _deny_rules(
+CODEX_DECISIONS: dict[str, Literal["prompt", "forbidden"]] = {
+    "ask": "prompt",
+    "deny": "forbidden",
+}
+
+
+def _command_rules(
     permissions: PermissionSource | None,
 ) -> tuple[list[tuple[str, CodexPrefixRule]], list[Diagnostic]]:
-    """Lower the deny bucket to `forbidden` prefix rules.
+    """Lower the ask and deny buckets to `prompt` and `forbidden` prefix rules.
 
     Codex matches one flat argv by literal prefix, with no wildcard, so a rule
     projects as its head and each tail appended directly, bare and behind each
     declared wrapper. The option-hole and tail-after-arguments spellings fall to
     Codex's own approval flow. Text and exact predicates have no prefix form.
     A rule's `reason` becomes the `justification` Codex shows on rejection.
-    Allow and ask never project: an allow would skip Codex's sandbox approval
-    and an ask would add prompts the sandbox does not need.
+    Allows never project: a Codex `allow` rule runs the command outside the
+    sandbox, while an unlisted command already runs inside it.
     """
     if permissions is None:
         return [], []
     rules: list[tuple[str, CodexPrefixRule]] = []
     diagnostics: list[Diagnostic] = []
-    for rule in permissions.commands.deny:
-        if rule.text or rule.exact:
-            predicate = "a text predicate" if rule.text else "an exact match"
-            diagnostics.append(
-                Diagnostic(
-                    "warning",
-                    f"omitted deny {describe_rule(rule)}: Codex prefix rules "
-                    f"cannot hold {predicate}",
-                    permissions.paths[0],
+    for bucket, decision in CODEX_DECISIONS.items():
+        for rule in getattr(permissions.commands, bucket):
+            if rule.text or rule.exact:
+                predicate = "a text predicate" if rule.text else "an exact match"
+                diagnostics.append(
+                    Diagnostic(
+                        "warning",
+                        f"omitted {bucket} {describe_rule(rule)}: Codex prefix "
+                        f"rules cannot hold {predicate}",
+                        permissions.paths[0],
+                    )
                 )
+                continue
+            head = (rule.command, *rule.subcommand)
+            patterns = [(*head, *tail) for tail in sorted(rule.tail)] or [head]
+            rules.extend(
+                (
+                    "permissions",
+                    CodexPrefixRule(
+                        pattern=[*lead, *pattern],
+                        decision=decision,
+                        justification=rule.reason,
+                    ),
+                )
+                for pattern in patterns
+                for lead in ((), *((wrapper,) for wrapper in permissions.wrappers))
             )
-            continue
-        head = (rule.command, *rule.subcommand)
-        patterns = [(*head, *sequence) for sequence in sorted(rule.tail)] or [head]
-        rules.extend(
-            (
-                "permissions",
-                CodexPrefixRule(
-                    pattern=[*lead, *pattern],
-                    decision="forbidden",
-                    justification=rule.reason,
-                ),
-            )
-            for pattern in patterns
-            for lead in ((), *((wrapper,) for wrapper in permissions.wrappers))
-        )
     return rules, diagnostics
 
 
@@ -305,8 +312,8 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(omissions(rule.path, "codex", value, set()))
         if native:
             rules.extend((rule.path.name, item) for item in native.rules)
-    deny_rules, issues = _deny_rules(sources.permissions)
-    rules.extend(deny_rules)
+    command_rules, issues = _command_rules(sources.permissions)
+    rules.extend(command_rules)
     diagnostics.extend(issues)
     if content := _rule_text(rules):
         files.append(
@@ -433,15 +440,7 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 },
             )
         )
-        diagnostics.extend(
-            command_target_diagnostics(
-                permissions,
-                "codex",
-                lambda intent: {
-                    f"commands.{bucket}" for bucket in intent & {"allow", "ask"}
-                },
-            )
-        )
+        diagnostics.extend(command_target_diagnostics(permissions, "codex"))
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
     # no registration for them.
     native_values: list[NativeValue] = []

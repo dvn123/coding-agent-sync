@@ -13,6 +13,7 @@ from .io import (
     MANAGED_MANIFEST,
     ManagedEntryConflict,
     entry_hash,
+    is_incidental,
     load_manifest,
     split_frontmatter,
     sync_manifested_entries,
@@ -57,6 +58,8 @@ def _prune_tree(target: Path, expected_files: set[Path]) -> None:
         target.rglob("*"), key=lambda path: len(path.parts), reverse=True
     ):
         rel = child.relative_to(target)
+        if is_incidental(rel):
+            continue
         if child.is_file() or child.is_symlink():
             if rel not in expected_files:
                 child.unlink()
@@ -286,7 +289,7 @@ def plan_drift(plan: Plan) -> tuple[Path, ...]:
             {
                 path.relative_to(tree.root)
                 for path in tree.root.rglob("*")
-                if path.is_file()
+                if path.is_file() and not is_incidental(path.relative_to(tree.root))
             }
             if tree.root.is_dir()
             else set()

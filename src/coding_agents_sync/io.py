@@ -99,6 +99,19 @@ def _managed_path(root: Path, name: str) -> Path:
     return root / relative
 
 
+def is_incidental(relative: Path) -> bool:
+    """Files a tool or the OS writes into a generated tree by using it.
+
+    Running a skill's Python leaves bytecode caches and opening a folder in
+    Finder leaves `.DS_Store`; neither is generated content or a user edit.
+    """
+    return (
+        "__pycache__" in relative.parts
+        or relative.suffix in {".pyc", ".pyo"}
+        or relative.name == ".DS_Store"
+    )
+
+
 def entry_hash(path: Path, mode: Literal["dir", "file"]) -> str | None:
     if path.is_symlink():
         return None
@@ -111,6 +124,8 @@ def entry_hash(path: Path, mode: Literal["dir", "file"]) -> str | None:
         if not path.is_dir():
             return None
         for child in sorted(path.rglob("*"), key=lambda item: item.relative_to(path)):
+            if is_incidental(child.relative_to(path)):
+                continue
             relative = child.relative_to(path).as_posix().encode()
             if child.is_symlink():
                 return None
