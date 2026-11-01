@@ -12,11 +12,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from typer.testing import CliRunner
 
 from coding_agents_sync import run_sync
 from coding_agents_sync.audit import OpenCodeRules
-from coding_agents_sync.cli import main
 from coding_agents_sync.io import (
     MANAGED_MANIFEST,
     ManagedEntryConflict,
@@ -44,7 +42,7 @@ def source_doc(
     extra: dict[str, Any] | None = None,
 ) -> str:
     meta: dict[str, Any] = {
-        "schema": "coding-agents/v4",
+        "schema": "coding-agents/v1",
         "kind": kind,
         "id": id_,
         "name": name,
@@ -140,7 +138,7 @@ def permission_policy_doc(
     extra: dict[str, Any] | None = None,
 ) -> str:
     source: dict[str, Any] = {
-        "schema": "coding-agents/v4",
+        "schema": "coding-agents/v1",
         "kind": "permission-policy",
         "id": "user",
         "name": "user",
@@ -213,7 +211,7 @@ def permission_rules_doc(
     extra: dict[str, Any] | None = None,
 ) -> str:
     source: dict[str, Any] = {
-        "schema": "coding-agents/v4",
+        "schema": "coding-agents/v1",
         "kind": "permission-rules",
         "id": id_,
         "name": id_,
@@ -447,7 +445,6 @@ class ModelPolicyTests(unittest.TestCase):
                                 {"action": "subagent", "effect": "deny"},
                             ],
                         },
-                        "codex": {"sandbox_mode": "read-only"},
                     },
                 ),
             )
@@ -456,12 +453,10 @@ class ModelPolicyTests(unittest.TestCase):
 
             claude = (home / ".claude/agents/fact-finder.md").read_text()
             opencode = (home / ".config/opencode/agents/fact-finder.md").read_text()
-            codex = (home / ".codex/agents/fact-finder.toml").read_text()
             self.assertIn("disallowedTools:", claude)
             self.assertIn("model: claude-sonnet-5", claude)
             self.assertIn("action: edit", opencode)
             self.assertIn("action: subagent", opencode)
-            self.assertIn('sandbox_mode = "read-only"', codex)
 
 
 class ManifestTests(unittest.TestCase):
@@ -503,20 +498,6 @@ class ManifestTests(unittest.TestCase):
                 else:
                     shutil.rmtree(target)
                 (root / MANAGED_MANIFEST).unlink()
-
-    def test_legacy_manifest_is_migrated_to_hashes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            write(root / "generated.md", "generated\n")
-            write(root / MANAGED_MANIFEST, '["generated.md"]\n')
-
-            sync_manifested_entries(root, {"generated.md"}, "file")
-
-            manifest = json.loads((root / MANAGED_MANIFEST).read_text())
-            self.assertEqual(manifest["version"], 1)
-            self.assertRegex(
-                manifest["entries"]["generated.md"], r"^sha256:[0-9a-f]{64}$"
-            )
 
 
 def opencode_rules(config: dict[str, Any], action: str) -> dict[str, str]:
@@ -938,7 +919,7 @@ class SyncTests(unittest.TestCase):
             config_root, home = config_root_home(tmp)
             write(
                 config_root / "permissions/policy.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-policy\n"
                 "id: user\n"
                 "name: User\n"
@@ -1817,7 +1798,7 @@ class SyncTests(unittest.TestCase):
             local = config_root / "permissions.local"
             write(
                 local / "local.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-rules\n"
                 "id: fixture-local\n"
                 "name: Fixture local\n"
@@ -1910,7 +1891,7 @@ class SyncTests(unittest.TestCase):
             write_permissions(config_root, allow=[["git", "status"]])
             write(
                 config_root / "permissions.local/dup.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-rules\n"
                 "id: dup\n"
                 "name: Dup\n"
@@ -1928,7 +1909,7 @@ class SyncTests(unittest.TestCase):
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
             write(
                 config_root / "permissions/commands/empty.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-rules\n"
                 "id: empty\n"
                 "name: Empty\n",
@@ -1948,7 +1929,7 @@ class SyncTests(unittest.TestCase):
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
             write(
                 config_root / "permissions/commands/nonempty.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-rules\n"
                 "id: nonempty\n"
                 "name: Nonempty\n"
@@ -1968,7 +1949,7 @@ class SyncTests(unittest.TestCase):
             write(config_root / "permissions/policy.yaml", permission_policy_doc())
             write(
                 config_root / "permissions/commands/nonempty.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-rules\n"
                 "id: nonempty\n"
                 "name: Nonempty\n"
@@ -2001,7 +1982,7 @@ class SyncTests(unittest.TestCase):
                 ),
                 (
                     "overlay:\n  /permission/bash:\n    'kubectl get secret*': ask\n",
-                    "only delete the legacy",
+                    "cannot touch /permission/bash",
                 ),
             ):
                 with self.subTest(patch=patch):
@@ -2258,12 +2239,6 @@ class SyncTests(unittest.TestCase):
             with self.assertRaises(SourceSchemaError):
                 run_sync(config_root=config_root, home=home)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(config_root / "permissions.yaml", permission_policy_doc())
-            with self.assertRaisesRegex(SourceSchemaError, "legacy permission source"):
-                run_sync(config_root=config_root, home=home)
-
     def test_codex_rules_emit_without_global_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -2498,62 +2473,6 @@ class SyncTests(unittest.TestCase):
                 codex_rules,
             )
 
-    def test_cursor_retires_legacy_global_and_emits_shared_rules(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "global" / "AGENTS.md",
-                source_doc("global", "global", "global", "Global body\n"),
-            )
-            write(
-                config_root / "rules" / "python.md",
-                source_doc("rule", "python", "python", "Rule body\n"),
-            )
-            write(
-                config_root / "skills" / "s1" / "SKILL.md",
-                source_doc("skill", "s1", "s1", "Skill body\n", description="skill"),
-            )
-            write(
-                config_root / "agents" / "reviewer.md",
-                source_doc(
-                    "agent",
-                    "reviewer",
-                    "reviewer",
-                    "Agent body\n",
-                    description="Reviewer",
-                ),
-            )
-            cursor = home / ".cursor"
-            write(cursor / "AGENTS.md", "Global body\n")
-            write(cursor / "manual.md", "manual\n")
-            write(cursor / "rules" / "python.mdc", "generated rule\n")
-            write(cursor / "rules" / "manual.mdc", "manual rule\n")
-            sync_manifested_entries(cursor, {"AGENTS.md"}, "file")
-            sync_manifested_entries(cursor / "rules", {"python.mdc"}, "file")
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertFalse((cursor / "AGENTS.md").exists())
-            self.assertEqual(
-                json.loads((cursor / MANAGED_MANIFEST).read_text()),
-                {"version": 1, "entries": {}},
-            )
-            self.assertIn(
-                "Global body",
-                (cursor / "rules" / "coding-agents-global.mdc").read_text(),
-            )
-            self.assertIn("Rule body", (cursor / "rules" / "python.mdc").read_text())
-            self.assertTrue((cursor / "rules" / MANAGED_MANIFEST).exists())
-            self.assertEqual((cursor / "manual.md").read_text(), "manual\n")
-            self.assertEqual(
-                (cursor / "rules" / "manual.mdc").read_text(), "manual rule\n"
-            )
-            self.assertFalse(
-                (cursor / "plugins" / "local" / "coding-agents-rules").exists()
-            )
-            self.assertTrue((cursor / "skills" / "s1" / "SKILL.md").exists())
-            self.assertFalse((cursor / "agents" / "reviewer.md").exists())
-
     def test_cursor_rule_scoping_uses_native_mdc_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -2588,19 +2507,6 @@ class SyncTests(unittest.TestCase):
             )
             self.assertEqual(body.strip(), "Scoped body")
 
-    def test_cursor_retires_managed_desktop_rules_plugin(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            plugin_root = home / ".cursor/plugins/local"
-            plugin = plugin_root / "coding-agents-rules"
-            write(plugin / "rules/python.mdc", "Generated body\n")
-            sync_manifested_entries(plugin_root, {"coding-agents-rules"}, "dir")
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertFalse(plugin.exists())
-            self.assertFalse((plugin_root / MANAGED_MANIFEST).exists())
-
     def test_cursor_preserves_unowned_desktop_rules_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -2610,23 +2516,6 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             self.assertEqual(plugin.read_text(), "User plugin body\n")
-
-    def test_cursor_refuses_to_retire_modified_managed_desktop_rules_plugin(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            plugin_root = home / ".cursor/plugins/local"
-            plugin = plugin_root / "coding-agents-rules/rules/python.mdc"
-            write(plugin, "Generated body\n")
-            sync_manifested_entries(plugin_root, {"coding-agents-rules"}, "dir")
-            write(plugin, "Modified generated body\n")
-
-            with self.assertRaisesRegex(
-                ManagedEntryConflict,
-                "Refusing to replace modified generated dir",
-            ):
-                run_sync(config_root=config_root, home=home)
 
     def test_cursor_cli_rules_refuse_unowned_or_modified_files(self) -> None:
         for state in ("unowned", "modified"):
@@ -2653,34 +2542,6 @@ class SyncTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ManagedEntryConflict, message):
                     run_sync(config_root=config_root, home=home)
-
-    def test_cursor_retires_matching_unmanifested_global(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "global" / "AGENTS.md",
-                source_doc("global", "global", "global", "Generated body\n"),
-            )
-            cursor_global = home / ".cursor" / "AGENTS.md"
-            write(cursor_global, "Generated body\n")
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertFalse(cursor_global.exists())
-
-    def test_cursor_preserves_modified_unmanifested_global(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "global" / "AGENTS.md",
-                source_doc("global", "global", "global", "Generated body\n"),
-            )
-            cursor_global = home / ".cursor" / "AGENTS.md"
-            write(cursor_global, "User-owned body\n")
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertEqual(cursor_global.read_text(), "User-owned body\n")
 
     def test_internal_prefixed_fields_are_stripped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2849,7 +2710,6 @@ class SyncTests(unittest.TestCase):
                     extra={
                         "tools": {"inherit": True},
                         "cursor:readonly": True,
-                        "codex:sandbox_mode": "read-only",
                     },
                 ),
             )
@@ -3069,9 +2929,6 @@ class SyncTests(unittest.TestCase):
             ("claude", {"memory": "session"}, "memory must be one of"),
             ("claude", {"isolation": "sandbox"}, "isolation must be one of"),
             ("claude", {"effort": "highest"}, "effort must be one of"),
-            ("codex", {"sandbox_mode": "read only"}, "sandbox_mode must be one of"),
-            # config.toml rejects this SandboxModeRequirement-only value.
-            ("codex", {"sandbox_mode": "external-sandbox"}, "sandbox_mode must be one"),
             ("opencode", {"mode": "sub-agent"}, "mode must be one of"),
             (
                 "opencode",
@@ -3207,7 +3064,6 @@ class SyncTests(unittest.TestCase):
                     "body\n",
                     description="Second agent",
                     extra={
-                        "codex": {"sandbox_mode": "workspace-write"},
                         "opencode": {
                             "mode": "subagent",
                             "permissions": [
@@ -3658,17 +3514,6 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(config["permission"]["bash"], "deny")
             self.assertIn("permissions", config)
 
-    def test_cli_removed_flags_are_invalid(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root = Path(tmp) / "coding-agents"
-            config_root.mkdir(parents=True, exist_ok=True)
-            result = CliRunner().invoke(
-                main, ["--config-root", str(config_root), "--strict"]
-            )
-            self.assertNotEqual(result.exit_code, 0)
-            self.assertIn("No such option", result.output)
-            self.assertIn("--strict", result.output)
-
     def test_codex_config_preserves_existing_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -3692,29 +3537,6 @@ approval_policy = "on-request"
             run_sync(config_root=config_root, home=home)
             cfg = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
             self.assertEqual(cfg, 'model = "gpt-5.4"\napproval_policy = "on-request"\n')
-
-    def test_codex_target_fragment_is_no_longer_a_runtime_input(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "skills" / "s1" / "SKILL.md",
-                source_doc("skill", "s1", "s1", "body\n", description="skill"),
-            )
-            write(
-                config_root / "target-config" / "codex" / "config.toml",
-                """model = "gpt-5.5"
-web_search = true
-
-[features]
-hooks = false
-""",
-            )
-
-            run_sync(config_root=config_root, home=home)
-
-            self.assertFalse((home / ".codex" / "config.toml").exists())
 
     def test_sync_does_not_rewrite_unchanged_generated_text_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3969,6 +3791,24 @@ body
                 (home / ".cursor" / "rules" / "coding-agents-global.mdc").exists()
             )
 
+    def test_hand_written_host_file_is_refused_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "global" / "AGENTS.md",
+                source_doc("global", "global", "global", "Shared global\n"),
+            )
+            write(home / ".claude" / "CLAUDE.md", "My own notes\n")
+
+            with self.assertRaisesRegex(
+                ManagedEntryConflict, "claim unmanifested generated file"
+            ):
+                run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                (home / ".claude" / "CLAUDE.md").read_text(), "My own notes\n"
+            )
+
     def test_invalid_sources_reports_all_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
@@ -4004,7 +3844,7 @@ body
             write(
                 config_root / "rules" / "duplicate.md",
                 "---\n"
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: rule\n"
                 "id: duplicate\n"
                 "name: duplicate\n"
@@ -4027,7 +3867,7 @@ body
             config_root, _ = config_root_home(tmp)
             write(
                 config_root / "permissions" / "policy.yaml",
-                "schema: coding-agents/v4\n"
+                "schema: coding-agents/v1\n"
                 "kind: permission-policy\n"
                 "id: test\n"
                 "name: test\n"

@@ -252,15 +252,15 @@ def _validate_patches(
     for patch in patches:
         validate_generated_conflicts(Patch(patch.operations), values)
         for operation in patch.operations:
-            # The legacy map migrates ahead of the native list, so a patch may
-            # only retire it. Contributions append after every generated rule;
-            # command policy has one writer, so none of them may be a shell rule.
+            # OpenCode applies the V1 `/permission` map ahead of the native
+            # list, so no patch may write it. Contributions append after every
+            # generated rule; command policy has one writer, so none of them
+            # may be a shell rule.
             if touches(operation.pointer, ("permission",)):
-                if operation.kind != "delete":
-                    raise PatchError(
-                        "opencode patch may only delete the legacy "
-                        f"{display_pointer(operation.pointer)}; use /permissions"
-                    )
+                pointer = display_pointer(operation.pointer)
+                raise PatchError(
+                    f"opencode patch cannot touch {pointer}; use /permissions"
+                )
             elif touches(operation.pointer, ("permissions",)) and not (
                 operation.kind == "extend"
                 and operation.pointer == ("permissions",)
@@ -298,12 +298,10 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(omissions(source.path, "opencode", value, set()))
     if globals_:
         files.append(
-            OwnedFile(root / "AGENTS.md", (globals_[0].body.rstrip() + "\n").encode())
+            OwnedFile(
+                root / "AGENTS.md", (globals_[0].body.rstrip() + "\n").encode(), root
+            )
         )
-    elif sources.globals:
-        # The global was filtered by `only`; the host file is compiler-owned
-        # whenever a global exists, so retire it.
-        files.append(OwnedFile(root / "AGENTS.md", None))
     files.extend(
         OwnedFile(
             root / "rules" / f"{rule.stem}.md",
@@ -456,17 +454,20 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         diagnostics.extend(command_target_diagnostics(permissions, "opencode"))
         files.append(
-            OwnedFile(root / "plugins" / UNWRAP_PLUGIN.name, UNWRAP_PLUGIN.read_bytes())
+            OwnedFile(
+                root / "plugins" / UNWRAP_PLUGIN.name, UNWRAP_PLUGIN.read_bytes(), root
+            )
         )
-    reasons = deny_reasons(permissions) if permissions else {}
-    files.append(
-        OwnedFile(
-            root / UNWRAP_REASONS,
-            (json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n").encode()
-            if reasons
-            else None,
+    if reasons := deny_reasons(permissions) if permissions else {}:
+        files.append(
+            OwnedFile(
+                root / UNWRAP_REASONS,
+                (
+                    json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n"
+                ).encode(),
+                root,
+            )
         )
-    )
     rules_glob = f"~/{(root / 'rules').relative_to(ctx.home).as_posix()}/*.md"
     native_values = (
         *_permissions(sources, config, folded[0]),

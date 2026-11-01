@@ -132,7 +132,7 @@ def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
     home = tmp_path / "home"
     config_root = copy_config_root(tmp_path / "config")
     source = config_root / "rules/always.md"
-    source.write_text(source.read_text().replace("schema: coding-agents/v4\n", ""))
+    source.write_text(source.read_text().replace("schema: coding-agents/v1\n", ""))
 
     result = CliRunner().invoke(
         main,
@@ -141,6 +141,6 @@ def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "Error: invalid coding-agent source(s)" in result.output
-    assert "missing or invalid schema `coding-agents/v4`" in result.output
+    assert "missing or invalid schema `coding-agents/v1`" in result.output
     assert "Traceback" not in result.output
     assert not home.exists()

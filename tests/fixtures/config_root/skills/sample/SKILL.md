@@ -1,5 +1,5 @@
 ---
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: skill
 id: fixture-skill
 name: fixture-skill

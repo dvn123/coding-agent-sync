@@ -1,4 +1,4 @@
-# Canonical Source Format (schema: coding-agents/v4)
+# Canonical Source Format (schema: coding-agents/v1)
 
 Coding Agents Sync is a lossless, target-first compiler. A source shares a
 field only when its user-visible meaning is the same on every target that
@@ -44,7 +44,7 @@ frontmatter and a Markdown body:
 
 ```yaml
 ---
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: skill
 id: inspect-project
 name: inspect-project
@@ -95,10 +95,10 @@ the artifact. A non-empty list restricts emission to those targets: compilers
 skip emit and omit checks for every other target, and any `targets.<name>`
 block outside the list is an error. Prefer `only` when guidance is
 intentionally host-specific; keep `omit` for unavoidable field loss on a
-target that still receives the artifact. When a global is excluded by `only`,
-compilers retire the previously generated host file (`CLAUDE.md`,
-`AGENTS.md`, or Cursor's manifested global MDC) rather than leaving stale
-policy in place.
+target that still receives the artifact. Host files (`CLAUDE.md`,
+`AGENTS.md`, Cursor's global MDC) are manifested like every other generated
+file, so a global excluded by `only` is pruned, and a hand-written host file
+is refused rather than overwritten.
 
 The compiler projects a canonical field only where its semantics match. For
 example, skill `paths` requires omissions for Codex and OpenCode, while
@@ -142,7 +142,7 @@ instead.
 
 Because those settings are target-native, they are checked against each host's
 closed vocabulary rather than passed through: Claude `permissionMode`,
-`memory`, `isolation`, and `effort`; Codex `sandbox_mode`; OpenCode `mode` and
+`memory`, `isolation`, and `effort`; OpenCode `mode` and
 every leaf of `permission`. Claude `tools` and `disallowedTools` must name real
 tools or MCP patterns — omit `tools` to inherit the pool, because a list that
 resolves to nothing makes Claude refuse to spawn the agent, which
@@ -207,7 +207,7 @@ predicate. OpenCode delivers it through the opencode-unwrap plugin and Codex as
 the forbidden rule's `justification`.
 
 ```yaml
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: permission-rules
 id: version-control
 name: Version control
@@ -279,12 +279,12 @@ Target compilers own their native schemas. The supported typed fields are:
 | --- | --- |
 | Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
 | Cursor | Rules: `description`, `globs`, `always_apply`; `globs` requires `always_apply: false`. Skills: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. |
-| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `sandbox_mode` (legacy, warns), `nickname_candidates`. See the target reference for nested fields. |
+| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 
-The table is intentionally concrete, not a target extension API. OpenCode V1
-is the only active OpenCode adapter. V2 remains out of scope until it is
-stable; the compiler does not carry a permanent version framework.
+The table is intentionally concrete, not a target extension API. Each target
+is compiled for its latest release only; the compiler carries no version
+framework.
 
 ## Raw target files
 

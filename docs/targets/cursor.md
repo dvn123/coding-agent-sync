@@ -103,6 +103,5 @@ allowlist. Raw files below
 `target-config/cursor/raw/` mirror below `<home>/.cursor`; those four native
 pointer files are reserved.
 
-The rules and skills roots use portable manifests. The compiler retires only
-its previously manifested legacy agent/plugin roots and preserves unrelated
-Cursor content.
+The rules and skills roots use portable manifests, and unrelated Cursor content
+is preserved.

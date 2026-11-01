@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-type OpenCodeInstruction = str
-
 
 @dataclass(frozen=True)
 class SyncContext:
@@ -26,11 +24,3 @@ class SyncContext:
     @property
     def opencode(self) -> Path:
         return self.home / ".config" / "opencode"
-
-    @property
-    def opencode_json(self) -> Path:
-        return self.opencode / "opencode.json"
-
-    @property
-    def codex_config(self) -> Path:
-        return self.codex / "config.toml"

@@ -1,5 +1,5 @@
 ---
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: agent
 id: fixture-agent
 name: fixture-agent
@@ -11,8 +11,6 @@ targets:
     native:
       tools: Read
   codex:
-    native:
-      sandbox_mode: read-only
     omit:
       color: Codex agents have no color field.
   cursor:

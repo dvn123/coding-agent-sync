@@ -17,7 +17,6 @@ import pytest
 from capabilities.conftest import (
     State,
     prepare_targets,
-    pytest_configure,
     requested_case_ids,
     selected_case_ids,
     validate_collected_cases,
@@ -215,7 +214,7 @@ def test_report_keeps_unobserved_declared_surfaces_explicit() -> None:
     observed = Observation(case, Support.SUPPORTED, "five checks", "1.2.3", 5)
     report = capability_report({"claude.loading": observed}, {"claude": "1.2.3"})
 
-    assert SCHEMA == "coding-agents/capability-report/v2"
+    assert SCHEMA == "coding-agents/capability-report/v1"
     assert report["schema"] == SCHEMA
     reported_case = next(item for item in report["cases"] if item["id"] == case.id)
     assert reported_case["actual"] is Support.SUPPORTED
@@ -456,16 +455,6 @@ def test_requested_target_updates_fail_closed(
 
     with pytest.raises(pytest.UsageError, match=message):
         prepare_targets(cast(pytest.Config, Config()), {"claude.loading"})
-
-
-def test_update_and_skip_options_are_contradictory() -> None:
-    class Config:
-        @staticmethod
-        def getoption(name: str):
-            return {"update_targets": True, "skip_update": True}[name]
-
-    with pytest.raises(pytest.UsageError, match="cannot be combined"):
-        pytest_configure(cast(pytest.Config, Config()))
 
 
 def test_cursor_cache_lookup_does_not_mutate_parent_environment(

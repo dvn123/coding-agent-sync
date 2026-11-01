@@ -7,7 +7,7 @@ from typing import Any
 from .model import Case, Comparison, Observation, Support
 from .registry import CASES, CASES_BY_SURFACE, SURFACES
 
-SCHEMA = "coding-agents/capability-report/v2"
+SCHEMA = "coding-agents/capability-report/v1"
 
 
 def unverified(case: Case, version: str = "") -> Observation:

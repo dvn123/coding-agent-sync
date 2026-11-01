@@ -14,7 +14,7 @@ def source(root: Path, kind: str, native: dict, **extra) -> Path:
     path = root / ("skills/probe/SKILL.md" if kind == "skill" else "agents/probe.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     meta = {
-        "schema": "coding-agents/v4",
+        "schema": "coding-agents/v1",
         "kind": kind,
         "id": "probe",
         "name": "probe",
@@ -182,11 +182,10 @@ def test_model_policy_conflict_fails_before_writes(tmp_path: Path) -> None:
     assert not home.exists()
 
 
-def test_agent_sandbox_limit_is_reported(tmp_path: Path, capsys) -> None:
+def test_agent_max_effort_reaches_codex(tmp_path: Path) -> None:
     root, home = tmp_path / "config", tmp_path / "home"
-    source(root, "agent", {"sandbox_mode": "read-only"}, effort="max")
+    source(root, "agent", {}, effort="max")
     run_sync(config_root=root, home=home)
-    assert "does not override the parent" in capsys.readouterr().err
     agent = tomllib.loads((home / ".codex/agents/probe.toml").read_text())
     assert agent["model_reasoning_effort"] == "max"
 

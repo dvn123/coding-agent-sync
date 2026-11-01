@@ -77,23 +77,6 @@ def test_prepare_compiles_isolated_ancestor_rule_without_plugin(
     assert load_probe(state.run_id, root=tmp_path) == state
 
 
-def test_prepare_rejects_retired_overlapping_plugin(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(probe, "_cursor_version", lambda _application: "3.13.10")
-    user_home = tmp_path / "user"
-    overlapping_plugin = user_home / probe.RETIRED_RULES_PLUGIN
-    overlapping_plugin.mkdir(parents=True)
-
-    with pytest.raises(ProbeError, match="retired overlapping Cursor plugin"):
-        prepare_probe(
-            root=tmp_path / "runs",
-            application=tmp_path / "Cursor.app",
-            launch=False,
-            user_home=user_home,
-        )
-
-
 def test_cursor_version_comes_from_launched_application_bundle(tmp_path: Path) -> None:
     application = tmp_path / "Cursor.app"
     info = application / "Contents/Info.plist"

@@ -1,4 +1,4 @@
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: permission-policy
 id: fixture-policy
 name: Fixture policy
