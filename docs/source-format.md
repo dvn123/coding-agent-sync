@@ -79,16 +79,17 @@ Permission documents use the same common fields in YAML, without frontmatter.
 `coding-agents/model-policy/v1`. It names a `default` profile and defines
 named target profiles; a profile without a `model` makes the agent inherit
 the invoking session's model. Each profile may set only `model` and `effort` for
-`claude`, `opencode`, `cursor`, and optionally `codex`. Codex effort values are
-model-defined strings; the other profiles use the portable effort vocabulary.
+`claude`, `opencode`, and optionally `codex`, and only `model` for `cursor`,
+whose model slugs carry the effort (`claude-sonnet-5-5-medium`). Codex effort
+values are model-defined strings; the other profiles use the portable effort
+vocabulary.
 An absent `codex` entry preserves existing native agent model settings. An
 explicit `codex: {}` selects inheritance and owns the model fields, so it
 cannot be combined with native or raw model overrides. A named agent selects a profile with
 `model_policy`; an omitted selector uses `default`. The `inherit` profile emits
 no model or effort pin, except Claude emits its explicit native `model: inherit`
 marker so it follows the parent conversation rather than Claude's model-order
-fallback. Cursor validates the profile but emits no agent because that target
-has no generated user-agent surface.
+fallback.
 
 `only` is an optional list of target names (`claude`, `cursor`, `codex`,
 `opencode`). Absent or empty means every target that supports the kind receives
@@ -126,10 +127,11 @@ from another target for one of these values.
 
 `execution.agent` asks Claude and OpenCode to invoke a named subagent.
 `execution.subtask: true` asks each to run the command as an isolated subtask.
-Cursor and Codex require `omit.command` when they remain in the emit set,
-because neither has this generated user-command surface. Prefer
-`only: [claude, opencode]` when the command is never meant for those hosts
-instead of repeating the omissions.
+Codex requires `omit.command` when it remains in the emit set, because it has
+no generated user-command surface. Cursor receives a command as a skill the
+model cannot invoke by itself, and requires `omit.execution` for either field.
+Prefer `only: [claude, opencode]` when the command is never meant for the
+other hosts instead of repeating the omissions.
 
 ### Agents
 
@@ -150,6 +152,10 @@ OpenCode accepts only `#RRGGBB` or one of its theme names as a `color`, and it
 rejects the whole agent file otherwise, so a portable `color` that OpenCode
 cannot express needs a native override there. That value is checked after the
 merge, because a portable `color` reaches OpenCode's frontmatter too.
+
+Cursor agents have no `effort` or `color` field, so either needs
+`omit.effort` or `omit.color`. `background` lowers natively. Cursor's
+counterpart to denying edit tools is native `readonly: true`.
 
 Fields whose accepted set is genuinely open stay unchecked: any `model` ID and
 Codex `model_reasoning_effort`, whose enum ends in a catch-all for
@@ -268,7 +274,7 @@ Target compilers own their native schemas. The supported typed fields are:
 | Target | Source kinds and typed fields |
 | --- | --- |
 | Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
-| Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. |
+| Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills and commands: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. Agents: `model`, `readonly`. |
 | Codex / ChatGPT Desktop | Rules: `rules` containing `pattern`, `decision`, and optional `justification`. Skills: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 

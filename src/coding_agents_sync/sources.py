@@ -406,9 +406,14 @@ class CodexModelPolicyTarget(StrictModel):
     effort: str | None = None
 
 
+class CursorModelPolicyTarget(StrictModel):
+    # A Cursor model slug; Cursor agent files have no effort field.
+    model: str | None = None
+
+
 class ModelPolicyProfile(StrictModel):
     claude: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
-    cursor: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
+    cursor: CursorModelPolicyTarget = Field(default_factory=CursorModelPolicyTarget)
     opencode: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
     codex: CodexModelPolicyTarget | None = None
 

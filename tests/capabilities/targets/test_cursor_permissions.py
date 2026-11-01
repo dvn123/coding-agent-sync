@@ -136,6 +136,10 @@ SCENARIOS = {
     ),
     # PROBE P1: does Cursor resolve an exec wrapper to the inner command?
     "probe-wrapper-inner-only": (f"timeout 30 {ALLOWED} a", "rejected", (), False),
+    # The parser keeps leading assignments out of the matched text, so the
+    # shell's own `VAR=value` form needs no wrapper entry; `env` does.
+    "assignment-prefix": (f"PROBE_VAR=1 {ALLOWED} a", "success", (ALLOWED,), False),
+    "assignment-env": (f"env PROBE_VAR=1 {ALLOWED} a", "rejected", (), False),
     "probe-wrapper-head-allowed": (
         f"{WRAP_OK} 30 {ALLOWED} a",
         "success",

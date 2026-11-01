@@ -7,22 +7,52 @@
 | Global | `<home>/.cursor/rules/coding-agents-global.mdc` |
 | Rule | `<home>/.cursor/rules/<stem>.mdc` |
 | Skill | `<home>/.cursor/skills/<directory>/` |
-| Command | no generated surface |
-| Agent | no generated surface |
-| Permissions | owned pointers in `<home>/.cursor/cli-config.json` and `<home>/.cursor/permissions.json` |
+| Command | `<home>/.cursor/skills/<stem>/SKILL.md` |
+| Agent | `<home>/.cursor/agents/<file>.md` (Desktop only) |
+| Permissions | owned pointers in `<home>/.cursor/permissions.json` |
 
-Cursor has one shared MDC rule delivery path for Desktop and Agent. The global
-rule filename is reserved. Typed rule fields are `description`, `globs`, and
-`alwaysApply`; a scoped rule must state `alwaysApply: false`. Typed skill
-fields are `name`, `description`, `paths`, `disable-model-invocation`, and
-`metadata`.
+Desktop is the primary host; the CLI is second class. Every surface here is a
+native user-scope file, not a plugin: Cursor's local plugins
+(`<home>/.cursor/plugins/local/<name>/`) bundle the same rules, skills,
+agents, commands, and hooks, so they would add a layer without adding a
+capability.
 
-Cursor does not receive portable user commands or user agents. Sources must
-acknowledge `omit.command` and `omit.agent` as applicable.
+Cursor has one shared MDC rule delivery path for Desktop and Agent. Both walk
+from the workspace up through its ancestors for `.cursor/rules`, so the user
+rules apply to workspaces below `<home>`; the `cursor-desktop.rules` probe
+pins that ancestor load. The global rule filename is reserved. Typed rule
+fields are `description`, `globs`, and `alwaysApply`; a scoped rule must state
+`alwaysApply: false`. Typed skill fields are `name`, `description`, `paths`,
+`disable-model-invocation`, and `metadata`.
 
-Cursor validates `model_policy` metadata but emits no agent configuration. A
-skill fallback may use the symbolic policy as guidance only; the target has no
-compiler-owned per-subagent model or effort surface.
+A command becomes a skill with `disable-model-invocation: true`, which is how
+Cursor's own `migrate-to-skills` converts `.cursor/commands`: the user invokes
+it from the `/` menu and the model never does by itself. Cursor skills have no
+delegated execution, so `execution.agent` or `execution.subtask` needs
+`omit.execution`.
+
+Desktop loads user agents from `<home>/.cursor/agents` (the
+`cursor-desktop.agents` probe pins the user provider); the CLI does not
+(`cursor-agent.agents-user`). Desktop does not read agent frontmatter as
+YAML: it splits each line at its first colon and keeps the rest verbatim,
+quotes included. The compiler therefore writes each value bare on one line,
+collapses the description's whitespace, and exempts these files from YAML
+validation. Fields are `name`, `description`, `model` (a slug from
+`cursor-agent models`, absent to inherit), `readonly`, and `background`.
+Cursor slugs carry the effort, so the model policy's `cursor` profile takes
+only `model`, and a portable `effort` or `color` needs an omission.
+
+### Third-party extensibility
+
+Cursor's "third-party extensibility" setting is on by default. It makes Cursor
+also load `<home>/.claude/skills`, `<home>/.codex/skills`,
+`<home>/.claude/agents`, `<home>/.claude/commands`, and enabled Claude Code
+plugins. Skills are merged by path, not by name, so with the setting on each
+skill the Claude and Codex targets also receive appears more than once, and
+Claude agents load in Claude's dialect. An agent of the same name in
+`<home>/.cursor/agents` wins. The setting lives in Cursor's application
+storage, not a configuration file, so the compiler cannot own it: turn it off
+in Cursor Settings to make this target Cursor's only source.
 
 ## Command permission projection
 
@@ -53,12 +83,23 @@ says, so `unmatched: allow` requires `targets.cursor.omit.unmatched`.
   it withholds it too, with a warning. A standalone ask or deny leaves nothing
   to emit, since an unlisted command already prompts.
 - Wrapped spellings are not listed: `timeout 30 git status` prompts. A bare
-  wrapper entry would allow any payload the wrapper carries.
+  wrapper entry would allow any payload the wrapper carries, a `*` hole after
+  the wrapper swallows a whole command, and one entry per wrapper and rule
+  multiplies the allowlist. Cursor needs few wrappers: the parser leaves
+  leading `VAR=value` assignments out of the matched text (the
+  `assignment-prefix` scenario), and the Shell tool has its own `timeout`,
+  `is_background`, and `block_until_ms`. A Cursor-only rule that steers the
+  agent to those forms keeps wrapped commands rare without any entries.
+
+A `beforeShellExecution` hook can answer `deny` or `ask`, but its `allow`
+falls through to the ordinary approval flow, so a hook cannot replace the
+allowlist; it could only add a hard deny, which needs a script rather than
+configuration.
 
 Hooks are not generated. `hooks.json` and its hook scripts are delivered as
 raw files: `target-config/cursor/raw/hooks.json` mirrors to
-`<home>/.cursor/hooks.json`, where the CLI loads user hooks, and scripts sit
-beside it or anywhere else below `raw/`.
+`<home>/.cursor/hooks.json`, where the CLI and Desktop load user hooks, and
+scripts sit beside it or anywhere else below `raw/`.
 
 Patches target `cli-config.json`, `permissions.json`, `settings.json`, and
 `mcp.json` through the corresponding `cursor-*` patch names; CLI settings such
@@ -69,5 +110,5 @@ allowlist. Raw files below
 `target-config/cursor/raw/` mirror below `<home>/.cursor`; those four native
 pointer files are reserved.
 
-The rules and skills roots use portable manifests, and unrelated Cursor content
-is preserved.
+The rules, skills, and agents roots use portable manifests, and unrelated
+Cursor content is preserved.

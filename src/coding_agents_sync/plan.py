@@ -15,6 +15,9 @@ class OwnedFile:
     path: Path
     content: bytes
     manifest_root: Path
+    # False for a file whose consumer does not read it as JSON, TOML, or YAML
+    # frontmatter, so preflight does not parse it as one.
+    structured: bool = True
 
 
 @dataclass(frozen=True)

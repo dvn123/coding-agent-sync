@@ -74,16 +74,18 @@ def source_doc(
             target_blocks.setdefault("codex", {}).setdefault("omit", {})["command"] = (
                 "Codex has no native command delivery."
             )
-        if not only or "cursor" in only:
-            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["command"] = (
-                "Cursor has no user command delivery."
-            )
+        if meta.get("execution") and (not only or "cursor" in only):
+            target_blocks.setdefault("cursor", {}).setdefault("omit", {})[
+                "execution"
+            ] = "Cursor skills have no delegated execution."
     if kind == "agent":
         only = set(meta.get("only") or ())
         if not only or "cursor" in only:
-            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["agent"] = (
-                "Cursor Agent does not load user agents."
-            )
+            for field in ("effort", "color"):
+                if meta.get(field):
+                    target_blocks.setdefault("cursor", {}).setdefault("omit", {})[
+                        field
+                    ] = f"Cursor agents have no {field} field."
         if meta.get("background"):
             if not only or "codex" in only:
                 target_blocks.setdefault("codex", {}).setdefault("omit", {})[
@@ -281,7 +283,7 @@ def model_policy_doc(
                         "model": "amazon-bedrock/global.openai.gpt-5.6-luna",
                         "effort": "xhigh",
                     },
-                    "cursor": {"model": "GPT-5.6 Luna", "effort": "xhigh"},
+                    "cursor": {"model": "gpt-5.6-luna"},
                 },
                 "inherit": {},
             },
@@ -343,7 +345,11 @@ class ModelPolicyTests(unittest.TestCase):
             self.assertNotIn("reasoningEffort:", opencode_open)
             self.assertIn('model = "gpt-5"', codex_cheap)
             self.assertIn('model_reasoning_effort = "high"', codex_cheap)
-            self.assertFalse((home / ".cursor/agents").exists())
+            self.assertEqual(
+                (home / ".cursor/agents/cheap.md").read_text(),
+                "---\nname: cheap\nmodel: gpt-5.6-luna\n---\n\nCheap body\n",
+            )
+            self.assertNotIn("model:", (home / ".cursor/agents/open.md").read_text())
 
     def test_model_policy_rejects_unknown_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,27 +388,54 @@ class ModelPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "model policy owns Claude fields"):
                 run_sync(config_root=config_root, home=home)
 
-    def test_model_policy_rejects_opencode_model_override(self) -> None:
+    def test_model_policy_rejects_a_native_model_override(self) -> None:
+        for field, message in (
+            ("opencode:model", "model policy owns OpenCode fields"),
+            ("cursor:model", "model policy owns Cursor fields"),
+        ):
+            with self.subTest(field), tempfile.TemporaryDirectory() as tmp:
+                config_root, home = config_root_home(tmp)
+                write(config_root / "model-policy.yaml", model_policy_doc())
+                write(
+                    config_root / "agents" / "conflict.md",
+                    source_doc(
+                        "agent",
+                        "conflict",
+                        "conflict",
+                        "body\n",
+                        extra={"model_policy": "sweet-spot", field: "other/model"},
+                    ),
+                )
+                with self.assertRaisesRegex(ValueError, message):
+                    run_sync(config_root=config_root, home=home)
+
+    def test_cursor_agent_lowers_to_desktop_line_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)
-            write(config_root / "model-policy.yaml", model_policy_doc())
             write(
-                config_root / "agents" / "conflict.md",
+                config_root / "agents" / "scout.md",
                 source_doc(
                     "agent",
-                    "conflict",
-                    "conflict",
-                    "body\n",
+                    "scout",
+                    "scout",
+                    "Scout body\n",
+                    description="Look around: report back",
                     extra={
-                        "model_policy": "sweet-spot",
-                        "opencode:model": "other/model",
+                        "only": ["cursor"],
+                        "background": True,
+                        "cursor:readonly": True,
+                        "cursor:model": "composer-2",
                     },
                 ),
             )
-            with self.assertRaisesRegex(
-                ValueError, "model policy owns OpenCode fields"
-            ):
-                run_sync(config_root=config_root, home=home)
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                (home / ".cursor/agents/scout.md").read_text(),
+                "---\nname: scout\ndescription: Look around: report back\n"
+                "model: composer-2\nreadonly: true\nbackground: true\n---\n\n"
+                "Scout body\n",
+            )
 
     def test_sweet_spot_fact_finder_keeps_read_only_tool_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2270,7 +2303,24 @@ class SyncTests(unittest.TestCase):
             self.assertIn("model: claude-override", claude_agent)
             self.assertIn("effort: high", claude_agent)
             self.assertIn("color: blue", claude_agent)
-            self.assertFalse((home / ".cursor" / "agents" / "reviewer.md").exists())
+            self.assertEqual(
+                (home / ".cursor" / "agents" / "reviewer.md").read_text(),
+                "---\nname: reviewer\ndescription: Review code across multiple lines\n"
+                "---\n\nAgent body\n",
+            )
+            cursor_command = (
+                home / ".cursor" / "skills" / "review-pr" / "SKILL.md"
+            ).read_text()
+            _, command_frontmatter, command_body = cursor_command.split("---", 2)
+            self.assertEqual(
+                yaml.safe_load(command_frontmatter),
+                {
+                    "name": "review-pr",
+                    "description": "Review a pull request",
+                    "disable-model-invocation": True,
+                },
+            )
+            self.assertEqual(command_body.strip(), "Review pull request $ARGUMENTS.")
             self.assertIn("mode: subagent", opencode_agent)
             self.assertIn("action: shell", opencode_agent)
             self.assertIn("model: opencode-model", opencode_agent)
