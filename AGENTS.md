@@ -7,7 +7,7 @@
   must be neutral and isolated below pytest temporary directories or
   `tests/fixtures/`.
 - Put source-schema behavior in `sources.py`, target lowering in the matching
-  translator, artifact definitions in `artifacts.py`, and write/ownership
+  translator under `targets/`, plan types in `plan.py`, and write/ownership
   behavior in `writer.py` or `runtime_config.py`. Keep `sync.py`
   orchestration-only.
 - Preserve manifested portable ownership and native pointer/hash ownership.

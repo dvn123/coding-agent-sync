@@ -13,19 +13,19 @@ type DiagnosticLevel = Literal["error", "warning"]
 @dataclass(frozen=True)
 class OwnedFile:
     path: Path
-    content: bytes | None
-    manifest_root: Path | None = None
-    retire_if: bytes | None = None
+    content: bytes
+    manifest_root: Path
 
 
 @dataclass(frozen=True)
 class OwnedTree:
+    """A generated directory, or with `declaration` only its manifest root."""
+
     root: Path
-    files: tuple[tuple[Path, bytes], ...] = ()
-    manifest_root: Path | None = None
+    files: tuple[tuple[Path, bytes], ...]
+    manifest_root: Path
     manifest_mode: ManifestMode = "dir"
     declaration: bool = False
-    retired: bool = False
     executables: frozenset[Path] = frozenset()
 
 

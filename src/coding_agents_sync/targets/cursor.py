@@ -35,6 +35,7 @@ from .support import (
     block,
     bundled_files,
     command_target_diagnostics,
+    declared_trees,
     frontmatter,
     markdown,
     native_patch,
@@ -353,68 +354,23 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     sources = with_skill_scripts(sources, "cursor", root, ctx.home)
     rules_root = root / "rules"
     skills_root = root / "skills"
-    trees = [
-        OwnedTree(
-            rules_root, manifest_root=rules_root, manifest_mode="file", declaration=True
-        ),
-        OwnedTree(
-            skills_root,
-            manifest_root=skills_root,
-            manifest_mode="dir",
-            declaration=True,
-        ),
-        OwnedTree(
-            root / "agents",
-            manifest_root=root / "agents",
-            manifest_mode="file",
-            retired=True,
-        ),
-        OwnedTree(
-            root / "plugins" / "local",
-            manifest_root=root / "plugins" / "local",
-            manifest_mode="dir",
-            retired=True,
-        ),
-    ]
+    trees = declared_trees(root, (("rules", "file"), ("skills", "dir")))
     files: list[OwnedFile] = []
     diagnostics: list[Diagnostic] = []
-    if sources.globals:
-        global_source = sources.globals[0]
-        if applies_to(global_source, "cursor"):
-            value = block(global_source, "cursor")
-            diagnostics.extend(
-                unhandled_target_block(global_source.path, "cursor", value)
+    for global_source in sources.globals[:1]:
+        if not applies_to(global_source, "cursor"):
+            continue
+        value = block(global_source, "cursor")
+        diagnostics.extend(unhandled_target_block(global_source.path, "cursor", value))
+        diagnostics.extend(omissions(global_source.path, "cursor", value, set()))
+        meta = {"description": global_source.name, "globs": "", "alwaysApply": True}
+        files.append(
+            OwnedFile(
+                rules_root / "coding-agents-global.mdc",
+                markdown(meta, global_source.body),
+                rules_root,
             )
-            diagnostics.extend(omissions(global_source.path, "cursor", value, set()))
-            meta = {
-                "description": global_source.name,
-                "globs": "",
-                "alwaysApply": True,
-            }
-            files.append(
-                OwnedFile(
-                    rules_root / "coding-agents-global.mdc",
-                    markdown(meta, global_source.body),
-                    rules_root,
-                )
-            )
-            files.append(
-                OwnedFile(
-                    root / "AGENTS.md",
-                    None,
-                    retire_if=(global_source.body.rstrip() + "\n").encode(),
-                )
-            )
-        else:
-            # Manifested MDC is pruned by absence; also retire a leftover host
-            # AGENTS.md that still matches the excluded global body.
-            files.append(
-                OwnedFile(
-                    root / "AGENTS.md",
-                    None,
-                    retire_if=(global_source.body.rstrip() + "\n").encode(),
-                )
-            )
+        )
     for rule in sources.rules:
         if not applies_to(rule, "cursor"):
             continue

@@ -86,7 +86,7 @@ patches.local/*.yaml
 target-config/<target>/raw/*
 ```
 
-All Markdown and permission sources use `schema: coding-agents/v4`. A source
+All Markdown and permission sources use `schema: coding-agents/v1`. A source
 shares only portable intent. Each source may instead use a strict typed native
 block, or an explicitly unvalidated raw native block, under
 `targets.<claude|cursor|codex|opencode>`. Lossy portable projections require a
@@ -145,7 +145,7 @@ uv run --locked pytest --capabilities-live \
   --capability-report /tmp/capabilities.json tests/capabilities/
 ```
 
-The v2 report (`coding-agents/capability-report/v2`) includes every registered
+The report (`coding-agents/capability-report/v1`) includes every registered
 case and every declared target surface. A
 surface's `management` is `generated`, `patch_only`, or `unmanaged`; an
 unobserved surface is explicitly `unverified` / `not_probed`. Its
@@ -179,7 +179,6 @@ executables or Desktop applications as unavailable.
 
 Live probes use the installed target versions by default. Updating targets is
 explicit with `--update-targets`; it fails the run if an update fails or no
-post-update version can be observed. `--skip-update` remains a deprecated
-no-op and cannot be combined with `--update-targets`. Cursor local-runtime
+post-update version can be observed. Cursor local-runtime
 cache lookup is read-only by default; use `--bootstrap-cursor-runtime` to
 download a matching runtime into the managed cache.

@@ -16,11 +16,10 @@ import typer
 
 from ..sync import run_sync
 
-PROBE_SCHEMA = "coding-agents/cursor-desktop-probe/v2"
+PROBE_SCHEMA = "coding-agents/cursor-desktop-probe/v1"
 PROBE_ROOT = Path("/tmp/coding-agents-cursor")
 CURSOR_APP = Path("/Applications/Cursor.app")
 CURSOR_BUNDLE_ID = "com.todesktop.230313mzl4w4u92"
-RETIRED_RULES_PLUGIN = Path(".cursor/plugins/local/coding-agents-rules")
 RUN_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 RULE_SENTINEL_PATTERN = re.compile(r"CURSOR_DESKTOP_RULE_[0-9A-F]{32}")
 COMPILED_RULE_NAME = "cursor-desktop-capability-probe.mdc"
@@ -106,7 +105,7 @@ def _write_probe_source(config_root: Path, sentinel: str) -> None:
     rules.mkdir(parents=True)
     (rules / "cursor-desktop-capability-probe.md").write_text(
         "---\n"
-        "schema: coding-agents/v4\n"
+        "schema: coding-agents/v1\n"
         "kind: rule\n"
         "id: cursor-desktop-capability-probe\n"
         "name: Cursor Desktop capability probe\n"
@@ -195,15 +194,8 @@ def prepare_probe(
     root: Path = PROBE_ROOT,
     application: Path = CURSOR_APP,
     launch: bool = True,
-    user_home: Path | None = None,
 ) -> ProbeState:
     cursor_version = _cursor_version(application)
-    overlapping_plugin = (user_home or Path.home()) / RETIRED_RULES_PLUGIN
-    if overlapping_plugin.exists() or overlapping_plugin.is_symlink():
-        raise ProbeError(
-            f"retired overlapping Cursor plugin is still present at "
-            f"{overlapping_plugin}"
-        )
     run_id = uuid.uuid4().hex
     run_dir = root / run_id
     run_dir.mkdir(parents=True, mode=0o700)
@@ -327,8 +319,7 @@ def inspect_rule_loading(
             )
             return ProbeResult(
                 ProbeStatus.LOADED,
-                f"{loading_detail} one ancestor rule and the retired "
-                f"coding-agents-rules plugin is absent{plugin_detail}",
+                f"{loading_detail} one ancestor rule{plugin_detail}",
                 state.cursor_version,
                 1 + len(local_counts) + len(plugin_counts) + int(identity_logged),
                 local_rule_count=1,

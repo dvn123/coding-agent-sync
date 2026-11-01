@@ -21,7 +21,6 @@ from .patches import (
 )
 from .plan import NativePatch, NativeValue
 
-MANIFEST_VERSION = 3
 MANIFEST_NAME = ".coding-agents-native.json"
 
 
@@ -98,9 +97,7 @@ def _load_manifest(path: Path, targets: set[str]) -> dict[tuple[str, Pointer], s
         return {}
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
-        if parsed.get("version") != MANIFEST_VERSION or not isinstance(
-            parsed.get("entries"), list
-        ):
+        if not isinstance(parsed.get("entries"), list):
             raise ValueError
         result: dict[tuple[str, Pointer], str] = {}
         for entry in parsed["entries"]:
@@ -293,7 +290,6 @@ def prepare_plan_native(
         candidates.append(NativeCandidate(surface.path, content, changed))
 
     manifest = {
-        "version": MANIFEST_VERSION,
         "entries": [
             {"target": target, "pointer": display_pointer(pointer), "hash": hash_}
             for (target, pointer), hash_ in sorted(hashes.items())
@@ -323,8 +319,3 @@ def apply_native_candidates(plan: NativePlan) -> None:
 def publish_native_manifest(plan: NativePlan) -> None:
     if plan.manifest_changed:
         write_bytes(plan.manifest_path, plan.manifest_content)
-
-
-def apply_native_plan(plan: NativePlan) -> None:
-    apply_native_candidates(plan)
-    publish_native_manifest(plan)

@@ -21,9 +21,16 @@ from coding_agents_sync.patches import (
 from coding_agents_sync.plan import NativePatch, NativeValue
 from coding_agents_sync.runtime_config import (
     NativeConfigError,
-    apply_native_plan,
+    NativePlan,
+    apply_native_candidates,
     prepare_plan_native,
+    publish_native_manifest,
 )
+
+
+def apply_native_plan(plan: NativePlan) -> None:
+    apply_native_candidates(plan)
+    publish_native_manifest(plan)
 
 
 def write(path: Path, content: str, mode: int = 0o600) -> None:
@@ -202,7 +209,6 @@ def test_manifest_is_strict_for_current_plan_targets(tmp_path: Path) -> None:
         config_root / ".coding-agents-native.json",
         json.dumps(
             {
-                "version": 3,
                 "entries": [
                     {"target": "other", "pointer": "/x", "hash": "sha256:" + "0" * 64}
                 ],

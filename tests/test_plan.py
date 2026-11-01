@@ -14,7 +14,12 @@ from coding_agents_sync.writer import preflight_plan
 
 def test_plan_rejects_file_collisions(tmp_path: Path) -> None:
     path = tmp_path / "target"
-    plan = Plan(files=(OwnedFile(path, b"generated"), OwnedFile(path, b"raw")))
+    plan = Plan(
+        files=(
+            OwnedFile(path, b"generated", tmp_path),
+            OwnedFile(path, b"raw", tmp_path),
+        )
+    )
 
     with pytest.raises(ManagedEntryConflict, match="Overlapping generated paths"):
         preflight_plan(plan)
@@ -23,8 +28,8 @@ def test_plan_rejects_file_collisions(tmp_path: Path) -> None:
 def test_plan_rejects_file_tree_ancestry(tmp_path: Path) -> None:
     path = tmp_path / "target"
     plan = Plan(
-        files=(OwnedFile(path, b"generated"),),
-        trees=(OwnedTree(path / "tree", ((Path("child"), b"raw"),)),),
+        files=(OwnedFile(path, b"generated", tmp_path),),
+        trees=(OwnedTree(path / "tree", ((Path("child"), b"raw"),), tmp_path),),
     )
 
     with pytest.raises(ManagedEntryConflict, match="Overlapping generated paths"):
@@ -44,7 +49,9 @@ def test_plan_rejects_generated_manifest_collision(tmp_path: Path) -> None:
     (Path("../escape"), Path("/escape"), Path("")),
 )
 def test_plan_rejects_unsafe_owned_tree_entries(tmp_path: Path, relative: Path) -> None:
-    plan = Plan(trees=(OwnedTree(tmp_path / "target", ((relative, b"raw"),)),))
+    plan = Plan(
+        trees=(OwnedTree(tmp_path / "target", ((relative, b"raw"),), tmp_path),)
+    )
 
     with pytest.raises(ValueError, match="unsafe OwnedTree file path"):
         preflight_plan(plan)
@@ -56,6 +63,7 @@ def test_plan_rejects_duplicate_owned_tree_entries(tmp_path: Path) -> None:
             OwnedTree(
                 tmp_path / "target",
                 ((Path("same"), b"first"), (Path("same"), b"second")),
+                tmp_path,
             ),
         )
     )
@@ -65,7 +73,7 @@ def test_plan_rejects_duplicate_owned_tree_entries(tmp_path: Path) -> None:
 
 
 def test_plan_rejects_relative_output_path() -> None:
-    plan = Plan(files=(OwnedFile(Path("relative"), b"generated"),))
+    plan = Plan(files=(OwnedFile(Path("relative"), b"generated", Path(".")),))
 
     with pytest.raises(ValueError, match="OwnedFile path must be absolute"):
         preflight_plan(plan)
@@ -127,7 +135,7 @@ def test_plan_rejects_shared_native_path_before_writes(tmp_path: Path) -> None:
 def test_plan_rejects_owned_file_overlapping_native_value(tmp_path: Path) -> None:
     path = tmp_path / "target.json"
     plan = Plan(
-        files=(OwnedFile(path, b'{"raw": true}\n'),),
+        files=(OwnedFile(path, b'{"raw": true}\n', tmp_path),),
         native_values=(NativeValue("fixture", path, ("native",), "generated"),),
     )
 
@@ -138,7 +146,9 @@ def test_plan_rejects_owned_file_overlapping_native_value(tmp_path: Path) -> Non
 def test_plan_rejects_owned_tree_overlapping_native_patch(tmp_path: Path) -> None:
     root = tmp_path / "target"
     plan = Plan(
-        trees=(OwnedTree(root, ((Path("config.json"), b'{"raw": true}\n'),)),),
+        trees=(
+            OwnedTree(root, ((Path("config.json"), b'{"raw": true}\n'),), tmp_path),
+        ),
         native_patches=(
             NativePatch(
                 "fixture",
@@ -168,7 +178,7 @@ def test_reconcile_builds_a_write_free_transaction(tmp_path: Path) -> None:
     portable = tmp_path / "home" / "generated.md"
     native = tmp_path / "home" / "native.json"
     plan = Plan(
-        files=(OwnedFile(portable, b"generated"),),
+        files=(OwnedFile(portable, b"generated", portable.parent),),
         native_values=(NativeValue("fixture", native, ("enabled",), True),),
     )
 

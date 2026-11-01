@@ -140,17 +140,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="download a matching Cursor local runtime into the managed cache",
     )
-    group.addoption(
-        "--skip-update",
-        action="store_true",
-        help="deprecated no-op; target updates require --update-targets",
-    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
     global state
-    if config.getoption("update_targets") and config.getoption("skip_update"):
-        raise pytest.UsageError("--update-targets and --skip-update cannot be combined")
     if config.getoption("--capabilities-live"):
         validate_registry()
         state = State()

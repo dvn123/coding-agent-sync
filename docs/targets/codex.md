@@ -68,10 +68,10 @@ and `skills.include_instructions: false` to omit the automatic skills block.
 Skills otherwise inherit from the parent. File paths must exist on the target
 machine; keep machine-specific paths in local-only source artifacts.
 
-Legacy `sandbox_mode` remains readable for older clients but emits a warning:
-current custom agents inherit the parent sandbox and cannot override it.
-An instruction to avoid edits is not an enforced read-only sandbox. Configure
-the sandbox and approval policy on the parent session. See the official
+Custom agents inherit the parent sandbox and approval policy and cannot
+override them, so agent `sandbox_mode` is rejected. An instruction to avoid
+edits is not an enforced read-only sandbox. Configure the sandbox and approval
+policy on the parent session. See the official
 [custom agent schema](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
 These are local runtime configuration surfaces. They do not provision cloud
@@ -122,8 +122,8 @@ Codex applies in `workspace-write` mode; `workspace.ask`, `.deny`, and
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,
-`developer_instructions`, `model`, `model_reasoning_effort`, `sandbox_mode`,
-and `nickname_candidates`. `targets.codex.raw` is supported for agent TOML
+`developer_instructions`, `model`, `model_reasoning_effort`, and
+`nickname_candidates`. `targets.codex.raw` is supported for agent TOML
 fields and is visibly unvalidated. Non-equivalent portable skill or agent
 fields require a reasoned omit acknowledgement.
 

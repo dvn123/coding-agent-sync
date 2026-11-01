@@ -329,39 +329,20 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     trees = declared_trees(
         root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
     )
-    # Commands now land as skills; this prunes what earlier syncs wrote.
-    trees.append(
-        OwnedTree(
-            root / "commands",
-            manifest_root=root / "commands",
-            manifest_mode="file",
-            retired=True,
-        )
-    )
     diagnostics = []
-    if sources.globals:
-        global_source = sources.globals[0]
-        if applies_to(global_source, "claude"):
-            value = block(global_source, "claude")
-            diagnostics.extend(
-                unhandled_target_block(global_source.path, "claude", value)
+    for global_source in sources.globals[:1]:
+        if not applies_to(global_source, "claude"):
+            continue
+        value = block(global_source, "claude")
+        diagnostics.extend(unhandled_target_block(global_source.path, "claude", value))
+        diagnostics.extend(omissions(global_source.path, "claude", value, set()))
+        files.append(
+            OwnedFile(
+                root / "CLAUDE.md",
+                (global_source.body.rstrip() + "\n").encode(),
+                root,
             )
-            diagnostics.extend(omissions(global_source.path, "claude", value, set()))
-            files.append(
-                OwnedFile(
-                    root / "CLAUDE.md",
-                    (global_source.body.rstrip() + "\n").encode(),
-                )
-            )
-        else:
-            # Drop a previously emitted global when `only` excludes this host.
-            files.append(
-                OwnedFile(
-                    root / "CLAUDE.md",
-                    None,
-                    retire_if=(global_source.body.rstrip() + "\n").encode(),
-                )
-            )
+        )
     for rule in sources.rules:
         if not applies_to(rule, "claude"):
             continue

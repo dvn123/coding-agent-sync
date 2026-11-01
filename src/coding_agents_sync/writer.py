@@ -14,17 +14,11 @@ from .io import (
     ManagedEntryConflict,
     entry_hash,
     load_manifest,
-    retire_manifested_entries,
     sync_manifested_entries,
     write_bytes,
 )
-from .patches import Pointer, contributes_to_generated
+from .patches import contributes_to_generated, touches
 from .plan import ManifestMode, OwnedFile, OwnedTree, Plan
-
-
-def _pointers_overlap(pointer: Pointer, other: Pointer) -> bool:
-    length = min(len(pointer), len(other))
-    return pointer[:length] == other[:length]
 
 
 def _validate_structured(path: Path) -> None:
@@ -71,104 +65,48 @@ def _prune_tree(target: Path, expected_files: set[Path]) -> None:
                 child.rmdir()
 
 
-def _tree_files(tree: OwnedTree) -> dict[Path, bytes]:
-    return dict(tree.files)
-
-
-def _write_owned_file(file: OwnedFile, destination: Path | None = None) -> None:
-    path = destination or file.path
-    if file.content is not None:
-        write_bytes(path, file.content)
-    elif file.retire_if is None:
-        path.unlink(missing_ok=True)
-    elif path.is_file() and path.read_bytes() == file.retire_if:
-        path.unlink()
-
-
 def _write_owned_tree(tree: OwnedTree, destination: Path | None = None) -> None:
-    if tree.declaration or tree.retired:
-        return
     target = destination or tree.root
     if target.is_symlink():
         return
     target.mkdir(parents=True, exist_ok=True)
-    files = _tree_files(tree)
+    files = dict(tree.files)
     for relative, content in files.items():
         write_bytes(target / relative, content, executable=relative in tree.executables)
     _prune_tree(target, set(files))
 
 
-def _managed_groups(
-    plan: Plan,
-) -> tuple[tuple[Path, ManifestMode, set[str], bool], ...]:
-    groups: dict[tuple[Path, ManifestMode], tuple[set[str], bool]] = {}
+def _generated_trees(plan: Plan) -> list[OwnedTree]:
+    return [tree for tree in plan.trees if not tree.declaration]
 
-    def add(root: Path, mode: ManifestMode, name: str | None, retired: bool) -> None:
-        current, was_retired = groups.setdefault((root, mode), (set(), retired))
-        if was_retired != retired:
-            raise ManagedEntryConflict(f"Conflicting managed root: {root}")
-        if name is not None:
-            current.add(name)
 
+def _managed_groups(plan: Plan) -> dict[tuple[Path, ManifestMode], set[str]]:
+    """Each manifest root and mode, with the entry names generated below it."""
+    groups: dict[tuple[Path, ManifestMode], set[str]] = {}
     for tree in plan.trees:
-        if tree.declaration or tree.retired:
-            if tree.manifest_root is None:
-                raise ManagedEntryConflict(f"Missing managed root: {tree.root}")
-            add(tree.manifest_root, tree.manifest_mode, None, tree.retired)
-        elif tree.manifest_root is not None:
-            add(
-                tree.manifest_root,
-                tree.manifest_mode,
-                tree.root.relative_to(tree.manifest_root).as_posix(),
-                False,
-            )
+        names = groups.setdefault((tree.manifest_root, tree.manifest_mode), set())
+        if not tree.declaration:
+            names.add(tree.root.relative_to(tree.manifest_root).as_posix())
     for file in plan.files:
-        if file.manifest_root is not None:
-            add(
-                file.manifest_root,
-                "file",
-                (
-                    file.path.relative_to(file.manifest_root).as_posix()
-                    if file.content is not None
-                    else None
-                ),
-                False,
-            )
-    return tuple(
-        (root, mode, current, retired)
-        for (root, mode), (current, retired) in groups.items()
-    )
-
-
-def _plan_producers(plan: Plan) -> dict[Path, OwnedFile | OwnedTree]:
-    producers: dict[Path, OwnedFile | OwnedTree] = {}
-    for file in plan.files:
-        if file.content is not None:
-            producers[file.path] = file
-    for tree in plan.trees:
-        if not tree.declaration and not tree.retired:
-            producers[tree.root] = tree
-    return producers
+        groups.setdefault((file.manifest_root, "file"), set()).add(
+            file.path.relative_to(file.manifest_root).as_posix()
+        )
+    return groups
 
 
 def _output_paths(plan: Plan) -> list[Path]:
     return [
-        *(file.path for file in plan.files if file.content is not None),
-        *(
-            tree.root
-            for tree in plan.trees
-            if not tree.declaration and not tree.retired
-        ),
+        *(file.path for file in plan.files),
+        *(tree.root for tree in _generated_trees(plan)),
     ]
 
 
 def _content_paths(plan: Plan) -> list[Path]:
     return [
-        *(file.path for file in plan.files if file.content is not None),
+        *(file.path for file in plan.files),
         *(
             tree.root / relative
-            for tree in plan.trees
-            if not tree.declaration and not tree.retired
+            for tree in _generated_trees(plan)
             for relative, _ in tree.files
         ),
     ]
@@ -195,15 +133,13 @@ def _managed_name(path: Path, root: Path, label: str) -> None:
 def _validate_paths(plan: Plan) -> None:
     for file in plan.files:
         _absolute(file.path, "OwnedFile path")
-        if file.manifest_root is not None:
-            _absolute(file.manifest_root, "OwnedFile manifest root")
-            _managed_name(file.path, file.manifest_root, "OwnedFile path")
+        _absolute(file.manifest_root, "OwnedFile manifest root")
+        _managed_name(file.path, file.manifest_root, "OwnedFile path")
     for tree in plan.trees:
         _absolute(tree.root, "OwnedTree root")
-        if tree.manifest_root is not None:
-            _absolute(tree.manifest_root, "OwnedTree manifest root")
-            if not tree.declaration and not tree.retired:
-                _managed_name(tree.root, tree.manifest_root, "OwnedTree root")
+        _absolute(tree.manifest_root, "OwnedTree manifest root")
+        if not tree.declaration:
+            _managed_name(tree.root, tree.manifest_root, "OwnedTree root")
         seen: set[Path] = set()
         for relative, _ in tree.files:
             if (
@@ -235,7 +171,7 @@ def _validate_plan(plan: Plan) -> None:
                     f"Overlapping generated paths: {path} and {other}"
                 )
 
-    for root, _, _, _ in _managed_groups(plan):
+    for root, _ in _managed_groups(plan):
         manifest = root / MANAGED_MANIFEST
         for path in _content_paths(plan):
             if _paths_overlap(path, manifest):
@@ -272,18 +208,16 @@ def _validate_plan(plan: Plan) -> None:
     ]
     for index, (target, path, pointer, _) in enumerate(generated):
         for _, other_path, other_pointer, _ in generated[:index]:
-            if path == other_path and _pointers_overlap(pointer, other_pointer):
+            if path == other_path and touches(pointer, other_pointer):
                 raise ValueError(f"Overlapping native pointers: {target} {pointer}")
     for index, (target, path, operation) in enumerate(operations):
         for _, other_path, other in operations[:index]:
-            if path == other_path and _pointers_overlap(
-                operation.pointer, other.pointer
-            ):
+            if path == other_path and touches(operation.pointer, other.pointer):
                 raise ValueError(
                     f"Overlapping native pointers: {target} {operation.pointer}"
                 )
         for _, other_path, pointer, value in generated:
-            if path != other_path or not _pointers_overlap(operation.pointer, pointer):
+            if path != other_path or not touches(operation.pointer, pointer):
                 continue
             if not contributes_to_generated(operation, pointer, value):
                 raise ValueError(
@@ -302,9 +236,12 @@ def _validate_plan(plan: Plan) -> None:
 
 def preflight_plan(plan: Plan) -> None:
     _validate_plan(plan)
-    producers = _plan_producers(plan)
-    for root, mode, current, retired in _managed_groups(plan):
-        previous = load_manifest(root / ".coding-agents-managed.json")
+    producers: dict[Path, OwnedFile | OwnedTree] = {
+        **{file.path: file for file in plan.files},
+        **{tree.root: tree for tree in _generated_trees(plan)},
+    }
+    for (root, mode), current in _managed_groups(plan).items():
+        previous = load_manifest(root / MANAGED_MANIFEST)
         desired: dict[str, str] = {}
         with TemporaryDirectory() as temporary:
             stage = Path(temporary)
@@ -314,7 +251,7 @@ def preflight_plan(plan: Plan) -> None:
                 if producer is None:
                     raise ManagedEntryConflict(f"Missing generated {mode}: {target}")
                 if isinstance(producer, OwnedFile):
-                    _write_owned_file(producer, stage / name)
+                    write_bytes(stage / name, producer.content)
                 else:
                     _write_owned_tree(producer, stage / name)
                 hash_ = entry_hash(stage / name, mode)
@@ -324,10 +261,7 @@ def preflight_plan(plan: Plan) -> None:
             for path in stage.rglob("*"):
                 if path.is_file():
                     _validate_structured(path)
-        if retired:
-            current = set()
-        previous_names = set(previous)
-        for name in current - previous_names:
+        for name in current - set(previous):
             target = root / name
             actual = entry_hash(target, mode)
             if (target.exists() or target.is_symlink()) and actual != desired[name]:
@@ -336,20 +270,7 @@ def preflight_plan(plan: Plan) -> None:
                 )
         for name, expected in previous.items():
             actual = entry_hash(root / name, mode)
-            if expected is None and name not in current and actual is not None:
-                raise ManagedEntryConflict(
-                    f"Refusing to prune legacy generated {mode} without a hash: "
-                    f"{root / name}"
-                )
-            if (
-                expected is not None
-                and actual is not None
-                and actual
-                not in {
-                    expected,
-                    desired.get(name),
-                }
-            ):
+            if actual is not None and actual not in {expected, desired.get(name)}:
                 raise ManagedEntryConflict(
                     f"Refusing to replace modified generated {mode}: {root / name}"
                 )
@@ -358,18 +279,9 @@ def preflight_plan(plan: Plan) -> None:
 def plan_drift(plan: Plan) -> tuple[Path, ...]:
     drift: set[Path] = set()
     for file in plan.files:
-        if file.content is None:
-            if (file.retire_if is None and file.path.exists()) or (
-                file.retire_if is not None
-                and file.path.is_file()
-                and file.path.read_bytes() == file.retire_if
-            ):
-                drift.add(file.path)
-        elif not file.path.is_file() or file.path.read_bytes() != file.content:
+        if not file.path.is_file() or file.path.read_bytes() != file.content:
             drift.add(file.path)
-    for tree in plan.trees:
-        if tree.declaration or tree.retired:
-            continue
+    for tree in _generated_trees(plan):
         actual = (
             {
                 path.relative_to(tree.root)
@@ -379,19 +291,14 @@ def plan_drift(plan: Plan) -> tuple[Path, ...]:
             if tree.root.is_dir()
             else set()
         )
-        expected = set(_tree_files(tree))
-        if actual != expected or any(
+        if actual != {relative for relative, _ in tree.files} or any(
             (tree.root / relative).read_bytes() != content
             for relative, content in tree.files
             if (tree.root / relative).is_file()
         ):
             drift.add(tree.root)
-    for root, mode, current, retired in _managed_groups(plan):
-        manifest_path = root / ".coding-agents-managed.json"
-        if retired:
-            if manifest_path.exists():
-                drift.add(manifest_path)
-            continue
+    for (root, mode), current in _managed_groups(plan).items():
+        manifest_path = root / MANAGED_MANIFEST
         manifest = load_manifest(manifest_path)
         if set(manifest) != current or any(
             expected != entry_hash(root / name, mode)
@@ -403,14 +310,11 @@ def plan_drift(plan: Plan) -> tuple[Path, ...]:
 
 def write_plan(plan: Plan) -> None:
     for file in plan.files:
-        _write_owned_file(file)
-    for tree in plan.trees:
+        write_bytes(file.path, file.content)
+    for tree in _generated_trees(plan):
         _write_owned_tree(tree)
 
 
 def publish_plan_manifests(plan: Plan) -> None:
-    for root, mode, current, retired in _managed_groups(plan):
-        if retired:
-            retire_manifested_entries(root, mode)
-        else:
-            sync_manifested_entries(root, current, mode)
+    for (root, mode), current in _managed_groups(plan).items():
+        sync_manifested_entries(root, current, mode)

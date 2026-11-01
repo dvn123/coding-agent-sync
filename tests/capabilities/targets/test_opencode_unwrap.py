@@ -34,7 +34,7 @@ RECORDER = "unwrap-recorder"
 TOOL = "unwrap-tool"
 REASON = "run unwrap-tool instead"
 POLICY = """\
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: permission-policy
 id: user
 name: user
@@ -46,7 +46,7 @@ targets:
   cursor: {omit: {unmatched: Cursor Desktop has no deny channel.}}
 """
 RULES = f"""\
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: permission-rules
 id: test
 name: test
@@ -58,7 +58,7 @@ targets:
   cursor: {{omit: {{commands.deny: Cursor Desktop has no deny channel.}}}}
 """
 ASK_POLICY = """\
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: permission-policy
 id: user
 name: user
@@ -66,7 +66,7 @@ description: permissions
 wrappers: [timeout]
 """
 ASK_RULES = f"""\
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: permission-rules
 id: test
 name: test

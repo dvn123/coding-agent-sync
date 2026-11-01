@@ -34,9 +34,10 @@ effect}` rules. OpenCode appends it after every agent's built-in rules and
 applies the last match, so each action's catch-all precedes its narrower
 rules: `shell *` carries the policy's `unmatched` decision, then the allow,
 ask, and deny buckets follow in that order. The `edit` action also gates the
-write and patch tools. A patch may retire the legacy `/permission` map and may
-extend `/permissions` with any rule except one whose action matches `shell`,
-since command policy has one writer.
+write and patch tools. A patch may not touch the V1 `/permission` map, which
+OpenCode applies ahead of the native list, and may extend `/permissions` with
+any rule except one whose action matches `shell`, since command policy has one
+writer.
 
 Named agents resolve `model_policy` before rendering. The `sweet-spot` profile
 emits its model and `reasoningEffort`; `inherit` emits neither, so the agent

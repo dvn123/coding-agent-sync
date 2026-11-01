@@ -10,31 +10,12 @@ from pathlib import Path
 from typing import Literal
 
 MANAGED_MANIFEST = ".coding-agents-managed.json"
-MANIFEST_VERSION = 1
 
-type Manifest = dict[str, str | None]
+type Manifest = dict[str, str]
 
 
 class ManagedEntryConflict(RuntimeError):
     pass
-
-
-def write_text(path: Path, content: str) -> None:
-    if path.exists() and path.is_file() and path.read_text(encoding="utf-8") == content:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, mode)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 def owner_execute_mode(path: Path, executable: bool) -> int:
@@ -67,13 +48,6 @@ def write_bytes(path: Path, content: bytes, *, executable: bool = False) -> None
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-
-
-def write_optional_text(path: Path, content: str | None) -> None:
-    if content is None:
-        path.unlink(missing_ok=True)
-    else:
-        write_text(path, content)
 
 
 def _managed_path(root: Path, name: str) -> Path:
@@ -115,36 +89,24 @@ def load_manifest(path: Path) -> Manifest:
     if not path.exists():
         return {}
     try:
-        parsed = json.loads(path.read_text(encoding="utf-8"))
-        manifest: Manifest
-        if isinstance(parsed, list):
-            manifest = {str(item): None for item in parsed}
-        elif (
-            isinstance(parsed, dict)
-            and parsed.get("version") == MANIFEST_VERSION
-            and isinstance(parsed.get("entries"), dict)
-            and all(
-                isinstance(name, str)
-                and isinstance(value, str)
-                and value.startswith("sha256:")
-                for name, value in parsed["entries"].items()
-            )
-        ):
-            manifest = {
-                str(name): str(value) for name, value in parsed["entries"].items()
-            }
-        else:
-            raise ValueError(f"Invalid managed manifest: {path}")
-    except json.JSONDecodeError as error:
+        entries = json.loads(path.read_text(encoding="utf-8"))["entries"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
         raise ValueError(f"Invalid managed manifest: {path}") from error
-    for name in manifest:
+    if not isinstance(entries, dict) or not all(
+        isinstance(value, str) and value.startswith("sha256:")
+        for value in entries.values()
+    ):
+        raise ValueError(f"Invalid managed manifest: {path}")
+    for name in entries:
         _managed_path(path.parent, name)
-    return manifest
+    return entries
 
 
-def write_manifest(path: Path, entries: dict[str, str]) -> None:
-    content = {"version": MANIFEST_VERSION, "entries": dict(sorted(entries.items()))}
-    write_text(path, json.dumps(content, indent=2, ensure_ascii=False) + "\n")
+def write_manifest(path: Path, entries: Manifest) -> None:
+    content = json.dumps(
+        {"entries": dict(sorted(entries.items()))}, indent=2, ensure_ascii=False
+    )
+    write_bytes(path, (content + "\n").encode())
 
 
 def prune_stale_entries(
@@ -159,13 +121,8 @@ def prune_stale_entries(
         target = _managed_path(target_root, name)
         if target.is_symlink():
             continue
-        expected = previous[name]
         actual = entry_hash(target, mode)
-        if expected is None and actual is not None:
-            raise ManagedEntryConflict(
-                f"Refusing to prune legacy generated {mode} without a hash: {target}"
-            )
-        if actual is not None and actual != expected:
+        if actual is not None and actual != previous[name]:
             raise ManagedEntryConflict(
                 f"Refusing to prune modified generated {mode}: {target}"
             )
@@ -183,21 +140,10 @@ def sync_manifested_entries(
     prune_stale_entries(
         target_root=target_root, previous=previous, current=current, mode=mode
     )
-    entries: dict[str, str] = {}
+    entries: Manifest = {}
     for name in current:
         target = _managed_path(target_root, name)
         if (hash_ := entry_hash(target, mode)) is None:
             raise ManagedEntryConflict(f"Managed {mode} is missing or unsafe: {target}")
         entries[name] = hash_
     write_manifest(target_root / MANAGED_MANIFEST, entries)
-
-
-def retire_manifested_entries(target_root: Path, mode: Literal["dir", "file"]) -> None:
-    manifest_path = target_root / MANAGED_MANIFEST
-    prune_stale_entries(
-        target_root=target_root,
-        previous=load_manifest(manifest_path),
-        current=set(),
-        mode=mode,
-    )
-    manifest_path.unlink(missing_ok=True)

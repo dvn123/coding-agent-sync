@@ -19,9 +19,12 @@ from pydantic import (
     model_validator,
 )
 
-from .metadata import to_snake
 
-SCHEMA = "coding-agents/v4"
+def to_snake(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+SCHEMA = "coding-agents/v1"
 type SourceKind = Literal["global", "rule", "skill", "command", "agent"]
 
 TOOL_NAMES: frozenset[str] = frozenset({"claude", "cursor", "opencode", "codex"})
@@ -422,7 +425,7 @@ class WorkspacePermissions(StrictModel):
 
 
 class PermissionPolicyDocument(StrictModel):
-    schema_: Literal["coding-agents/v4"] = Field(alias="schema")
+    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
     kind: Literal["permission-policy"]
     id: str
     name: str
@@ -494,7 +497,7 @@ class PermissionPolicyDocument(StrictModel):
 
 
 class PermissionRulesDocument(StrictModel):
-    schema_: Literal["coding-agents/v4"] = Field(alias="schema")
+    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
     kind: Literal["permission-rules"]
     id: str
     name: str
@@ -1080,9 +1083,6 @@ def load_sources(config_root: Path) -> SourceBundle:
     permission_root = config_root / "permissions"
     permission_errors: list[str] = []
     permissions: list[PermissionSource] = []
-    if (config_root / "permissions.yaml").exists():
-        legacy = config_root / "permissions.yaml"
-        permission_errors.append(f"{legacy}: legacy permission source is unsupported")
     if permission_root.exists():
         try:
             permissions.append(

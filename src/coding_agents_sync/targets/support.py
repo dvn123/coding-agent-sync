@@ -135,9 +135,7 @@ def declared_trees(
 ) -> list[OwnedTree]:
     """One manifest-owned tree per managed directory below `root`."""
     return [
-        OwnedTree(
-            root / name, manifest_root=root / name, manifest_mode=mode, declaration=True
-        )
+        OwnedTree(root / name, (), root / name, manifest_mode=mode, declaration=True)
         for name, mode in roots
     ]
 
@@ -230,12 +228,7 @@ def raw_files(
     excluded: Iterable[Path],
 ) -> tuple[tuple[OwnedFile, ...], OwnedTree, tuple[Diagnostic, ...]]:
     source_root = config_root / "target-config" / target / "raw"
-    declaration = OwnedTree(
-        root,
-        manifest_root=root,
-        manifest_mode="file",
-        declaration=True,
-    )
+    declaration = OwnedTree(root, (), root, manifest_mode="file", declaration=True)
     if not source_root.exists():
         return (), declaration, ()
     if source_root.is_symlink() or not source_root.is_dir():

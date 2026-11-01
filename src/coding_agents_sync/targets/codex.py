@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import tomlkit
 import yaml
-from pydantic import AliasChoices, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, ConfigDict, Field
 
 from ..models import SyncContext
 from ..patches import Patch, validate_generated_conflicts
@@ -36,7 +36,6 @@ from .support import (
     frontmatter,
     native_patch,
     omissions,
-    one_of,
     raw_files,
     strict_native,
     unhandled_target_block,
@@ -101,7 +100,6 @@ class CodexSkillNative(StrictModel):
 
 # SandboxMode in codex-rs/protocol/src/config_types.rs. `external-sandbox`
 # is excluded: that enum is SandboxModeRequirement, which config.toml rejects.
-CODEX_SANDBOX_MODES = frozenset({"read-only", "workspace-write", "danger-full-access"})
 
 
 class CodexAgentFeatures(StrictModel):
@@ -144,13 +142,7 @@ class CodexAgentNative(StrictModel):
     model_verbosity: Literal["low", "medium", "high"] | None = None
     features: CodexAgentFeatures | None = None
     skills: CodexAgentSkills | None = None
-    sandbox_mode: str | None = None
     nickname_candidates: list[str] | None = None
-
-    @field_validator("sandbox_mode")
-    @classmethod
-    def _validate_sandbox_mode(cls, value: str | None) -> str | None:
-        return one_of("sandbox_mode", value, CODEX_SANDBOX_MODES)
 
 
 def _tree(
@@ -305,12 +297,8 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         parts = [globals_[0].body.rstrip()] if globals_ else []
         parts.extend(rule.body.rstrip() for rule in rules_)
         files.append(
-            OwnedFile(root / "AGENTS.md", ("\n\n".join(parts) + "\n").encode())
+            OwnedFile(root / "AGENTS.md", ("\n\n".join(parts) + "\n").encode(), root)
         )
-    elif sources.globals or sources.rules:
-        # Every global/rule was filtered by `only`. This host file is compiler-
-        # owned whenever those sources exist, so retire it unconditionally.
-        files.append(OwnedFile(root / "AGENTS.md", None))
     rules: list[tuple[str, CodexPrefixRule]] = []
     for rule in rules_:
         value = block(rule, "codex")
@@ -409,16 +397,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                         "model_reasoning_effort": policy.effort,
                     }
                 )
-        if native and native.sandbox_mode:
-            diagnostics.append(
-                Diagnostic(
-                    "warning",
-                    "custom agent sandbox_mode does not override the parent "
-                    "sandbox in current ChatGPT/Codex; "
-                    "configure the parent session instead",
-                    agent.path,
-                )
-            )
         if native:
             try:
                 content = _agent_toml(agent, native, value.raw)

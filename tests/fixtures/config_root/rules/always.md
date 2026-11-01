@@ -1,5 +1,5 @@
 ---
-schema: coding-agents/v4
+schema: coding-agents/v1
 kind: rule
 id: fixture-always
 name: Fixture always rule
