@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Mapping, MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -8,7 +6,7 @@ from typing import Any, Literal
 
 import yaml
 
-from .io import load_yaml
+from ..io import load_yaml
 
 type Pointer = tuple[str, ...]
 type OperationKind = Literal["set", "replace", "delete", "extend", "overlay"]

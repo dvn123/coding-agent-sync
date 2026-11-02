@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 import os
 import platform
+import pwd
 import shutil
 import subprocess
 import tarfile
@@ -133,6 +132,13 @@ def _command_output(*command: str, timeout: int = 15) -> str:
     return (result.stdout or result.stderr).strip()
 
 
+# The account's own home, not the sandbox HOME each test runs under.
+CURSOR_RUNTIME_CACHE = (
+    Path(pwd.getpwuid(os.getuid()).pw_dir)
+    / "Library/Caches/coding-agents-capabilities/cursor"
+)
+
+
 def resolve_cursor_local(*, allow_download: bool = False) -> tuple[Path | None, str]:
     executable = shutil.which("cursor-agent")
     if not executable:
@@ -143,11 +149,7 @@ def resolve_cursor_local(*, allow_download: bool = False) -> tuple[Path | None, 
         machine = {"arm64": "arm64", "x86_64": "x64"}.get(platform.machine())
         if not version_id or not system or not machine:
             raise RuntimeError("unsupported Cursor local-runtime platform")
-        cache = (
-            Path.home()
-            / "Library/Caches/coding-agents-capabilities/cursor"
-            / version_id
-        )
+        cache = CURSOR_RUNTIME_CACHE / version_id
         candidates = list(cache.rglob("cursor-agent-local")) if cache.exists() else []
         if not candidates:
             if not allow_download:

@@ -1,15 +1,19 @@
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 
 from coding_agents_sync.io import MANAGED_MANIFEST, ManagedEntryConflict
-from coding_agents_sync.patches import Operation
-from coding_agents_sync.plan import NativePatch, NativeValue, OwnedFile, OwnedTree, Plan
-from coding_agents_sync.runtime_config import prepare_plan_native
+from coding_agents_sync.output.native import prepare_plan_native
+from coding_agents_sync.output.patches import Operation
+from coding_agents_sync.output.plan import (
+    NativePatch,
+    NativeValue,
+    OwnedFile,
+    OwnedTree,
+    Plan,
+)
+from coding_agents_sync.output.writer import preflight_plan
 from coding_agents_sync.sync import Transaction, reconcile
-from coding_agents_sync.writer import preflight_plan
 
 
 def test_plan_rejects_file_collisions(tmp_path: Path) -> None:

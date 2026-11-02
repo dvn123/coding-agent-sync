@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import stat
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -9,15 +7,47 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from ..io import MANAGED_MANIFEST, is_incidental
-from ..patches import load_patch, merge_patches
-from ..plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
+from ..ir import applies_to, omissions, resolve, unhandled_target_block
+from ..output.patches import load_patch, merge_patches
+from ..output.plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
 from ..sources import (
     CommandPermission,
+    McpServerSource,
     PermissionSource,
     SourceBundle,
+    StrictModel,
     TargetBlock,
     ToolName,
 )
+
+
+class McpNative(StrictModel):
+    # The command one target runs instead, such as an absolute path for an
+    # agent that starts servers without the login shell's PATH.
+    command: str | None = None
+
+
+def mcp_servers(
+    sources: SourceBundle, target: ToolName
+) -> tuple[list[tuple[str, dict[str, Any]]], list[Diagnostic]]:
+    """Each server `target` receives, as its id and its fields with empty ones
+    left out: `command`, `args`, and `env` for a local server, `url` for a
+    remote one."""
+    resolved, diagnostics = resolve(target, sources.mcp_servers, McpNative, raw=False)
+    return [
+        (server.source.id, _mcp_fields(server.source, server.native.command))
+        for server in resolved
+    ], diagnostics
+
+
+def _mcp_fields(server: McpServerSource, command: str | None) -> dict[str, Any]:
+    if server.url is not None:
+        return {"url": server.url}
+    return {
+        "command": command or server.command,
+        **({"args": list(server.args)} if server.args else {}),
+        **({"env": dict(server.env)} if server.env else {}),
+    }
 
 
 def one_of(field: str, value: str | None, allowed: frozenset[str]) -> str | None:
@@ -106,12 +136,6 @@ def shared_skill(skill: Any) -> bool:
     return all(applies_to(skill, target) for target in SHARED_SKILL_READERS)
 
 
-def applies_to(source: Any, target: str) -> bool:
-    """Whether this portable artifact should emit (and owe omits) on `target`."""
-    only = getattr(source, "only", ())
-    return not only or target in only
-
-
 def skill_collisions(sources: SourceBundle, target: ToolName) -> set[str]:
     """Commands this target lowers to skills that a skill already names.
 
@@ -134,50 +158,6 @@ def collision_error(command: Any) -> Diagnostic:
         f"would answer /{command.stem}",
         command.path,
     )
-
-
-def block(source: Any, target: str) -> TargetBlock:
-    return source.targets.root.get(target, TargetBlock())
-
-
-def omissions(
-    source: Path, target: str, value: TargetBlock, required: set[str]
-) -> tuple[Diagnostic, ...]:
-    diagnostics: list[Diagnostic] = []
-    for path in sorted(required - set(value.omit)):
-        diagnostics.append(
-            Diagnostic(
-                "error",
-                f"{path} is unsupported on {target}; add targets.{target}.omit.{path}",
-                source,
-            )
-        )
-    # An acknowledged omission is silent: its reason lives in the source.
-    for path in value.omit:
-        if path not in required:
-            diagnostics.append(
-                Diagnostic(
-                    "error",
-                    f"{path} is not an omitted {target} capability",
-                    source,
-                )
-            )
-    return tuple(diagnostics)
-
-
-def unhandled_target_block(
-    source: Path, target: str, value: TargetBlock
-) -> tuple[Diagnostic, ...]:
-    diagnostics: list[Diagnostic] = []
-    if value.native:
-        diagnostics.append(
-            Diagnostic("error", f"{target} native fields are not valid here", source)
-        )
-    if value.raw:
-        diagnostics.append(
-            Diagnostic("error", f"{target} raw fields are not valid here", source)
-        )
-    return tuple(diagnostics)
 
 
 def declared_trees(
@@ -206,17 +186,6 @@ def command_target_diagnostics(
             *omissions(path, target, value, required(intent)),
         )
     )
-
-
-def strict_native[T: BaseModel](
-    source: Path, target: str, value: TargetBlock, model: type[T]
-) -> tuple[T | None, tuple[Diagnostic, ...]]:
-    try:
-        return model.model_validate(value.native), ()
-    except ValidationError as exc:
-        return None, (
-            Diagnostic("error", f"invalid {target} native fields: {exc}", source),
-        )
 
 
 def frontmatter(

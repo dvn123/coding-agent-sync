@@ -1,0 +1,12 @@
+{
+  "approvalMode": "allowlist",
+  "terminalAllowlist": [
+    "fixture-tool status",
+    "fixture-tool -C status",
+    "fixture-tool:-C * status",
+    "fixture-tool:-C * status *"
+  ],
+  "fixture": {
+    "cursor_desktop": true
+  }
+}

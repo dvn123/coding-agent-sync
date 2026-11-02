@@ -11,8 +11,6 @@ wildcard grammar, the peeling of assignments, program paths, and wrappers
 before deny and ask rules, and the retry behind a bare `xargs`.
 """
 
-from __future__ import annotations
-
 import collections
 import json
 import re

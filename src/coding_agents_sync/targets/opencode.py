@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import fnmatch
 import functools
 import json
@@ -10,15 +8,16 @@ from typing import Any, Literal
 
 from pydantic import ConfigDict, field_validator
 
+from ..ir import applies_to, resolve
 from ..models import SyncContext
-from ..patches import (
+from ..output.patches import (
     Patch,
     PatchError,
     display_pointer,
     touches,
     validate_generated_conflicts,
 )
-from ..plan import (
+from ..output.plan import (
     Diagnostic,
     NativePatch,
     NativeValue,
@@ -47,20 +46,16 @@ from .permissions import (
     wrapper_prefixes,
 )
 from .support import (
-    applies_to,
-    block,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
     markdown,
+    mcp_servers,
     native_patch,
-    omissions,
     one_of,
     raw_files,
     shared_skill,
     skill_tree,
-    strict_native,
-    unhandled_target_block,
     with_skill_scripts,
 )
 
@@ -142,10 +137,8 @@ def opencode_skill(
     skill: SkillSource, root: Path
 ) -> tuple[tuple[OwnedTree, ...], list[Diagnostic]]:
     """The skill's tree below `root`, if its native block validates."""
-    value = block(skill, "opencode")
-    native, issues = strict_native(skill.path, "opencode", value, OpenCodeSkillNative)
-    diagnostics = [*issues, *omissions(skill.path, "opencode", value, set())]
-    if not native:
+    resolved, diagnostics = resolve("opencode", [skill], OpenCodeSkillNative)
+    if not resolved:
         return (), diagnostics
     meta, issues = frontmatter(
         skill.path,
@@ -160,8 +153,8 @@ def opencode_skill(
                 else {}
             ),
         },
-        native,
-        value.raw,
+        resolved[0].native,
+        resolved[0].raw,
     )
     return (skill_tree(skill, root, meta),), [*diagnostics, *issues]
 
@@ -225,6 +218,17 @@ def deny_reasons(permissions: PermissionSource) -> dict[str, str]:
         for _bucket, _origin, pattern in shell_entries(alone):
             reasons.setdefault(pattern, rule.reason)
     return reasons
+
+
+def _opencode_server(fields: dict[str, Any]) -> dict[str, Any]:
+    """OpenCode's native server shape: one command array, `environment`."""
+    if "url" in fields:
+        return {"type": "remote", "url": fields["url"]}
+    return {
+        "type": "local",
+        "command": [fields["command"], *fields.get("args", ())],
+        **({"environment": fields["env"]} if "env" in fields else {}),
+    }
 
 
 def _permissions(
@@ -309,23 +313,21 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             ("agents", "file"),
         ),
     )
-    diagnostics = []
-    globals_ = [item for item in sources.globals if applies_to(item, "opencode")]
-    rules_ = [item for item in sources.rules if applies_to(item, "opencode")]
-    for source in (*globals_[:1], *rules_):
-        value = block(source, "opencode")
-        diagnostics.extend(unhandled_target_block(source.path, "opencode", value))
-        diagnostics.extend(omissions(source.path, "opencode", value, set()))
-    if globals_:
-        files.append(
-            OwnedFile(
-                root / "AGENTS.md", (globals_[0].body.rstrip() + "\n").encode(), root
-            )
-        )
+    diagnostics: list[Diagnostic] = []
+    globals_, issues = resolve("opencode", sources.globals[:1])
+    diagnostics.extend(issues)
+    rules_, issues = resolve("opencode", sources.rules)
+    diagnostics.extend(issues)
     files.extend(
         OwnedFile(
-            root / "rules" / f"{rule.stem}.md",
-            (rule.body.rstrip() + "\n").encode(),
+            root / "AGENTS.md", (global_.source.body.rstrip() + "\n").encode(), root
+        )
+        for global_ in globals_
+    )
+    files.extend(
+        OwnedFile(
+            root / "rules" / f"{rule.source.stem}.md",
+            (rule.source.body.rstrip() + "\n").encode(),
             root / "rules",
         )
         for rule in rules_
@@ -335,52 +337,36 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             tree, issues = opencode_skill(skill, root / "skills")
             diagnostics.extend(issues)
             trees.extend(tree)
-    for command in sources.commands:
-        if not applies_to(command, "opencode"):
-            continue
-        value = block(command, "opencode")
-        native, issues = strict_native(
-            command.path, "opencode", value, OpenCodeCommandNative
+    commands, issues = resolve("opencode", sources.commands, OpenCodeCommandNative)
+    diagnostics.extend(issues)
+    for resolved in commands:
+        command = resolved.source
+        command_meta: dict[str, Any] = {"description": command.description}
+        if command.execution.agent:
+            command_meta["agent"] = command.execution.agent
+        if command.execution.subtask:
+            command_meta["subagent"] = True
+        meta, issues = frontmatter(
+            command.path, command_meta, resolved.native, resolved.raw
         )
         diagnostics.extend(issues)
-        diagnostics.extend(omissions(command.path, "opencode", value, set()))
-        if native:
-            command_meta: dict[str, Any] = {"description": command.description}
-            if command.execution.agent:
-                command_meta["agent"] = command.execution.agent
-            if command.execution.subtask:
-                command_meta["subagent"] = True
-            meta, issues = frontmatter(command.path, command_meta, native, value.raw)
-            diagnostics.extend(issues)
-            files.append(
-                OwnedFile(
-                    root / "commands" / command.path.name,
-                    markdown(meta, command.body),
-                    root / "commands",
-                )
-            )
-    for agent in sources.agents:
-        if not applies_to(agent, "opencode"):
-            continue
-        value = block(agent, "opencode")
-        native, issues = strict_native(
-            agent.path, "opencode", value, OpenCodeAgentNative
-        )
-        diagnostics.extend(issues)
-        diagnostics.extend(
-            omissions(
-                agent.path,
-                "opencode",
-                value,
-                {"background"} if agent.background else set(),
+        files.append(
+            OwnedFile(
+                root / "commands" / command.path.name,
+                markdown(meta, command.body),
+                root / "commands",
             )
         )
+    agents, issues = resolve("opencode", sources.agents, OpenCodeAgentNative)
+    diagnostics.extend(issues)
+    for resolved in agents:
+        agent, native = resolved.source, resolved.native
         policy = resolve_model_policy(sources, agent, "opencode")
         effort = agent.effort
         if policy is not None:
-            native_body = (value.native.get("request") or {}).get("body") or {}
+            native_body = (resolved.block.native.get("request") or {}).get("body") or {}
             conflicts = {
-                *({"model"} & (set(value.native) | set(value.raw))),
+                *({"model"} & (set(resolved.block.native) | set(resolved.raw))),
                 *(
                     {"request.body.reasoningEffort"}
                     if "reasoningEffort" in native_body or agent.effort
@@ -396,48 +382,43 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                         agent.path,
                     )
                 )
-            if native:
-                native = native.model_copy(update={"model": policy.model})
+            native = native.model_copy(update={"model": policy.model})
             effort = policy.effort
-        if native:
-            agent_meta: dict[str, Any] = {"description": agent.description}
-            if agent.color:
-                agent_meta["color"] = PORTABLE_COLORS.get(agent.color, agent.color)
-            meta, issues = frontmatter(agent.path, agent_meta, native, value.raw)
-            diagnostics.extend(issues)
-            # The provider receives `request.body`, where OpenCode's own v1
-            # migration also puts a top-level `reasoningEffort`.
-            if effort:
-                request = dict(meta.get("request") or {})
-                request["body"] = {"reasoningEffort": effort, **request.get("body", {})}
-                meta["request"] = request
-            # Checked after the merge because a portable `color` reaches this
-            # frontmatter too, and only a native override replaces it.
-            if (color := meta.get("color")) is not None and not _opencode_color(color):
-                diagnostics.append(
-                    Diagnostic(
-                        "error",
-                        f"agent color {color!r} is not an OpenCode color; use "
-                        f"#RRGGBB or one of {sorted(PORTABLE_COLORS)}",
-                        agent.path,
-                    )
-                )
-            files.append(
-                OwnedFile(
-                    root / "agents" / agent.path.name,
-                    markdown(meta, agent.body),
-                    root / "agents",
+        agent_meta: dict[str, Any] = {"description": agent.description}
+        if agent.color:
+            agent_meta["color"] = PORTABLE_COLORS.get(agent.color, agent.color)
+        meta, issues = frontmatter(agent.path, agent_meta, native, resolved.raw)
+        diagnostics.extend(issues)
+        # The provider receives `request.body`, where OpenCode's own v1
+        # migration also puts a top-level `reasoningEffort`.
+        if effort:
+            request = dict(meta.get("request") or {})
+            request["body"] = {"reasoningEffort": effort, **request.get("body", {})}
+            meta["request"] = request
+        # Checked after the merge because a portable `color` reaches this
+        # frontmatter too, and only a native override replaces it.
+        if (color := meta.get("color")) is not None and not _opencode_color(color):
+            diagnostics.append(
+                Diagnostic(
+                    "error",
+                    f"agent color {color!r} is not an OpenCode color; use "
+                    f"#RRGGBB or one of {sorted(PORTABLE_COLORS)}",
+                    agent.path,
                 )
             )
+        files.append(
+            OwnedFile(
+                root / "agents" / agent.path.name,
+                markdown(meta, agent.body),
+                root / "agents",
+            )
+        )
     folded = fold_edit_write(
         sources.permissions.tools if sources.permissions else {}, "OpenCode"
     )
     if permissions := sources.permissions:
-        value = block(permissions, "opencode")
-        diagnostics.extend(
-            unhandled_target_block(permissions.paths[0], "opencode", value)
-        )
-        diagnostics.extend(omissions(permissions.paths[0], "opencode", value, set()))
+        _, issues = resolve("opencode", [permissions])
+        diagnostics.extend(issues)
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         diagnostics.extend(command_target_diagnostics(permissions, "opencode"))
@@ -457,8 +438,15 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
         )
     rules_glob = f"~/{(root / 'rules').relative_to(ctx.home).as_posix()}/*.md"
+    servers, issues = mcp_servers(sources, "opencode")
+    diagnostics.extend(issues)
     native_values = (
         *_permissions(sources, config, folded[0]),
+        *(
+            NativeValue("opencode", config, ("mcp", "servers", name, key), value)
+            for name, fields in servers
+            for key, value in _opencode_server(fields).items()
+        ),
         *(
             (NativeValue("opencode", config, ("instructions",), [rules_glob]),)
             if rules_

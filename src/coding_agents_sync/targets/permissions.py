@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import itertools
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -242,15 +240,6 @@ def tool_patterns(
             for tool, chosen in sorted(tools.items())
             if chosen == decision and tool in native
         )
-    )
-
-
-def has_directories(workspace: WorkspacePermissions) -> bool:
-    return bool(
-        workspace.allow
-        or workspace.ask
-        or workspace.deny
-        or workspace.unmatched != "ask"
     )
 
 

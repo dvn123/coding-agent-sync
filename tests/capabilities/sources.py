@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-
 def source_document(
     kind: str, identifier: str, name: str, description: str, body: str, extra: str = ""
 ) -> str:

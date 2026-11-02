@@ -1,0 +1,25 @@
+default_permissions = "coding-agents"
+
+[permissions.coding-agents]
+description = "Neutral fixture permission policy."
+extends = ":workspace"
+
+[permissions.coding-agents.filesystem]
+"<tmp>/home/fixture-shared" = "write"
+"/**/.env" = "deny"
+
+[shell_environment_policy]
+exclude = ["FIXTURE_TOKEN"]
+
+[mcp_servers.fixture-local]
+command = "fixture-mcp"
+args = ["--stdio"]
+
+[mcp_servers.fixture-local.env]
+FIXTURE_MODE = "neutral"
+
+[mcp_servers.fixture-remote]
+url = "https://mcp.example.test/mcp"
+
+[fixture]
+codex = true

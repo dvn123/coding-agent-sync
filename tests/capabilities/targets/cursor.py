@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import pwd
 import shutil
@@ -9,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from capabilities.harness import Paths, require_command, sanitized_env
+from capabilities.harness import (
+    CURSOR_RUNTIME_CACHE,
+    Paths,
+    require_command,
+    sanitized_env,
+)
 from capabilities.runtime import Seatbelt, loopback_seatbelt
 
 
@@ -23,9 +26,7 @@ def local_executable() -> str | None:
     if not installed:
         return None
     version_id = version(installed).rsplit(" ", 1)[-1]
-    cache = (
-        Path.home() / "Library/Caches/coding-agents-capabilities/cursor" / version_id
-    )
+    cache = CURSOR_RUNTIME_CACHE / version_id
     return next(
         (
             str(path)
@@ -61,6 +62,8 @@ def version(executable: str) -> str:
             text=True,
             check=False,
             timeout=15,
+            # The installed wrapper resolves its install from the real home.
+            env=os.environ | {"HOME": pwd.getpwuid(os.getuid()).pw_dir},
         )
     except OSError, subprocess.TimeoutExpired:
         return ""

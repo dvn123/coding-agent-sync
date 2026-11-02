@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -13,9 +11,10 @@ from pydantic import (
     model_validator,
 )
 
+from ..ir import resolve
 from ..models import SyncContext
-from ..patches import Patch, validate_generated_conflicts
-from ..plan import (
+from ..output.patches import Patch, validate_generated_conflicts
+from ..output.plan import (
     Diagnostic,
     NativePatch,
     NativeValue,
@@ -48,21 +47,17 @@ from .permissions import (
     tool_patterns,
 )
 from .support import (
-    applies_to,
-    block,
     collision_error,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
     markdown,
+    mcp_servers,
     native_patch,
-    omissions,
     one_of,
     raw_files,
     skill_collisions,
     skill_tree,
-    strict_native,
-    unhandled_target_block,
     with_skill_scripts,
 )
 
@@ -266,7 +261,14 @@ def _permission_values(
         (
             ("permissions", "ask"),
             [f"Bash({pattern})" for pattern in buckets["ask"]]
-            + list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "ask")),
+            + list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "ask"))
+            # An ask directory stays out of additionalDirectories; its ask rules
+            # outrank the broader `Read(//**)` and `Edit(//**)` allows.
+            + [
+                f"{operation}({claude_path(directory)}/**)"
+                for directory in workspace.ask
+                for operation in ("Read", "Edit")
+            ],
         ),
     ]
     deny += list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "deny"))
@@ -289,12 +291,13 @@ def _permission_values(
 def _validate_patches(
     patches: list[NativePatch], generated: tuple[NativeValue, ...]
 ) -> None:
-    values = {
-        value.pointer: value.value for value in generated if value.target == "claude"
-    }
     for patch in patches:
-        if patch.target == "claude":
-            validate_generated_conflicts(Patch(patch.operations), values)
+        values = {
+            value.pointer: value.value
+            for value in generated
+            if value.target == patch.target
+        }
+        validate_generated_conflicts(Patch(patch.operations), values)
 
 
 def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
@@ -304,101 +307,86 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     trees = declared_trees(
         root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
     )
-    diagnostics = []
-    for global_source in sources.globals[:1]:
-        if not applies_to(global_source, "claude"):
-            continue
-        value = block(global_source, "claude")
-        diagnostics.extend(unhandled_target_block(global_source.path, "claude", value))
-        diagnostics.extend(omissions(global_source.path, "claude", value, set()))
+    diagnostics: list[Diagnostic] = []
+    globals_, issues = resolve("claude", sources.globals[:1])
+    diagnostics.extend(issues)
+    for global_ in globals_:
         files.append(
             OwnedFile(
                 root / "CLAUDE.md",
-                (global_source.body.rstrip() + "\n").encode(),
+                (global_.source.body.rstrip() + "\n").encode(),
                 root,
             )
         )
-    for rule in sources.rules:
-        if not applies_to(rule, "claude"):
-            continue
-        value = block(rule, "claude")
-        diagnostics.extend(unhandled_target_block(rule.path, "claude", value))
-        diagnostics.extend(omissions(rule.path, "claude", value, set()))
+    rules, issues = resolve("claude", sources.rules)
+    diagnostics.extend(issues)
+    for rule in rules:
         files.append(
             OwnedFile(
-                root / "rules" / f"{rule.stem}.md",
-                (rule.body.rstrip() + "\n").encode(),
+                root / "rules" / f"{rule.source.stem}.md",
+                (rule.source.body.rstrip() + "\n").encode(),
                 root / "rules",
             )
         )
-    for skill in sources.skills:
-        if not applies_to(skill, "claude"):
-            continue
-        value = block(skill, "claude")
-        native, issues = strict_native(skill.path, "claude", value, ClaudeSkillNative)
+    skills, issues = resolve("claude", sources.skills, ClaudeSkillNative)
+    diagnostics.extend(issues)
+    for resolved in skills:
+        skill = resolved.source
+        meta, issues = frontmatter(
+            skill.path,
+            {
+                "name": skill.name,
+                "description": skill.description,
+                **({"license": skill.license} if skill.license else {}),
+                **({"metadata": skill.metadata} if skill.metadata else {}),
+                **({"paths": skill.paths} if skill.paths else {}),
+                **(
+                    {"disable-model-invocation": True}
+                    if skill.disable_model_invocation
+                    else {}
+                ),
+            },
+            resolved.native,
+            resolved.raw,
+        )
         diagnostics.extend(issues)
-        diagnostics.extend(omissions(skill.path, "claude", value, set()))
-        if native:
-            meta, issues = frontmatter(
-                skill.path,
-                {
-                    "name": skill.name,
-                    "description": skill.description,
-                    **({"license": skill.license} if skill.license else {}),
-                    **({"metadata": skill.metadata} if skill.metadata else {}),
-                    **({"paths": skill.paths} if skill.paths else {}),
-                    **(
-                        {"disable-model-invocation": True}
-                        if skill.disable_model_invocation
-                        else {}
-                    ),
-                },
-                native,
-                value.raw,
-            )
-            diagnostics.extend(issues)
-            trees.append(skill_tree(skill, root / "skills", meta))
+        trees.append(skill_tree(skill, root / "skills", meta))
     collisions = skill_collisions(sources, "claude")
-    for command in sources.commands:
-        if not applies_to(command, "claude"):
-            continue
+    # Claude merged commands into skills: a skill answers the same `/name` and
+    # takes the same frontmatter.
+    commands, issues = resolve("claude", sources.commands, ClaudeSkillNative)
+    diagnostics.extend(issues)
+    for resolved in commands:
+        command = resolved.source
         if command.stem in collisions:
             diagnostics.append(collision_error(command))
             continue
-        value = block(command, "claude")
-        # Claude merged commands into skills: a skill answers the same
-        # `/name` and takes the same frontmatter.
-        native, issues = strict_native(command.path, "claude", value, ClaudeSkillNative)
+        canonical = {"name": command.stem, "description": command.description}
+        if command.execution.agent:
+            canonical["agent"] = command.execution.agent
+        if command.execution.subtask:
+            canonical["context"] = "fork"
+        meta, issues = frontmatter(
+            command.path, canonical, resolved.native, resolved.raw
+        )
         diagnostics.extend(issues)
-        diagnostics.extend(omissions(command.path, "claude", value, set()))
-        if native:
-            canonical = {"name": command.stem, "description": command.description}
-            if command.execution.agent:
-                canonical["agent"] = command.execution.agent
-            if command.execution.subtask:
-                canonical["context"] = "fork"
-            meta, issues = frontmatter(command.path, canonical, native, value.raw)
-            diagnostics.extend(issues)
-            trees.append(
-                OwnedTree(
-                    root / "skills" / command.stem,
-                    ((Path("SKILL.md"), markdown(meta, command.body)),),
-                    root / "skills",
-                )
+        trees.append(
+            OwnedTree(
+                root / "skills" / command.stem,
+                ((Path("SKILL.md"), markdown(meta, command.body)),),
+                root / "skills",
             )
-    for agent in sources.agents:
-        if not applies_to(agent, "claude"):
-            continue
-        value = block(agent, "claude")
-        native, issues = strict_native(agent.path, "claude", value, ClaudeAgentNative)
-        diagnostics.extend(issues)
-        diagnostics.extend(omissions(agent.path, "claude", value, set()))
+        )
+    agents, issues = resolve("claude", sources.agents, ClaudeAgentNative)
+    diagnostics.extend(issues)
+    for resolved in agents:
+        agent, native = resolved.source, resolved.native
         policy = resolve_model_policy(sources, agent, "claude")
         if policy is not None:
             conflicts = {
                 key
                 for key in ("model", "effort")
-                if key in value.native or key in value.raw
+                if key in resolved.block.native or key in resolved.raw
             }
             if agent.effort:
                 conflicts.add("effort")
@@ -411,52 +399,55 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                         agent.path,
                     )
                 )
-            if native:
-                native = native.model_copy(
-                    update={
-                        "model": policy.model or "inherit",
-                        "effort": policy.effort,
-                    }
-                )
-        if native:
-            meta, issues = frontmatter(
-                agent.path,
-                _agent_meta(agent, native, policy),
-                native,
-                value.raw,
+            native = native.model_copy(
+                update={
+                    "model": policy.model or "inherit",
+                    "effort": policy.effort,
+                }
             )
-            diagnostics.extend(issues)
-            files.append(
-                OwnedFile(
-                    root / "agents" / agent.path.name,
-                    markdown(meta, agent.body),
-                    root / "agents",
-                )
+        meta, issues = frontmatter(
+            agent.path,
+            _agent_meta(agent, native, policy),
+            native,
+            resolved.raw,
+        )
+        diagnostics.extend(issues)
+        files.append(
+            OwnedFile(
+                root / "agents" / agent.path.name,
+                markdown(meta, agent.body),
+                root / "agents",
             )
+        )
     folded = fold_edit_write(
         sources.permissions.tools if sources.permissions else {}, "Claude"
     )
     if permissions := sources.permissions:
-        value = block(permissions, "claude")
-        diagnostics.extend(
-            unhandled_target_block(permissions.paths[0], "claude", value)
-        )
-        diagnostics.extend(
-            omissions(
-                permissions.paths[0],
-                "claude",
-                value,
-                {
-                    *({"workspace.ask"} if permissions.workspace.ask else set()),
-                },
-            )
-        )
+        _, issues = resolve("claude", [permissions])
+        diagnostics.extend(issues)
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         diagnostics.extend(command_target_diagnostics(permissions, "claude"))
-    permission_values = tuple(
-        NativeValue("claude", root / "settings.json", pointer, value)
-        for pointer, value in _permission_values(sources, folded[0])
+    servers, issues = mcp_servers(sources, "claude")
+    diagnostics.extend(issues)
+    permission_values = (
+        *(
+            NativeValue("claude", root / "settings.json", pointer, value)
+            for pointer, value in _permission_values(sources, folded[0])
+        ),
+        *(
+            NativeValue(
+                "claude-mcp",
+                ctx.home / ".claude.json",
+                ("mcpServers", name, key),
+                value,
+            )
+            for name, fields in servers
+            for key, value in {
+                "type": "http" if "url" in fields else "stdio",
+                **fields,
+            }.items()
+        ),
     )
     patches = []
     for target, path, patch_name in (

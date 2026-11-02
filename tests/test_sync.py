@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import contextlib
 import io
 import json
@@ -20,8 +18,8 @@ from coding_agents_sync.io import (
     ManagedEntryConflict,
     sync_manifested_entries,
 )
-from coding_agents_sync.patches import PatchError
-from coding_agents_sync.runtime_config import NativeConfigError
+from coding_agents_sync.output.native import NativeConfigError
+from coding_agents_sync.output.patches import PatchError
 from coding_agents_sync.sources import SourceSchemaError, load_permissions
 from coding_agents_sync.targets.opencode import UNWRAP_PLUGIN
 from coding_agents_sync.targets.permissions import CLAUDE_OPAQUE_COMMANDS
@@ -129,7 +127,11 @@ def permission_policy_doc(
         targets.setdefault("cursor", {}).setdefault("omit", {})["tools"] = (
             "Cursor lacks one shared tool permission surface."
         )
-        if set(source["tools"].values()) - {"allow"}:
+        if (
+            set(source["tools"].items())
+            - {(tool, "allow") for tool in source["tools"]}
+            - {("websearch", "deny")}
+        ):
             targets.setdefault("codex", {}).setdefault("omit", {})["tools"] = (
                 "Codex has no tool gate."
             )
@@ -145,10 +147,6 @@ def permission_policy_doc(
     if source["secret_names"]:
         targets.setdefault("cursor", {}).setdefault("omit", {})["secret_names"] = (
             "Cursor has no secret-name ask channel."
-        )
-    if workspace.get("ask"):
-        targets.setdefault("claude", {}).setdefault("omit", {})["workspace.ask"] = (
-            "Claude has no workspace ask channel."
         )
     if source.get("unmatched", "ask") != "ask":
         targets.setdefault("codex", {}).setdefault("omit", {})["unmatched"] = (
@@ -1302,6 +1300,111 @@ class SyncTests(unittest.TestCase):
             ):
                 run_sync(config_root=config_root, home=home)
 
+    def test_mcp_servers_lower_to_each_targets_native_registration(self) -> None:
+        """Leaf fields only, so a patch's sibling settings stay its own, and a
+        value a patch already wrote is taken over as is."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "mcp" / "browser.yaml",
+                yaml.safe_dump(
+                    {
+                        "schema": "coding-agents/v1",
+                        "kind": "mcp-server",
+                        "id": "browser",
+                        "command": "browser-mcp",
+                        "args": ["--headless"],
+                        "env": {"MODE": "quiet"},
+                        "targets": {
+                            "cursor": {"native": {"command": "/opt/bin/browser-mcp"}}
+                        },
+                    }
+                ),
+            )
+            write(
+                config_root / "mcp" / "remote.yaml",
+                yaml.safe_dump(
+                    {
+                        "schema": "coding-agents/v1",
+                        "kind": "mcp-server",
+                        "id": "remote",
+                        "url": "https://example.com/mcp",
+                        "only": ["codex", "opencode"],
+                    }
+                ),
+            )
+            write(
+                config_root / "patches" / "codex.yaml",
+                "schema: coding-agents/patch/v1\nset:\n"
+                "  /mcp_servers/browser/default_tools_approval_mode: auto\n",
+            )
+            write(
+                home / ".claude.json",
+                json.dumps({"mcpServers": {"browser": {"command": "browser-mcp"}}}),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                json.loads((home / ".claude.json").read_text())["mcpServers"],
+                {
+                    "browser": {
+                        "type": "stdio",
+                        "command": "browser-mcp",
+                        "args": ["--headless"],
+                        "env": {"MODE": "quiet"},
+                    }
+                },
+            )
+            self.assertEqual(
+                tomllib.loads((home / ".codex/config.toml").read_text())["mcp_servers"],
+                {
+                    "browser": {
+                        "command": "browser-mcp",
+                        "args": ["--headless"],
+                        "env": {"MODE": "quiet"},
+                        "default_tools_approval_mode": "auto",
+                    },
+                    "remote": {"url": "https://example.com/mcp"},
+                },
+            )
+            self.assertEqual(
+                json.loads((home / ".cursor/mcp.json").read_text())["mcpServers"],
+                {
+                    "browser": {
+                        "command": "/opt/bin/browser-mcp",
+                        "args": ["--headless"],
+                        "env": {"MODE": "quiet"},
+                    }
+                },
+            )
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            self.assertEqual(
+                opencode["mcp"],
+                {
+                    "servers": {
+                        "browser": {
+                            "type": "local",
+                            "command": ["browser-mcp", "--headless"],
+                            "environment": {"MODE": "quiet"},
+                        },
+                        "remote": {"type": "remote", "url": "https://example.com/mcp"},
+                    }
+                },
+            )
+
+    def test_an_mcp_server_takes_exactly_one_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "mcp" / "both.yaml",
+                "schema: coding-agents/v1\nkind: mcp-server\nid: both\n"
+                "command: x\nurl: https://example.com/mcp\n",
+            )
+
+            with self.assertRaisesRegex(SourceSchemaError, "exactly one of command"):
+                run_sync(config_root=config_root, home=home)
+
     def test_an_assignment_value_is_literal(self) -> None:
         for assignments, message in (
             ({"tool": ["EDITOR=*"]}, "String should match pattern"),
@@ -1676,6 +1779,39 @@ class SyncTests(unittest.TestCase):
                 opencode_rules(opencode, "external_directory"),
                 {"C:/mise/**": "allow", "D:/vault/**": "deny"},
             )
+
+    def test_a_websearch_deny_disables_codex_web_search(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root, allow=[["git", "status"]], tools={"websearch": "deny"}
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            codex = tomllib.loads((home / ".codex/config.toml").read_text())
+            self.assertEqual(codex["web_search"], "disabled")
+
+    def test_a_workspace_ask_directory_asks_on_claude(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write_permissions(
+                config_root,
+                allow=[["git", "status"]],
+                tools={"read": "allow", "edit": "allow"},
+                workspace={"unmatched": "allow", "ask": ["~/review"]},
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            permissions = json.loads((home / ".claude/settings.json").read_text())[
+                "permissions"
+            ]
+            self.assertEqual(
+                permissions["ask"], ["Read(~/review/**)", "Edit(~/review/**)"]
+            )
+            self.assertIn("Read(//**)", permissions["allow"])
+            self.assertNotIn("~/review", permissions.get("additionalDirectories", []))
 
     def test_workspace_unmatched_allow_opens_every_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

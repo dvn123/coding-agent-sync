@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -7,7 +5,7 @@ from typing import Any
 import yaml
 
 from ..models import SyncContext
-from ..plan import Diagnostic, OwnedTree, Plan
+from ..output.plan import Diagnostic, OwnedTree, Plan
 from ..sources import SkillSource, SourceBundle
 from .codex import codex_skill
 from .cursor import cursor_skill

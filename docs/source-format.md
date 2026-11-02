@@ -27,6 +27,7 @@ agents/*.md
 permissions/policy.yaml
 permissions/commands/*.yaml
 permissions.local/*.yaml
+mcp/*.yaml
 patches/*.yaml
 patches.local/*.yaml
 target-config/<target>/raw/*
@@ -74,6 +75,7 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Agent | `only`, `model_policy`, `effort`, `background`, `color`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `options`, `assignments`, `allow`, `ask`, `deny`. |
+| MCP server | `only`, `command`, `args`, `env`, `url`. |
 
 `model-policy.yaml` is a strict compiler input with schema
 `coding-agents/model-policy/v1`. It names a `default` profile and defines
@@ -246,6 +248,36 @@ Fragments are merged before validation. Duplicate rules, contradictory
 containment, duplicate option vocabularies, shell syntax, wildcard tokens, and
 lossy predicate combinations are errors.
 
+### MCP servers
+
+Each `mcp/<id>.yaml` declares one server, registered under its `id` by every
+target it applies to. A local server sets `command` with optional `args` and
+`env`; a remote one sets `url`. `targets.<target>.native.command` replaces the
+command for one target, such as an absolute path for Cursor, which starts
+servers without the login shell's `PATH`.
+
+```yaml
+schema: coding-agents/v1
+kind: mcp-server
+id: browser
+command: browser-mcp
+args: [--headless]
+env: {MODE: quiet}
+```
+
+| Target | Generated pointers |
+| --- | --- |
+| Claude | `type` (`stdio` or `http`) and the fields under `mcpServers/<id>` in `<home>/.claude.json` |
+| Codex | the fields under `mcp_servers/<id>` in `config.toml` |
+| Cursor | the fields under `mcpServers/<id>` in `<home>/.cursor/mcp.json` |
+| OpenCode | `mcp/servers/<id>` as `type: local` with one `command` array and `environment`, or `type: remote` with `url` |
+
+The compiler owns only these leaf pointers, so a patch keeps the settings
+beside them: approval modes, enablement, tool allowlists, and OAuth. A value a
+patch already wrote is taken over when it matches; one that differs is
+refused until it does. Credentials stay out of the source: reference them
+through the target's environment interpolation or native login.
+
 ## Target blocks
 
 `targets` is a mapping whose only keys are `claude`, `cursor`, `codex`, and
@@ -276,7 +308,10 @@ for rule surfaces that have no safe field-level representation.
 `omit` maps a dotted portable field path to a non-empty, trimmed reason. Every
 entry must be consumed by that target compiler. Stale, misspelled, unsupported,
 or unnecessary omissions are errors. This forces the source to record why a
-non-default portable value is intentionally absent from one target.
+non-default portable value is intentionally absent from one target. The fields
+each target owes an omit for, and why, are the `LIMITATIONS` table in
+`src/coding_agents_sync/limits.py`; a limitation with a probe fails the live
+capability run once the target starts supporting the field.
 
 ## Strict target-native fields
 

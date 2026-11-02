@@ -1,0 +1,12 @@
+schema: coding-agents/v1
+kind: mcp-server
+id: fixture-local
+description: Neutral local fixture server.
+command: fixture-mcp
+args: [--stdio]
+env:
+  FIXTURE_MODE: neutral
+targets:
+  cursor:
+    native:
+      command: /opt/fixture/bin/fixture-mcp

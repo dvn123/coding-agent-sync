@@ -1,8 +1,8 @@
-from __future__ import annotations
-
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
+
+from coding_agents_sync.limits import LIMITATIONS
 
 from .model import Case, EvidenceKind, Support, Surface, SurfaceManagement, Target
 
@@ -18,6 +18,68 @@ TARGETS = {
 TARGETS["cursor-desktop"] = Target("cursor-desktop", "", None)
 
 CASES = (
+    Case(
+        "codex.skill-execution",
+        "codex",
+        "targets/test_codex_config.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("codex.skill-execution",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
+        "codex.tool-gates",
+        "codex",
+        "targets/test_codex_config.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("codex.tool-gates",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
+        "cursor-desktop.skill-execution",
+        "cursor-desktop",
+        "targets/test_cursor_desktop_loading.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("cursor-desktop.skill-execution",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
+        "cursor-desktop.agent-effort",
+        "cursor-desktop",
+        "targets/test_cursor_desktop_loading.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("cursor-desktop.agent-effort",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
+        "cursor-desktop.permission-channels",
+        "cursor-desktop",
+        "targets/test_cursor_desktop_permissions.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("cursor-desktop.permission-channels",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
+        "codex.unmatched-ask",
+        "codex",
+        "targets/test_codex_config.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("codex.unmatched-ask",),
+    ),
+    Case(
+        "codex.agent-background",
+        "codex",
+        "targets/test_codex_config.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("codex.agent-background",),
+    ),
+    Case(
+        "opencode.agent-background",
+        "opencode",
+        "targets/test_opencode_rules.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("opencode.agent-background",),
+        evidence_kind=EvidenceKind.CONFIG_RESOLUTION,
+    ),
     Case(
         "claude.loading",
         "claude",
@@ -70,7 +132,7 @@ CASES = (
             "targets/test_claude_mcp.py",
             surfaces=(f"claude.{name}",),
         )
-        for name in ("mcp-runtime", "mcp-oauth")
+        for name in ("mcp-runtime", "mcp-oauth", "mcp-permissions")
     ),
     *(
         Case(
@@ -137,6 +199,13 @@ CASES = (
         surfaces=("codex.model-providers",),
     ),
     Case(
+        "codex.workspace-ask",
+        "codex",
+        "targets/test_codex_config.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("codex.workspace-ask",),
+    ),
+    Case(
         "codex.profiles",
         "codex",
         "targets/test_codex_config.py",
@@ -171,7 +240,7 @@ CASES = (
             "targets/test_codex_mcp.py",
             surfaces=(f"codex.{name}",),
         )
-        for name in ("mcp-runtime", "mcp-oauth")
+        for name in ("mcp-runtime", "mcp-oauth", "mcp-permissions")
     ),
     *(
         Case(
@@ -226,6 +295,12 @@ CASES = (
         "cursor-agent",
         "targets/test_cursor_agents_loading.py",
         surfaces=("cursor-agent.agents-project",),
+    ),
+    Case(
+        "cursor-agent.file-permissions",
+        "cursor-agent",
+        "targets/test_cursor_file_permissions.py",
+        surfaces=("cursor-agent.file-permissions",),
     ),
     Case(
         "cursor-agent.agents-user",
@@ -502,7 +577,12 @@ CASES = (
             "targets/test_opencode_mcp.py",
             surfaces=(f"opencode.{name}",),
         )
-        for name in ("mcp-local-runtime", "mcp-remote-runtime", "mcp-oauth")
+        for name in (
+            "mcp-local-runtime",
+            "mcp-remote-runtime",
+            "mcp-oauth",
+            "mcp-permissions",
+        )
     ),
     *(
         Case(
@@ -607,6 +687,7 @@ SURFACES = (
         "claude",
         SurfaceManagement.UNMANAGED,
         (
+            "mcp-permissions",
             "memory",
             "plugins",
             "output-styles",
@@ -649,7 +730,13 @@ SURFACES = (
         "codex",
         SurfaceManagement.UNMANAGED,
         (
+            "mcp-permissions",
+            "skill-execution",
+            "tool-gates",
+            "unmatched-ask",
+            "agent-background",
             "profiles",
+            "workspace-ask",
             "apps-connectors",
             "managed-policy",
             "runtime-sessions",
@@ -672,6 +759,7 @@ SURFACES = (
         "cursor-agent",
         SurfaceManagement.UNMANAGED,
         (
+            "file-permissions",
             "agents-project",
             "commands",
             "hooks",
@@ -704,7 +792,16 @@ SURFACES = (
     *_surfaces(
         "cursor-desktop",
         SurfaceManagement.UNMANAGED,
-        ("commands", "custom-modes", "sandbox", "hooks", "extensions"),
+        (
+            "skill-execution",
+            "agent-effort",
+            "permission-channels",
+            "commands",
+            "custom-modes",
+            "sandbox",
+            "hooks",
+            "extensions",
+        ),
     ),
     *_surfaces(
         "cursor-cloud",
@@ -775,6 +872,8 @@ SURFACES = (
         "opencode",
         SurfaceManagement.UNMANAGED,
         (
+            "mcp-permissions",
+            "agent-background",
             "api-catalog",
             "api-sessions",
             "formatter-runtime",
@@ -844,3 +943,14 @@ def validate_registry() -> None:
         if case.expected not in {Support.SUPPORTED, Support.UNSUPPORTED}
     ]:
         raise ValueError(f"non-binary expected support: {sorted(invalid)}")
+    for limitation in LIMITATIONS:
+        probe = CASES_BY_ID.get(limitation.probe or "")
+        if (
+            probe is None
+            or probe.expected is not Support.UNSUPPORTED
+            or not probe.target.startswith(limitation.target)
+        ):
+            raise ValueError(
+                f"{limitation.id}: probe {limitation.probe} must be a negative "
+                f"{limitation.target} case"
+            )

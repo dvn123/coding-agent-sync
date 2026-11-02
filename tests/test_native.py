@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import stat
@@ -9,7 +7,14 @@ from pathlib import Path
 import pytest
 
 from coding_agents_sync.io import write_bytes
-from coding_agents_sync.patches import (
+from coding_agents_sync.output.native import (
+    NativeConfigError,
+    NativePlan,
+    apply_native_candidates,
+    prepare_plan_native,
+    publish_native_manifest,
+)
+from coding_agents_sync.output.patches import (
     Operation,
     Patch,
     PatchError,
@@ -18,14 +23,7 @@ from coding_agents_sync.patches import (
     load_patch,
     merge_patches,
 )
-from coding_agents_sync.plan import NativePatch, NativeValue
-from coding_agents_sync.runtime_config import (
-    NativeConfigError,
-    NativePlan,
-    apply_native_candidates,
-    prepare_plan_native,
-    publish_native_manifest,
-)
+from coding_agents_sync.output.plan import NativePatch, NativeValue
 
 
 def apply_native_plan(plan: NativePlan) -> None:
@@ -228,7 +226,7 @@ def test_manifest_is_strict_for_current_plan_targets(tmp_path: Path) -> None:
 def test_manifest_publishes_after_native_content(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import coding_agents_sync.runtime_config as runtime_config
+    import coding_agents_sync.output.native as native
 
     plan = prepare_plan_native(
         config_root=tmp_path / "config",
@@ -238,13 +236,13 @@ def test_manifest_publishes_after_native_content(
         native_patches=(),
     )
     writes: list[Path] = []
-    original = runtime_config.write_bytes
+    original = native.write_bytes
 
     def record(path: Path, content: bytes) -> None:
         writes.append(path)
         original(path, content)
 
-    monkeypatch.setattr(runtime_config, "write_bytes", record)
+    monkeypatch.setattr(native, "write_bytes", record)
     apply_native_plan(plan)
 
     assert writes[-1] == plan.manifest_path

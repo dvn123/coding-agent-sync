@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import re
 
@@ -12,6 +10,30 @@ from capabilities.targets.cursor_desktop_static import (
     read,
     require_installed,
 )
+
+
+@pytest.mark.capability_case("cursor-desktop.permission-channels")
+@pytest.mark.capability_live
+def test_desktop_permissions_have_no_deny_directory_tool_or_secret_channel() -> None:
+    """Desktop's permission file holds two allowlists, an approval mode, and
+    Auto-review instructions, and nothing else. A new key may be the deny,
+    directory, tool, or secret-name channel a Cursor limitation lacks."""
+    require_installed(PERMISSIONS_SCHEMA)
+    schema = json.loads(PERMISSIONS_SCHEMA.read_text())
+
+    assert schema["unevaluatedProperties"] is False
+    assert set(schema["properties"]) == {
+        "approvalMode",
+        "autoReview",
+        "autoRun",
+        "mcpAllowlist",
+        "terminalAllowlist",
+    }
+    assert schema["properties"]["approvalMode"]["enum"] == [
+        "allowlist",
+        "unrestricted",
+        "manual",
+    ]
 
 
 @pytest.mark.capability_case("cursor-desktop.mcp-permissions")

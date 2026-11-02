@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import hashlib
 import json
 import re
@@ -10,7 +8,7 @@ from typing import Any, Literal
 
 import tomlkit
 
-from .io import write_bytes
+from ..io import write_bytes
 from .patches import (
     Operation,
     Patch,

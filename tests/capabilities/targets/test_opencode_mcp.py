@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +10,6 @@ from capabilities.harness import (
     recorded_server,
     require_command,
     require_containment,
-    run_probe,
 )
 from capabilities.mcp import (
     TOOL_DESCRIPTION,
@@ -26,7 +23,7 @@ from capabilities.mcp import (
 )
 from capabilities.model import CheckResult
 from capabilities.protocols.opencode import OpenCodeRequest
-from capabilities.runtime import Seatbelt, loopback_seatbelt, run
+from capabilities.runtime import CommandTimeout, Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.opencode import api, environment, isolate_service, settled
 from capabilities.targets.opencode import config as opencode_config
@@ -100,10 +97,16 @@ def status(servers: dict[str, Any]) -> str:
     )
 
 
-def invoke(request: pytest.FixtureRequest, runtime: Runtime, kind: str) -> CheckResult:
+def invoke(
+    request: pytest.FixtureRequest,
+    runtime: Runtime,
+    kind: str,
+    rules: tuple[dict[str, str], ...] = (),
+    name: str | None = None,
+) -> CheckResult:
     runtime.stub.requests.clear()
     runtime.responder.tool_name = None
-    paths = Paths.create(runtime.paths.root / kind)
+    paths = Paths.create(runtime.paths.root / (name or kind))
     log = paths.root / "mcp.jsonl"
     server = (
         {"type": "local", "command": list(stdio_command(log))}
@@ -119,6 +122,9 @@ def invoke(request: pytest.FixtureRequest, runtime: Runtime, kind: str) -> Check
     # MCP tools default to Code Mode, reachable only through `execute`; the
     # probe calls the server's tool directly.
     config["mcp"] = {"servers": {"probe": server | {"codemode": False}}}
+    if rules:
+        # Native rules apply after the V1 `permission` map; the last match wins.
+        config["permissions"] = list(rules)
     config_path = paths.root / "opencode.json"
     config_path.write_text(json.dumps(config))
     probe = Probe(
@@ -141,21 +147,24 @@ def invoke(request: pytest.FixtureRequest, runtime: Runtime, kind: str) -> Check
             lambda value: status(value) == "connected",
         )
     )
-    result = run_probe(
-        run,
-        *runtime.seatbelt.command(
-            runtime.executable,
-            "run",
-            "Call the MCP probe tool exactly as instructed by the model.",
-            "--format",
-            "json",
-            "--model",
-            f"test/{MODEL}",
-        ),
-        cwd=paths.work,
-        env=probe.env,
-        timeout=30,
-    )
+    # A turn that waits on an answer `run` cannot give never ends.
+    try:
+        result = run(
+            *runtime.seatbelt.command(
+                runtime.executable,
+                "run",
+                "Call the MCP probe tool exactly as instructed by the model.",
+                "--format",
+                "json",
+                "--model",
+                f"test/{MODEL}",
+            ),
+            cwd=paths.work,
+            env=probe.env,
+            timeout=30,
+        )
+    except CommandTimeout:
+        result = None
     requests = tuple(OpenCodeRequest.decode(item) for item in runtime.stub.requests)
     advertised = next(
         (request for request in requests if find_tool_name(request.raw) is not None),
@@ -167,6 +176,7 @@ def invoke(request: pytest.FixtureRequest, runtime: Runtime, kind: str) -> Check
         else tuple(runtime.remote.protocol.requests)
     )
     checks = {
+        "finished": result is not None,
         **mcp_checks(mcp_requests),
         "tool-advertised": runtime.responder.tool_name is not None,
         "tool-description-advertised": advertised is not None
@@ -177,8 +187,9 @@ def invoke(request: pytest.FixtureRequest, runtime: Runtime, kind: str) -> Check
     }
     return CheckResult(
         checks,
-        f"status={connected} exit={result.returncode} "
-        f"tool={runtime.responder.tool_name} stderr={result.stderr}",
+        f"status={connected} exit={result and result.returncode} "
+        f"tool={runtime.responder.tool_name} "
+        f"stdout={result and result.stdout[-600:]} stderr={result and result.stderr}",
     )
 
 
@@ -204,3 +215,63 @@ def test_opencode_executes_a_remote_http_mcp_tool(
 @pytest.mark.capability_live
 def test_opencode_mcp_oauth_requires_external_authority() -> None:
     pytest.skip("unavailable: MCP OAuth requires external authorization")
+
+
+def mcp_rule(action: str, effect: str) -> dict[str, str]:
+    return {"action": action, "resource": "*", "effect": effect}
+
+
+# Native rules on the probe tool, over a blanket allow. `run` cannot answer an
+# ask.
+MCP_PERMISSION_SCENARIOS = {
+    "no-rule": (),
+    **{
+        f"{effect}-{name}": (mcp_rule(action, effect),)
+        for effect in ("allow", "ask", "deny")
+        for name, action in (("tool", "probe_echo"), ("wildcard", "probe_*"))
+    },
+    "allow-after-deny": (mcp_rule("probe_*", "deny"), mcp_rule("probe_echo", "allow")),
+}
+
+
+# Offered to the model, then called. An ask keeps the tool offered and `run`
+# ends the turn without calling it; a deny removes it from the request; the
+# action is `<server>_<tool>`, `<server>_*` matches it, and the last match wins.
+MCP_PERMISSION_EXPECTED = {
+    "no-rule": (True, True),
+    "allow-tool": (True, True),
+    "allow-wildcard": (True, True),
+    "ask-tool": (True, False),
+    "ask-wildcard": (True, False),
+    "deny-tool": (False, False),
+    "deny-wildcard": (False, False),
+    "allow-after-deny": (True, True),
+}
+
+
+@pytest.fixture(scope="module")
+def mcp_permissions(
+    request: pytest.FixtureRequest, runtime: Runtime
+) -> dict[str, CheckResult]:
+    return {
+        name: invoke(request, runtime, "local", rules, f"permission-{name}")
+        for name, rules in MCP_PERMISSION_SCENARIOS.items()
+    }
+
+
+@pytest.mark.capability_case("opencode.mcp-permissions")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(("scenario", "expected"), MCP_PERMISSION_EXPECTED.items())
+def test_opencode_mcp_tool_permissions(
+    mcp_permissions: dict[str, CheckResult],
+    scenario: str,
+    expected: tuple[bool, bool],
+) -> None:
+    observation = mcp_permissions[scenario]
+    checks = observation.checks
+
+    assert checks["finished"], observation.detail
+    assert (
+        checks["tool-advertised"],
+        checks["mcp-tool-called"],
+    ) == expected, observation.detail

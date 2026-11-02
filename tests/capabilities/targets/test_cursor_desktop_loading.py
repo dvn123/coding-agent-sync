@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import re
 
@@ -56,6 +54,75 @@ def test_desktop_reads_agent_frontmatter_line_by_line() -> None:
     assert re.search(
         r"\{configDir:\"\.agents\",subdir:\"skills\",thirdParty:!1", bundle
     )
+
+
+# The agent-file parser: one dictionary filled line by line, then read key by key.
+AGENT_FRONTMATTER = re.compile(
+    r'const ([\w$]+)=\{\};for\(const [\w$]+ of [\w$]+\.split\("\\n"\)\)\{'
+    r".{0,400}?\1\[[\w$]+\]=[\w$]+\)\}(.{0,900}?)return\{name:",
+    re.S,
+)
+
+
+@pytest.mark.capability_case("cursor-desktop.agent-effort")
+@pytest.mark.capability_live
+def test_desktop_agent_files_have_no_effort_key() -> None:
+    """The agent-file parser reads a fixed set of keys; a new one may be the
+    reasoning-effort field Cursor agents lack."""
+    require_installed(AGENT_EXEC_BUNDLE)
+    bundle = read(AGENT_EXEC_BUNDLE)
+
+    [parser] = AGENT_FRONTMATTER.finditer(bundle)
+    fields = re.escape(parser.group(1))
+    keys = {
+        dotted or quoted
+        for dotted, quoted in re.findall(
+            rf'{fields}\.([\w$]+)|{fields}\["([^"]+)"\]', parser.group(2)
+        )
+    }
+
+    assert keys == {
+        "background",
+        "description",
+        "force-default-model",
+        "is_background",
+        "model",
+        "name",
+        "readonly",
+        "tools",
+    }
+
+
+# The loader that turns a parsed SKILL.md into the skill the agent receives.
+SKILL_LOADER = re.compile(
+    r"function [\w$]+\(\{skillFilePath:[\w$]+,content:[\w$]+,parsed:[\w$]+\}\)\{"
+    r'const [\w$]+="string"==typeof [\w$]+\.data\?\.description'
+    r".{0,300}?return new [\w$.]+\(\{([^{}]*)\}\)\}",
+    re.S,
+)
+
+
+@pytest.mark.capability_case("cursor-desktop.skill-execution")
+@pytest.mark.capability_live
+def test_desktop_skills_carry_no_delegated_execution() -> None:
+    """A skill reaches the agent with a fixed set of fields; a new one may be
+    the agent or subtask choice Cursor skills lack."""
+    require_installed(AGENT_EXEC_BUNDLE)
+
+    [loader] = SKILL_LOADER.finditer(read(AGENT_EXEC_BUNDLE))
+    fields = set(re.findall(r"(?:^|,)([A-Za-z]+):", loader.group(1)))
+
+    assert fields == {
+        "content",
+        "description",
+        "disableModelInvocation",
+        "disabledEnvironments",
+        "environments",
+        "fullPath",
+        "globs",
+        "parseError",
+        "scopedTo",
+    }
 
 
 @pytest.mark.capability_case("cursor-desktop.mcp")

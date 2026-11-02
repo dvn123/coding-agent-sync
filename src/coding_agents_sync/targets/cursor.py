@@ -1,19 +1,25 @@
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import Field, model_validator
 
+from ..ir import Bare, applies_to, resolve
 from ..models import SyncContext
-from ..patches import (
+from ..output.patches import (
     Patch,
     PatchError,
     display_pointer,
     touches,
     validate_generated_conflicts,
 )
-from ..plan import Diagnostic, NativePatch, NativeValue, OwnedFile, OwnedTree, Plan
+from ..output.plan import (
+    Diagnostic,
+    NativePatch,
+    NativeValue,
+    OwnedFile,
+    OwnedTree,
+    Plan,
+)
 from ..sources import (
     CommandPermission,
     SkillSource,
@@ -22,27 +28,19 @@ from ..sources import (
     describe_rule,
     resolve_model_policy,
 )
-from .permissions import (
-    cursor_shell_variants,
-    denied_paths,
-    has_directories,
-)
+from .permissions import cursor_shell_variants, denied_paths
 from .support import (
-    applies_to,
-    block,
     collision_error,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
     markdown,
+    mcp_servers,
     native_patch,
-    omissions,
     raw_files,
     shared_skill,
     skill_collisions,
     skill_tree,
-    strict_native,
-    unhandled_target_block,
     with_skill_scripts,
 )
 
@@ -90,10 +88,8 @@ def cursor_skill(
     skill: SkillSource, root: Path
 ) -> tuple[tuple[OwnedTree, ...], list[Diagnostic]]:
     """The skill's tree below `root`, if its native block validates."""
-    value = block(skill, "cursor")
-    native, issues = strict_native(skill.path, "cursor", value, CursorSkillNative)
-    diagnostics = [*issues, *omissions(skill.path, "cursor", value, set())]
-    if not native:
+    resolved, diagnostics = resolve("cursor", [skill], CursorSkillNative)
+    if not resolved:
         return (), diagnostics
     meta, issues = frontmatter(
         skill.path,
@@ -109,8 +105,8 @@ def cursor_skill(
             ),
             **({"metadata": skill.metadata} if skill.metadata else {}),
         },
-        native,
-        value.raw,
+        resolved[0].native,
+        resolved[0].raw,
     )
     return (skill_tree(skill, root, meta),), [*diagnostics, *issues]
 
@@ -272,60 +268,37 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     )
     files: list[OwnedFile] = []
     diagnostics: list[Diagnostic] = []
-    for global_source in sources.globals[:1]:
-        if not applies_to(global_source, "cursor"):
-            continue
-        value = block(global_source, "cursor")
-        diagnostics.extend(unhandled_target_block(global_source.path, "cursor", value))
-        diagnostics.extend(omissions(global_source.path, "cursor", value, set()))
-        meta = {"description": global_source.name, "globs": "", "alwaysApply": True}
+    globals_, issues = resolve("cursor", sources.globals[:1])
+    diagnostics.extend(issues)
+    for global_ in globals_:
+        meta = {"description": global_.source.name, "globs": "", "alwaysApply": True}
         files.append(
             OwnedFile(
                 rules_root / "coding-agents-global.mdc",
-                markdown(meta, global_source.body),
+                markdown(meta, global_.source.body),
                 rules_root,
             )
         )
-    for rule in sources.rules:
-        if not applies_to(rule, "cursor"):
-            continue
-        value = block(rule, "cursor")
-        native, issues = strict_native(rule.path, "cursor", value, CursorRuleNative)
-        diagnostics.extend(issues)
-        diagnostics.extend(omissions(rule.path, "cursor", value, set()))
-        if native:
-            meta = {
+    rules, issues = resolve("cursor", sources.rules, CursorRuleNative)
+    diagnostics.extend(issues)
+    for resolved in rules:
+        rule, native = resolved.source, resolved.native
+        meta, issues = frontmatter(
+            rule.path,
+            {
                 "description": native.description or rule.description.strip(),
                 "globs": ",".join(native.globs),
                 "alwaysApply": native.always_apply,
-            }
-            overlap = set(meta) & set(value.raw)
-            if overlap:
-                diagnostics.append(
-                    Diagnostic(
-                        "error",
-                        "raw target fields shadow canonical or typed fields: "
-                        f"{', '.join(sorted(overlap))}",
-                        rule.path,
-                    )
-                )
-            else:
-                meta.update(value.raw)
-                if value.raw:
-                    diagnostics.append(
-                        Diagnostic(
-                            "warning",
-                            "using unvalidated raw target fields",
-                            rule.path,
-                        )
-                    )
-            files.append(
-                OwnedFile(
-                    rules_root / f"{rule.stem}.mdc",
-                    markdown(meta, rule.body),
-                    rules_root,
-                )
+            },
+            Bare(),
+            resolved.raw,
+        )
+        diagnostics.extend(issues)
+        files.append(
+            OwnedFile(
+                rules_root / f"{rule.stem}.mdc", markdown(meta, rule.body), rules_root
             )
+        )
     for skill in sources.skills:
         if applies_to(skill, "cursor") and not shared_skill(skill):
             tree, issues = cursor_skill(skill, skills_root)
@@ -334,98 +307,65 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     # Cursor's own migration turns a slash command into a skill the model
     # cannot invoke by itself.
     collisions = skill_collisions(sources, "cursor")
-    for command in sources.commands:
-        if not applies_to(command, "cursor"):
-            continue
+    commands, issues = resolve("cursor", sources.commands, CursorSkillNative)
+    diagnostics.extend(issues)
+    for resolved in commands:
+        command = resolved.source
         if command.stem in collisions:
             diagnostics.append(collision_error(command))
             continue
-        value = block(command, "cursor")
-        native, issues = strict_native(command.path, "cursor", value, CursorSkillNative)
+        meta, issues = frontmatter(
+            command.path,
+            {
+                "name": command.stem,
+                "description": command.description,
+                "disable-model-invocation": True,
+            },
+            resolved.native,
+            resolved.raw,
+        )
         diagnostics.extend(issues)
-        delegated = command.execution.agent or command.execution.subtask
-        diagnostics.extend(
-            omissions(
-                command.path, "cursor", value, {"execution"} if delegated else set()
+        trees.append(
+            OwnedTree(
+                skills_root / command.stem,
+                ((Path("SKILL.md"), markdown(meta, command.body)),),
+                skills_root,
             )
         )
-        if native:
-            meta, issues = frontmatter(
-                command.path,
-                {
-                    "name": command.stem,
-                    "description": command.description,
-                    "disable-model-invocation": True,
-                },
-                native,
-                value.raw,
-            )
-            diagnostics.extend(issues)
-            trees.append(
-                OwnedTree(
-                    skills_root / command.stem,
-                    ((Path("SKILL.md"), markdown(meta, command.body)),),
-                    skills_root,
-                )
-            )
-    for agent in sources.agents:
-        if not applies_to(agent, "cursor"):
-            continue
-        value = block(agent, "cursor")
-        native, issues = strict_native(agent.path, "cursor", value, CursorAgentNative)
-        diagnostics.extend(issues)
-        diagnostics.extend(
-            omissions(
-                agent.path,
-                "cursor",
-                value,
-                {"effort"} if agent.effort else set(),
-            )
-        )
-        if value.raw:
-            diagnostics.append(
-                Diagnostic("error", "cursor raw fields are not valid here", agent.path)
-            )
+    agents, issues = resolve("cursor", sources.agents, CursorAgentNative, raw=False)
+    diagnostics.extend(issues)
+    for resolved in agents:
+        agent, native = resolved.source, resolved.native
         policy = resolve_model_policy(sources, agent, "cursor")
-        if policy is not None and native and native.model is not None:
+        if policy is not None and native.model is not None:
             diagnostics.append(
                 Diagnostic(
                     "error", "model policy owns Cursor fields: model", agent.path
                 )
             )
-        if native:
-            model = native.model if policy is None else policy.model
-            meta: dict[str, str | bool] = {"name": agent.name}
-            if description := " ".join(agent.description.split()):
-                meta["description"] = description
-            if model:
-                meta["model"] = model
-            if native.readonly:
-                meta["readonly"] = True
-            if native.tools:
-                meta["tools"] = ", ".join(native.tools)
-            if agent.background:
-                meta["background"] = True
-            files.append(
-                OwnedFile(
-                    agents_root / agent.path.name,
-                    _agent_file(meta, agent.body),
-                    agents_root,
-                    structured=False,
-                )
+        model = native.model if policy is None else policy.model
+        meta: dict[str, str | bool] = {"name": agent.name}
+        if description := " ".join(agent.description.split()):
+            meta["description"] = description
+        if model:
+            meta["model"] = model
+        if native.readonly:
+            meta["readonly"] = True
+        if native.tools:
+            meta["tools"] = ", ".join(native.tools)
+        if agent.background:
+            meta["background"] = True
+        files.append(
+            OwnedFile(
+                agents_root / agent.path.name,
+                _agent_file(meta, agent.body),
+                agents_root,
+                structured=False,
             )
-    if permissions := sources.permissions:
-        value = block(permissions, "cursor")
-        diagnostics.extend(
-            unhandled_target_block(permissions.paths[0], "cursor", value)
         )
-        required = {
-            *({"tools"} if permissions.tools else set()),
-            *({"workspace"} if has_directories(permissions.workspace) else set()),
-            *({"secret_names"} if permissions.secret_names else set()),
-            *({"unmatched"} if permissions.unmatched != "ask" else set()),
-        }
-        diagnostics.extend(omissions(permissions.paths[0], "cursor", value, required))
+    if permissions := sources.permissions:
+        _, issues = resolve("cursor", [permissions])
+        diagnostics.extend(issues)
         diagnostics.extend(command_target_diagnostics(permissions, "cursor"))
         if ignored := [
             pattern
@@ -440,6 +380,18 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             )
     native_values, permission_diagnostics = _permission_values(sources, root)
     diagnostics.extend(permission_diagnostics)
+    servers, issues = mcp_servers(sources, "cursor")
+    diagnostics.extend(issues)
+    native_values = (
+        *native_values,
+        *(
+            NativeValue(
+                "cursor-mcp", root / "mcp.json", ("mcpServers", name, key), value
+            )
+            for name, fields in servers
+            for key, value in fields.items()
+        ),
+    )
     patches = []
     for target, path, name in (
         ("cursor-cli", root / "cli-config.json", "cursor-cli-config"),

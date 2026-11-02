@@ -1,0 +1,7 @@
+---
+description: Neutral always-on rule.
+globs: ''
+alwaysApply: true
+---
+
+Apply the neutral always-on rule.
