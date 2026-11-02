@@ -240,7 +240,7 @@ def resolve(runtime: Runtime) -> CheckResult:
     commands = {name for item in documents for name in item["info"].get("commands", {})}
     root = runtime.paths.root
     test = latest("providers", "test")
-    policies = latest("experimental").get("policies", [])
+    policies = latest("policies") or []
     return CheckResult(
         {
             "config-precedence": [item.get("path") for item in documents]

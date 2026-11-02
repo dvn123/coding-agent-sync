@@ -197,7 +197,7 @@ def test_portable_starter_compiles_on_a_fresh_home(tmp_path: Path) -> None:
     assert (home / ".codex/AGENTS.md").is_file()
     assert (home / ".claude/skills/project-review/SKILL.md").is_file()
     assert (home / ".config/opencode/agents/reviewer.md").is_file()
-    metadata = home / ".codex/skills/project-review/agents/openai.yaml"
+    metadata = home / ".agents/skills/project-review/agents/openai.yaml"
     assert (
         yaml.safe_load(metadata.read_text())["interface"]["display_name"]
         == "Project review"

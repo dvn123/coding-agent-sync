@@ -10,7 +10,7 @@ it has moved to one, and the rest still passes through that migration.
 | --- | --- |
 | Global | `<home>/.config/opencode/AGENTS.md` |
 | Rule | `<home>/.config/opencode/rules/<stem>.md`, loaded by an owned `instructions` glob in `opencode.json` |
-| Skill | `<home>/.config/opencode/skills/<directory>/` |
+| Skill | `<home>/.agents/skills/<directory>/`, shared with Codex and Cursor; `<home>/.config/opencode/skills/<directory>/` when `only` leaves out Codex, Cursor, or OpenCode |
 | Command | `<home>/.config/opencode/commands/<source-file>.md` |
 | Agent | `<home>/.config/opencode/agents/<source-file>.md` |
 | Permissions | owned native `/permissions` rule list in `opencode.json` |
@@ -25,7 +25,10 @@ OpenCode-native fields. Typed skills use
 `request`, `mode`, `hidden`, `color` (hex), `steps`, `disabled`, and a
 `permissions` rule list, since any other key sends the file through OpenCode's
 v1 migration. Effort and sampling go in `request.body`, where the portable
-effort also lands. Unknown fields are errors.
+effort also lands. Unknown fields are errors. Portable
+`disable_model_invocation` lowers to `disable-model-invocation: true`, which
+keeps the skill out of the model's skill list; the skill tool still loads it
+when named, so the `opencode.skills` probe pins only the list.
 Accepted raw frontmatter is visibly unvalidated and cannot shadow typed or
 canonical output.
 

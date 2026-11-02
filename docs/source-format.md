@@ -102,12 +102,13 @@ target that still receives the artifact. Host files (`CLAUDE.md`,
 file, so a global excluded by `only` is pruned, and a hand-written host file
 is refused rather than overwritten.
 
-The compiler projects a canonical field only where its semantics match. For
-example, skill `paths` requires omissions for Codex and OpenCode, while
-`disable_model_invocation` requires one only for OpenCode; agent `background`
-requires omissions for Codex and OpenCode; agent `color` requires an omission
-for Codex and a native override for OpenCode unless its value is already an
-OpenCode color. Codex projects every portable effort, including `max`.
+The compiler projects a canonical field only where its semantics match, and
+a field that changes behavior needs an omission where a target cannot carry
+it: agent `background` on Codex and OpenCode, agent `effort` on Cursor. Fields
+that only describe or narrow an artifact are dropped silently where a target
+has no counterpart: skill `license` and `paths` (Codex and OpenCode offer the
+skill everywhere), and agent `color` on Codex and Cursor. Codex projects every
+portable effort, including `max`.
 Cursor projects allows to the allowlist its Desktop app and CLI share and
 guards asks and denies by withholding the allows they narrow, so a guarded
 command prompts there. Codex projects ask and deny rules as
@@ -122,6 +123,16 @@ those surface omissions.
 `license` is a string; `metadata` is a map. These are canonical only for the
 targets whose native behavior is equivalent. Do not substitute a similar field
 from another target for one of these values.
+
+Codex, Cursor, and OpenCode all read `<home>/.agents/skills`, Cursor even with
+its third-party extensibility off, so a skill all three receive is written
+there once. Its `SKILL.md` carries every reader's frontmatter, since each
+ignores keys it does not know, and Codex's `agents/openai.yaml` beside it. A
+skill whose `only` leaves out any of the three is written to each receiving
+target's own skills directory instead, and so is a command, since OpenCode
+serves commands natively. Readers that need a frontmatter key to differ, such
+as a target-native `description`, cannot share a copy: the compiler rejects
+the skill until `only` splits it. Claude reads only `<home>/.claude/skills`.
 
 ### Commands
 
@@ -148,13 +159,12 @@ tools or MCP patterns — omit `tools` to inherit the pool, because a list that
 resolves to nothing makes Claude refuse to spawn the agent, which
 `claude.agent-tools` pins against the installed binary.
 
-OpenCode accepts only `#RRGGBB` or one of its theme names as a `color`, and it
-rejects the whole agent file otherwise, so a portable `color` that OpenCode
-cannot express needs a native override there. That value is checked after the
-merge, because a portable `color` reaches OpenCode's frontmatter too.
+A portable `color` reaches OpenCode as hex, Claude's color names mapped to
+it. OpenCode silently drops any other value, so the compiler rejects it; a
+native override replaces it. That value is checked after the merge.
 
-Cursor agents have no `effort` or `color` field, so either needs
-`omit.effort` or `omit.color`. `background` lowers natively. Cursor's
+Cursor agents have no `effort` field, so it needs `omit.effort`.
+`background` lowers natively. Cursor's
 counterpart to denying edit tools is native `readonly: true`.
 
 Fields whose accepted set is genuinely open stay unchecked: any `model` ID and
@@ -274,9 +284,9 @@ Target compilers own their native schemas. The supported typed fields are:
 
 | Target | Source kinds and typed fields |
 | --- | --- |
-| Claude | Skills and commands: native Claude skill frontmatter. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, and skills. |
-| Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills and commands: `name`, `description`, `paths`, `disable-model-invocation`, `metadata`. Agents: `model`, `readonly`. |
-| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern` (a token may list alternatives), `decision`, and optional `justification`. Skills and commands: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`. See the target reference for nested fields. |
+| Claude | Skills and commands: native Claude skill frontmatter, including `hooks` and fork `background`. Agents: native Claude agent frontmatter including `model`, `tools`, `disallowedTools`, permission mode, turn limits, isolation, memory, initial prompt, skills, `mcpServers`, `hooks`, `autoCompactWindow`, `omitClaudeMd`, and the `observer` fields. |
+| Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills and commands: `name`, `description`, `license`, `paths`, `disable-model-invocation`, `metadata`. Agents: `model`, `readonly`, `tools`. |
+| Codex / ChatGPT Desktop | Rules: `rules` containing `pattern` (a token may list alternatives), `decision`, and optional `justification`. Skills and commands: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`, `personality`, `service_tier`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
 
 The table is intentionally concrete, not a target extension API. Each target

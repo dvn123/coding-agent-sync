@@ -29,7 +29,6 @@ from ..sources import (
     Decision,
     PermissionSource,
     PermissionTool,
-    SkillSource,
     SourceBundle,
     StrictModel,
     resolve_model_policy,
@@ -51,7 +50,6 @@ from .permissions import (
 from .support import (
     applies_to,
     block,
-    bundled_files,
     collision_error,
     command_target_diagnostics,
     declared_trees,
@@ -62,6 +60,7 @@ from .support import (
     one_of,
     raw_files,
     skill_collisions,
+    skill_tree,
     strict_native,
     unhandled_target_block,
     with_skill_scripts,
@@ -89,6 +88,10 @@ class ClaudeSkillNative(StrictModel):
     effort: str | None = None
     context: str | None = None
     agent: str | None = None
+    # Only with `context: fork`: the fork reports back as a task notification.
+    background: bool | None = None
+    # Same shape as settings.json `hooks`, registered while the skill is active.
+    hooks: dict[str, Any] | None = None
     shell: str | None = None
     license: str | None = None
     metadata: dict[str, Any] | None = None
@@ -139,6 +142,15 @@ class ClaudeAgentNative(StrictModel):
     memory: str | None = None
     initial_prompt: str | None = Field(None, alias="initialPrompt")
     skills: list[str] | None = None
+    # Server names from the user's config, or inline server definitions.
+    mcp_servers: list[str | dict[str, Any]] | None = Field(None, alias="mcpServers")
+    hooks: dict[str, Any] | None = None
+    auto_compact_window: int | None = Field(None, alias="autoCompactWindow", gt=0)
+    omit_claude_md: bool | None = Field(None, alias="omitClaudeMd")
+    # An agent type spawned beside this one to watch its activity.
+    observer: str | None = None
+    observer_message: str | None = Field(None, alias="observerMessage")
+    observe_subagents: bool | None = Field(None, alias="observeSubagents")
 
     @field_validator("tools", "disallowed_tools")
     @classmethod
@@ -187,17 +199,6 @@ class ClaudeAgentNative(StrictModel):
                 "resolve to zero tools and fail to launch"
             )
         return self
-
-
-def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
-    files, executables = bundled_files(skill.source_dir)
-    files[Path("SKILL.md")] = markdown(meta, skill.body)
-    return OwnedTree(
-        root / skill.source_dir.name,
-        tuple(sorted(files.items(), key=lambda item: item[0].as_posix())),
-        root,
-        executables=executables,
-    )
 
 
 def _agent_meta(
@@ -356,7 +357,7 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 value.raw,
             )
             diagnostics.extend(issues)
-            trees.append(_tree(skill, root / "skills", meta))
+            trees.append(skill_tree(skill, root / "skills", meta))
     collisions = skill_collisions(sources, "claude")
     for command in sources.commands:
         if not applies_to(command, "claude"):

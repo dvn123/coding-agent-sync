@@ -9,15 +9,5 @@ paths:
 license: See asset.txt
 metadata:
   fixture: "true"
-targets:
-  cursor:
-    omit:
-      license: Cursor skill frontmatter has no license field.
-  codex:
-    omit:
-      paths: Codex skills have no path activation.
-  opencode:
-    omit:
-      paths: OpenCode skills have no path activation.
 ---
 Run the neutral fixture skill.

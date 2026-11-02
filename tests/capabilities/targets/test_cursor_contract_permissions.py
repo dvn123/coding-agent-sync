@@ -82,7 +82,5 @@ def test_cursor_agent_declares_private_worker_contracts() -> None:
     assert "Run a self-hosted Cloud Agent worker" in help
     assert "--worker-dir <path>" in help
     assert "--pool [name]" in help
-    assert (
-        "One cloud agent claims this worker at a\n"
-        "                                    time." in help
-    )
+    # The CLI wraps option text to the terminal width, or not at all.
+    assert "One cloud agent claims this worker at a time." in " ".join(help.split())

@@ -210,6 +210,12 @@ CASES = (
         surfaces=("cursor-agent.permissions",),
     ),
     Case(
+        "cursor-agent.ignore",
+        "cursor-agent",
+        "targets/test_cursor_ignore.py",
+        surfaces=("cursor-agent.ignore",),
+    ),
+    Case(
         "cursor-agent.config",
         "cursor-agent",
         "targets/test_cursor_config.py",
@@ -477,12 +483,10 @@ CASES = (
         "targets/test_opencode_rules.py",
         surfaces=("opencode.global-instructions",),
     ),
-    # 2.x accepts `instructions` but never loads it.
     Case(
         "opencode.instructions-config",
         "opencode",
         "targets/test_opencode_rules.py",
-        expected=Support.UNSUPPORTED,
         surfaces=("opencode.instructions-config",),
     ),
     Case(
@@ -657,7 +661,7 @@ SURFACES = (
     *_surfaces(
         "cursor-agent",
         SurfaceManagement.GENERATED,
-        ("global-rule", "rules", "skills", "agents-user", "permissions"),
+        ("global-rule", "rules", "skills", "agents-user", "permissions", "ignore"),
     ),
     *_surfaces(
         "cursor-agent",

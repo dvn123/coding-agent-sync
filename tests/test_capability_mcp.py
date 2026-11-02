@@ -244,3 +244,30 @@ def test_remote_mcp_accepts_streamable_http_json_rpc() -> None:
 
     assert payload["result"]["serverInfo"]["name"] == "capability-probe"
     assert remote.protocol.called("initialize")
+
+
+def test_responses_responder_calls_a_listed_namespaced_tool_in_its_namespace() -> None:
+    responder = ResponsesMCPResponder()
+
+    body, _ = responder.respond(
+        {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "mcp__probe",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "echo",
+                            "description": TOOL_DESCRIPTION,
+                        }
+                    ],
+                }
+            ]
+        },
+        0,
+    )
+
+    text = body.decode()
+    assert '"namespace":"mcp__probe"' in text
+    assert '"name":"echo"' in text

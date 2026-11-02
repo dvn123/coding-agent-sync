@@ -185,6 +185,15 @@ class ResponsesRequest(DecodedRequest):
                             output,
                         )
                     )
+                # An MCP tool result arrives as content parts.
+                case {"type": "function_call_output", "output": list(output)}:
+                    observations.extend(
+                        strings(
+                            output,
+                            channel="function_call_output",
+                            source_path=f"{path}.output",
+                        )
+                    )
                 case {
                     "type": "function_call",
                     "name": str(),

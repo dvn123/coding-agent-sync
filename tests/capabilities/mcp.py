@@ -156,7 +156,8 @@ def mcp_checks(requests: tuple[dict[str, Any], ...] | list[dict[str, Any]]):
     }
 
 
-def find_tool_name(request: dict[str, Any]) -> str | None:
+def find_tool(request: dict[str, Any]) -> tuple[str | None, str] | None:
+    """The probe tool's namespace group, if it sits in one, and its name."""
     tool_groups = [request.get("tools")]
     inputs = request.get("input")
     if isinstance(inputs, list):
@@ -168,12 +169,19 @@ def find_tool_name(request: dict[str, Any]) -> str | None:
     for tools in tool_groups:
         if not isinstance(tools, list):
             continue
-        if name := _find_tool_name(tools):
-            return name
+        if found := _find_tool(tools):
+            return found
     return None
 
 
-def _find_tool_name(tools: list[Any]) -> str | None:
+def find_tool_name(request: dict[str, Any]) -> str | None:
+    if (found := find_tool(request)) is None:
+        return None
+    namespace, name = found
+    return f"{namespace}__{name}" if namespace else name
+
+
+def _find_tool(tools: list[Any]) -> tuple[str | None, str] | None:
     for tool in tools:
         if not isinstance(tool, dict):
             continue
@@ -182,9 +190,9 @@ def _find_tool_name(tools: list[Any]) -> str | None:
         if (
             isinstance(nested, list)
             and isinstance(namespace, str)
-            and (name := _find_tool_name(nested))
+            and (found := _find_tool(nested))
         ):
-            return f"{namespace}__{name}"
+            return namespace, found[1]
         function = tool.get("function")
         candidate = function if isinstance(function, dict) else tool
         description = candidate.get("description")
@@ -194,7 +202,7 @@ def _find_tool_name(tools: list[Any]) -> str | None:
             and TOOL_DESCRIPTION in description
             and isinstance(name, str)
         ):
-            return name
+            return None, name
     return None
 
 
@@ -395,14 +403,15 @@ class ResponsesMCPResponder:
     def respond(self, request: dict[str, Any], _count: int) -> tuple[bytes, str]:
         from capabilities.protocols.responses import responses_done
 
+        found = find_tool(request)
         self.tool_name = self.tool_name or find_tool_name(request)
-        if self.tool_name and not self.called_tool:
+        if found and not self.called_tool:
             self.called_tool = True
-            namespace, separator, name = self.tool_name.rpartition("__")
+            # A tool listed inside a namespace group is called by its own name
+            # in that namespace, whether it came from a search or the request.
+            namespace, name = found
             body = _responses_function(
-                name if separator else self.tool_name,
-                {"value": TOOL_ARGUMENT},
-                namespace=namespace if separator and self.searched else None,
+                name, {"value": TOOL_ARGUMENT}, namespace=namespace
             )
         elif (
             self.search_deferred

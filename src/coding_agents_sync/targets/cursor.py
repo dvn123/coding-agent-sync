@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import Field, model_validator
 
@@ -24,12 +24,12 @@ from ..sources import (
 )
 from .permissions import (
     cursor_shell_variants,
+    denied_paths,
     has_directories,
 )
 from .support import (
     applies_to,
     block,
-    bundled_files,
     collision_error,
     command_target_diagnostics,
     declared_trees,
@@ -38,7 +38,9 @@ from .support import (
     native_patch,
     omissions,
     raw_files,
+    shared_skill,
     skill_collisions,
+    skill_tree,
     strict_native,
     unhandled_target_block,
     with_skill_scripts,
@@ -70,6 +72,8 @@ class CursorSkillNative(StrictModel):
 class CursorAgentNative(StrictModel):
     model: str | None = None
     readonly: bool | None = None
+    # Tool names the agent may use; Desktop reads them comma-separated.
+    tools: list[Annotated[str, Field(pattern=r"^[^,\n]+$")]] | None = None
 
 
 def _agent_file(meta: dict[str, str | bool], body: str) -> bytes:
@@ -82,15 +86,47 @@ def _agent_file(meta: dict[str, str | bool], body: str) -> bytes:
     return f"---\n{'\n'.join(lines)}\n---\n\n{body.rstrip()}\n".encode()
 
 
-def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
-    files, executables = bundled_files(skill.source_dir)
-    files[Path("SKILL.md")] = markdown(meta, skill.body)
-    return OwnedTree(
-        root / skill.source_dir.name,
-        tuple(sorted(files.items(), key=lambda item: item[0].as_posix())),
-        root,
-        executables=executables,
+def cursor_skill(
+    skill: SkillSource, root: Path
+) -> tuple[tuple[OwnedTree, ...], list[Diagnostic]]:
+    """The skill's tree below `root`, if its native block validates."""
+    value = block(skill, "cursor")
+    native, issues = strict_native(skill.path, "cursor", value, CursorSkillNative)
+    diagnostics = [*issues, *omissions(skill.path, "cursor", value, set())]
+    if not native:
+        return (), diagnostics
+    meta, issues = frontmatter(
+        skill.path,
+        {
+            "name": skill.name,
+            "description": skill.description,
+            **({"license": skill.license} if skill.license else {}),
+            **({"paths": skill.paths} if skill.paths else {}),
+            **(
+                {"disable-model-invocation": True}
+                if skill.disable_model_invocation
+                else {}
+            ),
+            **({"metadata": skill.metadata} if skill.metadata else {}),
+        },
+        native,
+        value.raw,
     )
+    return (skill_tree(skill, root, meta),), [*diagnostics, *issues]
+
+
+def _ignore_pattern(path: str) -> str | None:
+    """A denied path in `.cursorignore` syntax, relative to the home directory.
+
+    Cursor's agent reads a `.cursorignore` in every ancestor of the workspace,
+    so one at home covers each workspace below it, for its file tools and its
+    sandboxed shell alike. An absolute path outside home has no such ancestor.
+    """
+    if path.startswith("**/"):
+        return path
+    if path.startswith("~/"):
+        return "/" + path.removeprefix("~/")
+    return None
 
 
 INTERPRETER_COMMANDS = frozenset({"bash", "eval", "sh", "zsh"})
@@ -291,38 +327,10 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 )
             )
     for skill in sources.skills:
-        if not applies_to(skill, "cursor"):
-            continue
-        value = block(skill, "cursor")
-        native, issues = strict_native(skill.path, "cursor", value, CursorSkillNative)
-        diagnostics.extend(issues)
-        diagnostics.extend(
-            omissions(
-                skill.path,
-                "cursor",
-                value,
-                {"license"} if skill.license else set(),
-            )
-        )
-        if native:
-            meta, issues = frontmatter(
-                skill.path,
-                {
-                    "name": skill.name,
-                    "description": skill.description,
-                    **({"paths": skill.paths} if skill.paths else {}),
-                    **(
-                        {"disable-model-invocation": True}
-                        if skill.disable_model_invocation
-                        else {}
-                    ),
-                    **({"metadata": skill.metadata} if skill.metadata else {}),
-                },
-                native,
-                value.raw,
-            )
+        if applies_to(skill, "cursor") and not shared_skill(skill):
+            tree, issues = cursor_skill(skill, skills_root)
             diagnostics.extend(issues)
-            trees.append(_tree(skill, skills_root, meta))
+            trees.extend(tree)
     # Cursor's own migration turns a slash command into a skill the model
     # cannot invoke by itself.
     collisions = skill_collisions(sources, "cursor")
@@ -371,10 +379,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 agent.path,
                 "cursor",
                 value,
-                {
-                    *({"effort"} if agent.effort else set()),
-                    *({"color"} if agent.color else set()),
-                },
+                {"effort"} if agent.effort else set(),
             )
         )
         if value.raw:
@@ -397,6 +402,8 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 meta["model"] = model
             if native.readonly:
                 meta["readonly"] = True
+            if native.tools:
+                meta["tools"] = ", ".join(native.tools)
             if agent.background:
                 meta["background"] = True
             files.append(
@@ -415,12 +422,22 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
         required = {
             *({"tools"} if permissions.tools else set()),
             *({"workspace"} if has_directories(permissions.workspace) else set()),
-            *({"secret_paths"} if permissions.secret_paths else set()),
             *({"secret_names"} if permissions.secret_names else set()),
             *({"unmatched"} if permissions.unmatched != "ask" else set()),
         }
         diagnostics.extend(omissions(permissions.paths[0], "cursor", value, required))
         diagnostics.extend(command_target_diagnostics(permissions, "cursor"))
+        if ignored := [
+            pattern
+            for path in denied_paths(permissions)
+            if (pattern := _ignore_pattern(path))
+        ]:
+            lines = ("# Generated by coding-agents sync", *ignored, "")
+            files.append(
+                OwnedFile(
+                    ctx.home / ".cursorignore", "\n".join(lines).encode(), ctx.home
+                )
+            )
     native_values, permission_diagnostics = _permission_values(sources, root)
     diagnostics.extend(permission_diagnostics)
     patches = []
