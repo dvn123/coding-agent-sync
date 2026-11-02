@@ -61,6 +61,8 @@ type NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 # never expanded by any target.
 type Token = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_./,@%+=~-]+$")]
 type Decision = Literal["allow", "ask", "deny"]
+# An MCP server or tool name every target spells unchanged in its rules.
+type McpName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]+$")]
 type Effort = Literal["low", "medium", "high", "xhigh", "max"]
 EFFORT_LEVELS: frozenset[str] = frozenset(get_args(Effort.__value__))
 
@@ -452,19 +454,21 @@ class McpServerSource(StrictModel):
     """One MCP server, registered under `id` by every target that receives it.
 
     A local server has `command` with optional `args` and `env`; a remote one
-    has `url`. Per-target settings such as approval modes stay in patches.
+    has `url`. `tools` decides single tools by exact name; an undecided tool
+    follows the target's own default.
     """
 
     path: Path
     schema_: Literal["coding-agents/v1"] = Field(alias="schema")
     kind: Literal["mcp-server"]
-    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]+$")]
+    id: McpName
     description: str = ""
     only: Annotated[tuple[ToolName, ...], Unique] = ()
     command: NonEmpty | None = None
     args: tuple[str, ...] = ()
     env: dict[str, str] = Field(default_factory=dict)
     url: NonEmpty | None = None
+    tools: dict[McpName, Decision] = Field(default_factory=dict)
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
 
     @model_validator(mode="after")

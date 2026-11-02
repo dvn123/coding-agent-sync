@@ -22,6 +22,7 @@ from ..output.plan import (
 )
 from ..sources import (
     CommandPermission,
+    McpServerSource,
     SkillSource,
     SourceBundle,
     StrictModel,
@@ -36,6 +37,7 @@ from .support import (
     frontmatter,
     markdown,
     mcp_servers,
+    mcp_tool_decisions,
     native_patch,
     raw_files,
     shared_skill,
@@ -166,9 +168,9 @@ def _rides_options(
     )
 
 
-def _permission_values(
-    sources: SourceBundle, root: Path
-) -> tuple[tuple[NativeValue, ...], tuple[Diagnostic, ...]]:
+def _terminal_allowlist(
+    sources: SourceBundle,
+) -> tuple[list[str], tuple[Diagnostic, ...]]:
     """Lower allows to Desktop's `terminalAllowlist`, which the CLI also reads.
 
     Cursor's shared allowlist has no deny channel, so every allow an ask or a
@@ -176,7 +178,7 @@ def _permission_values(
     spellings (`timeout 30 git status`) are not listed and prompt too.
     """
     if not (permissions := sources.permissions):
-        return (), ()
+        return [], ()
     commands = permissions.commands
     diagnostics: list[Diagnostic] = []
     # An allowlisted interpreter carries its payload as an argument, so
@@ -228,13 +230,32 @@ def _permission_values(
             )
         )
     )
-    if not allowlist:
-        return (), tuple(diagnostics)
-    path = root / "permissions.json"
-    return (
-        NativeValue("cursor-desktop", path, ("approvalMode",), "allowlist"),
-        NativeValue("cursor-desktop", path, ("terminalAllowlist",), allowlist),
-    ), tuple(diagnostics)
+    return allowlist, tuple(diagnostics)
+
+
+def _permission_values(
+    sources: SourceBundle,
+    servers: list[tuple[McpServerSource, dict[str, Any]]],
+    path: Path,
+) -> tuple[tuple[NativeValue, ...], tuple[Diagnostic, ...]]:
+    """Lower allows to Desktop's allowlists. An unlisted command or MCP tool
+    asks; Desktop has no deny list."""
+    terminal, diagnostics = _terminal_allowlist(sources)
+    mcp = [
+        f"{server}:{tool}"
+        for server, tool, decision in mcp_tool_decisions(servers)
+        if decision == "allow"
+    ]
+    values = [
+        NativeValue("cursor-desktop", path, (key,), allowlist)
+        for key, allowlist in (("terminalAllowlist", terminal), ("mcpAllowlist", mcp))
+        if allowlist
+    ]
+    if values:
+        values.insert(
+            0, NativeValue("cursor-desktop", path, ("approvalMode",), "allowlist")
+        )
+    return tuple(values), diagnostics
 
 
 def _validate_patches(
@@ -378,17 +399,19 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
                     ctx.home / ".cursorignore", "\n".join(lines).encode(), ctx.home
                 )
             )
-    native_values, permission_diagnostics = _permission_values(sources, root)
-    diagnostics.extend(permission_diagnostics)
     servers, issues = mcp_servers(sources, "cursor")
     diagnostics.extend(issues)
+    native_values, permission_diagnostics = _permission_values(
+        sources, servers, root / "permissions.json"
+    )
+    diagnostics.extend(permission_diagnostics)
     native_values = (
         *native_values,
         *(
             NativeValue(
-                "cursor-mcp", root / "mcp.json", ("mcpServers", name, key), value
+                "cursor-mcp", root / "mcp.json", ("mcpServers", server.id, key), value
             )
-            for name, fields in servers
+            for server, fields in servers
             for key, value in fields.items()
         ),
     )

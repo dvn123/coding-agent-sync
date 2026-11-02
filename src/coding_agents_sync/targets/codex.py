@@ -19,6 +19,7 @@ from ..output.plan import (
 )
 from ..sources import (
     AgentSource,
+    McpServerSource,
     PermissionSource,
     SkillSource,
     SourceBundle,
@@ -33,6 +34,7 @@ from .support import (
     declared_trees,
     frontmatter,
     mcp_servers,
+    mcp_tool_decisions,
     native_patch,
     raw_files,
     shared_skill,
@@ -406,6 +408,35 @@ def _permission_profile(
     return values
 
 
+# Codex's per-tool approval modes, which outrank the server's
+# `default_tools_approval_mode`. A disabled tool is never offered.
+CODEX_APPROVAL_MODES = {"allow": "approve", "ask": "prompt"}
+
+
+def _mcp_tool_values(
+    servers: list[tuple[McpServerSource, dict[str, Any]]], config: Path
+) -> list[NativeValue]:
+    values = []
+    disabled: dict[str, list[str]] = {}
+    for server, tool, decision in mcp_tool_decisions(servers):
+        if decision == "deny":
+            disabled.setdefault(server, []).append(tool)
+        else:
+            values.append(
+                NativeValue(
+                    "codex",
+                    config,
+                    ("mcp_servers", server, "tools", tool, "approval_mode"),
+                    CODEX_APPROVAL_MODES[decision],
+                )
+            )
+    values.extend(
+        NativeValue("codex", config, ("mcp_servers", server, "disabled_tools"), tools)
+        for server, tools in disabled.items()
+    )
+    return values
+
+
 def _validate_patches(patch: NativePatch, generated: list[NativeValue]) -> None:
     validate_generated_conflicts(
         Patch(patch.operations),
@@ -537,11 +568,12 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         ),
         *(
             NativeValue(
-                "codex", root / "config.toml", ("mcp_servers", name, key), value
+                "codex", root / "config.toml", ("mcp_servers", server.id, key), value
             )
-            for name, fields in servers
+            for server, fields in servers
             for key, value in fields.items()
         ),
+        *_mcp_tool_values(servers, root / "config.toml"),
     ]
     patch, issues = native_patch(
         config_root=ctx.config_root,

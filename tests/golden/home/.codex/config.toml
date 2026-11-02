@@ -14,9 +14,16 @@ exclude = ["FIXTURE_TOKEN"]
 [mcp_servers.fixture-local]
 command = "fixture-mcp"
 args = ["--stdio"]
+disabled_tools = ["erase"]
 
 [mcp_servers.fixture-local.env]
 FIXTURE_MODE = "neutral"
+
+[mcp_servers.fixture-local.tools.inspect]
+approval_mode = "approve"
+
+[mcp_servers.fixture-local.tools.submit]
+approval_mode = "prompt"
 
 [mcp_servers.fixture-remote]
 url = "https://mcp.example.test/mcp"

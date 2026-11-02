@@ -15,6 +15,7 @@
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
+        "sha256:<hash>",
         "sha256:<hash>"
       ]
     },
@@ -31,6 +32,7 @@
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
+        "sha256:<hash>",
         "sha256:<hash>"
       ]
     },
@@ -38,6 +40,7 @@
       "target": "claude",
       "pointer": "/permissions/deny",
       "items": [
+        "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
@@ -117,7 +120,24 @@
     },
     {
       "target": "codex",
+      "pointer": "/mcp_servers/fixture-local/disabled_tools",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "codex",
       "pointer": "/mcp_servers/fixture-local/env",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-local/tools/inspect/approval_mode",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-local/tools/submit/approval_mode",
       "hash": "sha256:<hash>"
     },
     {
@@ -151,6 +171,13 @@
       "target": "cursor-desktop",
       "pointer": "/approvalMode",
       "hash": "sha256:<hash>"
+    },
+    {
+      "target": "cursor-desktop",
+      "pointer": "/mcpAllowlist",
+      "items": [
+        "sha256:<hash>"
+      ]
     },
     {
       "target": "cursor-desktop",
@@ -218,6 +245,9 @@
       "target": "opencode",
       "pointer": "/permissions",
       "items": [
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",

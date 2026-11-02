@@ -11,7 +11,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .sources import AgentSource, CommandSource, PermissionSource, ToolName
+from .sources import (
+    AgentSource,
+    CommandSource,
+    McpServerSource,
+    PermissionSource,
+    ToolName,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +150,15 @@ LIMITATIONS = (
         "Cursor Desktop's permission file, which the CLI reads too, has no deny "
         "list, so `unrestricted` there would run every guarded command.",
         lambda permissions: permissions.unmatched != "ask",
+        probe="cursor-desktop.permission-channels",
+    ),
+    Limitation(
+        "cursor",
+        McpServerSource,
+        "tools",
+        "Cursor Desktop's permission file, which the CLI reads too, has no MCP "
+        "deny list.",
+        lambda server: "deny" in server.tools.values(),
         probe="cursor-desktop.permission-channels",
     ),
     Limitation(

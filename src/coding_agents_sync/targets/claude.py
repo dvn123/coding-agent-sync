@@ -53,6 +53,7 @@ from .support import (
     frontmatter,
     markdown,
     mcp_servers,
+    mcp_tool_decisions,
     native_patch,
     one_of,
     raw_files,
@@ -220,10 +221,16 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
 
 
 def _permission_values(
-    sources: SourceBundle, tools: Mapping[PermissionTool, Decision]
+    sources: SourceBundle,
+    tools: Mapping[PermissionTool, Decision],
+    mcp: Mapping[Decision, list[str]],
 ) -> tuple[tuple[tuple[str, ...], Any], ...]:
     if not (permissions := sources.permissions):
-        return ()
+        return tuple(
+            (("permissions", decision), rules)
+            for decision, rules in mcp.items()
+            if rules
+        )
     buckets = bucket_patterns(shell_entries(permissions))
     workspace = permissions.workspace
     # Claude has no unmatched-command setting, so an allow lands as the bare
@@ -232,6 +239,7 @@ def _permission_values(
         *(["Bash"] if permissions.unmatched == "allow" else []),
         *(f"Bash({pattern})" for pattern in buckets["allow"]),
         *tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "allow"),
+        *mcp["allow"],
     ]
     # `Read(**)` and `Edit(**)` anchor at the cwd. Reads in the extra
     # directories need no rule; edits there, and anything elsewhere once
@@ -268,10 +276,11 @@ def _permission_values(
                 f"{operation}({claude_path(directory)}/**)"
                 for directory in workspace.ask
                 for operation in ("Read", "Edit")
-            ],
+            ]
+            + mcp["ask"],
         ),
     ]
-    deny += list(tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "deny"))
+    deny += [*tool_patterns(tools, CLAUDE_TOOL_PATTERNS, "deny"), *mcp["deny"]]
     if deny:
         values.append((("permissions", "deny"), deny))
     if directories := literal_directories(permissions.workspace):
@@ -430,19 +439,22 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(command_target_diagnostics(permissions, "claude"))
     servers, issues = mcp_servers(sources, "claude")
     diagnostics.extend(issues)
+    mcp_rules: dict[Decision, list[str]] = {"allow": [], "ask": [], "deny": []}
+    for server, tool, decision in mcp_tool_decisions(servers):
+        mcp_rules[decision].append(f"mcp__{server}__{tool}")
     permission_values = (
         *(
             NativeValue("claude", root / "settings.json", pointer, value)
-            for pointer, value in _permission_values(sources, folded[0])
+            for pointer, value in _permission_values(sources, folded[0], mcp_rules)
         ),
         *(
             NativeValue(
                 "claude-mcp",
                 ctx.home / ".claude.json",
-                ("mcpServers", name, key),
+                ("mcpServers", server.id, key),
                 value,
             )
-            for name, fields in servers
+            for server, fields in servers
             for key, value in {
                 "type": "http" if "url" in fields else "stdio",
                 **fields,

@@ -1393,6 +1393,63 @@ class SyncTests(unittest.TestCase):
                 },
             )
 
+    def test_mcp_tool_decisions_lower_to_each_targets_rules(self) -> None:
+        """Without a permission policy too. Cursor Desktop has no MCP deny, so
+        a deny there needs its omit."""
+        server = {
+            "schema": "coding-agents/v1",
+            "kind": "mcp-server",
+            "id": "browser",
+            "command": "browser-mcp",
+            "tools": {"click": "ask", "run_code": "deny", "snapshot": "allow"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(config_root / "mcp" / "browser.yaml", yaml.safe_dump(server))
+
+            with self.assertRaisesRegex(
+                ValueError, r"tools is unsupported on cursor; add targets\.cursor"
+            ):
+                run_sync(config_root=config_root, home=home)
+
+            server["targets"] = {"cursor": {"omit": {"tools": "Desktop cannot deny."}}}
+            write(config_root / "mcp" / "browser.yaml", yaml.safe_dump(server))
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                json.loads((home / ".claude/settings.json").read_text())["permissions"],
+                {
+                    "allow": ["mcp__browser__snapshot"],
+                    "ask": ["mcp__browser__click"],
+                    "deny": ["mcp__browser__run_code"],
+                },
+            )
+            codex = tomllib.loads((home / ".codex/config.toml").read_text())
+            self.assertEqual(
+                codex["mcp_servers"]["browser"],
+                {
+                    "command": "browser-mcp",
+                    "tools": {
+                        "snapshot": {"approval_mode": "approve"},
+                        "click": {"approval_mode": "prompt"},
+                    },
+                    "disabled_tools": ["run_code"],
+                },
+            )
+            self.assertEqual(
+                json.loads((home / ".cursor/permissions.json").read_text()),
+                {"approvalMode": "allowlist", "mcpAllowlist": ["browser:snapshot"]},
+            )
+            opencode = json.loads((home / ".config/opencode/opencode.json").read_text())
+            self.assertEqual(
+                opencode["permissions"],
+                [
+                    {"action": "browser_click", "resource": "*", "effect": "ask"},
+                    {"action": "browser_run_code", "resource": "*", "effect": "deny"},
+                    {"action": "browser_snapshot", "resource": "*", "effect": "allow"},
+                ],
+            )
+
     def test_an_mcp_server_takes_exactly_one_transport(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_root, home = config_root_home(tmp)

@@ -440,8 +440,12 @@ def compiled(sources: SourceBundle) -> dict[str, object]:
     assert permissions is not None
     claude_tools = fold_edit_write(permissions.tools, "Claude")[0]
     opencode_tools = fold_edit_write(permissions.tools, "OpenCode")[0]
-    settings = dict(claude._permission_values(sources, claude_tools))
-    (value,) = opencode._permissions(sources, Path("opencode.json"), opencode_tools)
+    settings = dict(
+        claude._permission_values(
+            sources, claude_tools, {"allow": [], "ask": [], "deny": []}
+        )
+    )
+    (value,) = opencode._permissions(sources, Path("opencode.json"), opencode_tools, [])
     return {
         "claude": {
             key: settings.get(("permissions", key), [])

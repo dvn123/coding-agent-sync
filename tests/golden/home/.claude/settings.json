@@ -5,7 +5,8 @@
       "Bash(fixture-tool -C* status *)",
       "Bash(fixture-tool -C* status)",
       "Read(**)",
-      "WebFetch(*)"
+      "WebFetch(*)",
+      "mcp__fixture-local__inspect"
     ],
     "ask": [
       "Bash(fixture-tool publish --public *)",
@@ -17,7 +18,8 @@
       "Bash(fixture-tool -C* publish * --public)",
       "WebSearch(*)",
       "Read(//tmp/fixture-review/**)",
-      "Edit(//tmp/fixture-review/**)"
+      "Edit(//tmp/fixture-review/**)",
+      "mcp__fixture-local__submit"
     ],
     "deny": [
       "Bash(fixture-tool remove)",
@@ -48,7 +50,8 @@
       "Bash(*FIXTURE_TOKEN*)",
       "Read(//**/.env)",
       "Edit(//**/.env)",
-      "Edit(**)"
+      "Edit(**)",
+      "mcp__fixture-local__erase"
     ],
     "additionalDirectories": [
       "~/fixture-shared"

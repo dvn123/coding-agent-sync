@@ -119,8 +119,9 @@ raw files: `target-config/cursor/raw/hooks.json` mirrors to
 scripts sit beside it or anywhere else below `raw/`.
 
 Patches target `cli-config.json`, `permissions.json`, `settings.json`, and
-`mcp.json` through the corresponding `cursor-*` patch names; CLI settings such
-as MCP grants live in the `cursor-cli-config` patch. They may
+`mcp.json` through the corresponding `cursor-*` patch names. A source's MCP
+tool allows land in Desktop's `mcpAllowlist`; CLI-only grants, such as an
+`Mcp(<server>:get_*)` glob, live in the `cursor-cli-config` patch. They may
 contribute to a generated pointer where the contribution does not clash; in
 particular, a Cursor Desktop patch cannot contribute to the terminal
 allowlist. Raw files below
