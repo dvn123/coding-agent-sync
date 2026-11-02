@@ -9,14 +9,17 @@ def local_bundle() -> str:
     executable = local_executable()
     if executable is None:
         pytest.skip("unavailable: matching Cursor local runtime is unavailable")
+    # The runtime ships as chunks, and the hook events sit in other chunks than
+    # the one that names `hooks.json`.
     root = Path(executable).parent
-    for path in (root / "index.js", *root.glob("*.index.js")):
-        if not path.is_file():
-            continue
-        text = path.read_text(errors="replace")
-        if "hooks.json" in text:
-            return text
-    pytest.skip("unavailable: Cursor local runtime has no inspectable hooks bundle")
+    text = "\n".join(
+        path.read_text(errors="replace")
+        for path in (root / "index.js", *sorted(root.glob("*.index.js")))
+        if path.is_file()
+    )
+    if "hooks.json" not in text:
+        pytest.skip("unavailable: Cursor local runtime has no inspectable hooks bundle")
+    return text
 
 
 @pytest.mark.capability_case("cursor-agent.mcp")

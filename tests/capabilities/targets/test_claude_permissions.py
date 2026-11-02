@@ -290,6 +290,20 @@ SCENARIOS = {
         )
         for name in ("ask", "allow")
     },
+    # Which rule kind gates the Write tool, outside the project.
+    **{
+        f"write-{name}": Scenario(
+            "Write",
+            {"file_path": f"{{root}}/outside/written-{name}", "content": "probe"},
+            {"allow": ("Read(//**)", "Edit(//**)", "Write(//**)")} | rules,
+        )
+        for name, rules in (
+            ("allowed", {}),
+            ("deny-edit", {"deny": ("Edit(/{root}/outside/**)",)}),
+            ("deny-write", {"deny": ("Write(/{root}/outside/**)",)}),
+            ("ask-write", {"ask": ("Write(/{root}/outside/**)",)}),
+        )
+    },
     "deny-env": Scenario(
         "Read",
         {"file_path": "{work}/.env"},
@@ -573,6 +587,17 @@ EXPECTED = {
         for tool in ("read", "edit")
         for name in ("ask", "allow")
     },
+    **{
+        f"write-{name}": {"exit-zero": True, "denied": denied, "result-error": denied}
+        for name, denied in (
+            ("allowed", False),
+            ("deny-edit", True),
+            # A Write(...) rule parses but never matches, which is why the
+            # compiler folds `write` onto `edit`.
+            ("deny-write", False),
+            ("ask-write", False),
+        )
+    },
     "deny-env": {"exit-zero": True, "result-error": True},
     "deny-env-example": {"exit-zero": True, "result-error": True},
     **{
@@ -764,7 +789,8 @@ def invoke(runtime: Runtime, scenario: Scenario) -> CheckResult:
         *runtime.seatbelt.command(
             runtime.claude,
             f"Run the requested {scenario.tool} tool call exactly once.",
-            "--bare",
+            # Bare mode offers only Bash, Edit, and Read.
+            *(() if scenario.tool == "Write" else ("--bare",)),
             "--print",
             "--output-format",
             "stream-json",

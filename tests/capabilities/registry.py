@@ -19,6 +19,13 @@ TARGETS["cursor-desktop"] = Target("cursor-desktop", "", None)
 
 CASES = (
     Case(
+        "claude.shared-skills",
+        "claude",
+        "targets/test_claude_loading.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("claude.shared-skills",),
+    ),
+    Case(
         "codex.skill-execution",
         "codex",
         "targets/test_codex_config.py",
@@ -687,6 +694,7 @@ SURFACES = (
         "claude",
         SurfaceManagement.UNMANAGED,
         (
+            "shared-skills",
             "mcp-permissions",
             "memory",
             "plugins",
