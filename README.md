@@ -86,6 +86,8 @@ agents/*.md
 permissions/policy.yaml
 permissions/commands/*.yaml
 permissions.local/*.yaml
+mcp/*.yaml
+mcp.local/*.yaml
 patches/*.yaml
 patches.local/*.yaml
 target-config/<target>/raw/*
@@ -99,7 +101,7 @@ explicitly unvalidated raw native block, under
 listing the field in `targets.<target>.omit`. Raw target files live under
 `target-config/<target>/raw/` and remain visibly unvalidated.
 
-Files under `patches.local/` must have mode `0600`. The CLI consumes plain
+Files under `patches.local/` and `mcp.local/` must have mode `0600`. The CLI consumes plain
 YAML patches and does not render templates. Local permission fragments merge
 with committed fragments before validation.
 See [the source schema](docs/source-format.md) and the

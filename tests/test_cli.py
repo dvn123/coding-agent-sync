@@ -122,6 +122,37 @@ def test_local_patch_mode_override_and_check_drift(tmp_path: Path) -> None:
     assert snapshot(home) == before
 
 
+def test_local_mcp_server_mode_and_name_collision(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config_root = copy_config_root(tmp_path / "config")
+    local_server = config_root / "mcp.local/fixture-private.yaml"
+    local_server.parent.mkdir()
+    local_server.write_text("only: [claude]\nurl: https://private.example.test/mcp\n")
+    local_server.chmod(0o600)
+    runner = CliRunner()
+    arguments = ["--config-root", str(config_root), "--home", str(home)]
+
+    assert runner.invoke(main, arguments).exit_code == 0
+    servers = json.loads((home / ".claude.json").read_text())["mcpServers"]
+    assert servers["fixture-private"] == {
+        "type": "http",
+        "url": "https://private.example.test/mcp",
+    }
+
+    local_server.chmod(0o644)
+    loose = runner.invoke(main, arguments)
+    assert loose.exit_code == 1
+    assert "local MCP server must use mode 0600" in loose.output
+
+    shadow = config_root / "mcp.local/fixture-local.yaml"
+    shadow.write_text("command: other-mcp\n")
+    shadow.chmod(0o600)
+    local_server.chmod(0o600)
+    collision = runner.invoke(main, arguments)
+    assert collision.exit_code == 1
+    assert "MCP server 'fixture-local' is already declared" in collision.output
+
+
 def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
     home = tmp_path / "home"
     config_root = copy_config_root(tmp_path / "config")

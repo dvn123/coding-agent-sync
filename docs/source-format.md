@@ -28,6 +28,7 @@ permissions/policy.yaml
 permissions/commands/*.yaml
 permissions.local/*.yaml
 mcp/*.yaml
+mcp.local/*.yaml
 patches/*.yaml
 patches.local/*.yaml
 target-config/<target>/raw/*
@@ -35,8 +36,9 @@ target-config/<target>/raw/*
 
 `config_root` owns all of these inputs and the native pointer/hash manifest.
 `home` owns generated target files only. `permissions.local/` is optional and
-is merged with committed permission fragments before validation. Local patches
-must be mode `0600`.
+is merged with committed permission fragments before validation.
+`mcp.local/` holds machine-local servers beside `mcp/`; a name may appear in
+only one of them. Local patches and local MCP servers must be mode `0600`.
 
 ## Common Markdown shape
 
@@ -264,8 +266,8 @@ lossy predicate combinations are errors.
 
 ### MCP servers
 
-Each `mcp/<id>.yaml` declares one server, registered under its file name by
-every target it applies to. A local server sets `command` with optional `args` and
+Each `mcp/<id>.yaml` or `mcp.local/<id>.yaml` declares one server, registered
+under its file name by every target it applies to. A local server sets `command` with optional `args` and
 `env`; a remote one sets `url`. `targets.<target>.native.command` replaces the
 command for one target, such as an absolute path for Cursor, which starts
 servers without the login shell's `PATH`.
