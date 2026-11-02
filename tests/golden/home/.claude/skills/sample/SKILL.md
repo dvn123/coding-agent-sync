@@ -1,5 +1,5 @@
 ---
-name: fixture-skill
+name: sample
 description: Neutral fixture skill.
 license: See asset.txt
 metadata:

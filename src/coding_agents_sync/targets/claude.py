@@ -13,10 +13,8 @@ from pydantic import (
 
 from ..ir import resolve
 from ..models import SyncContext
-from ..output.patches import Patch, validate_generated_conflicts
 from ..output.plan import (
     Diagnostic,
-    NativePatch,
     NativeValue,
     OwnedFile,
     OwnedTree,
@@ -25,6 +23,7 @@ from ..output.plan import (
 from ..sources import (
     EFFORT_LEVELS,
     AgentSource,
+    AgentTool,
     Decision,
     PermissionSource,
     PermissionTool,
@@ -48,7 +47,6 @@ from .permissions import (
 )
 from .support import (
     collision_error,
-    command_target_diagnostics,
     declared_trees,
     frontmatter,
     markdown,
@@ -197,6 +195,16 @@ class ClaudeAgentNative(StrictModel):
         return self
 
 
+# The Claude tools each portable agent `deny` entry removes.
+CLAUDE_AGENT_TOOLS: dict[AgentTool, tuple[str, ...]] = {
+    "shell": ("Bash",),
+    "edit": ("Edit", "Write", "NotebookEdit"),
+    "webfetch": ("WebFetch",),
+    "websearch": ("WebSearch",),
+    "delegate": ("Agent",),
+}
+
+
 def _agent_meta(
     agent: AgentSource,
     native: ClaudeAgentNative,
@@ -205,8 +213,11 @@ def _agent_meta(
     meta: dict[str, Any] = {"name": agent.name, "description": agent.description}
     if native.tools is not None:
         meta["tools"] = native.tools
+    disallowed = [tool for entry in agent.deny for tool in CLAUDE_AGENT_TOOLS[entry]]
     if native.disallowed_tools is not None:
-        meta["disallowedTools"] = native.disallowed_tools
+        disallowed += _tool_entries(native.disallowed_tools)
+    if disallowed:
+        meta["disallowedTools"] = list(dict.fromkeys(disallowed))
     if agent.effort and policy is None:
         meta["effort"] = agent.effort
     if agent.background:
@@ -295,18 +306,6 @@ def _permission_values(
             )
         )
     return tuple(values)
-
-
-def _validate_patches(
-    patches: list[NativePatch], generated: tuple[NativeValue, ...]
-) -> None:
-    for patch in patches:
-        values = {
-            value.pointer: value.value
-            for value in generated
-            if value.target == patch.target
-        }
-        validate_generated_conflicts(Patch(patch.operations), values)
 
 
 def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
@@ -417,7 +416,8 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         meta, issues = frontmatter(
             agent.path,
             _agent_meta(agent, native, policy),
-            native,
+            # The portable deny list and the native one land as one list.
+            native.model_copy(update={"disallowed_tools": None}),
             resolved.raw,
         )
         diagnostics.extend(issues)
@@ -436,7 +436,6 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(issues)
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
-        diagnostics.extend(command_target_diagnostics(permissions, "claude"))
     servers, issues = mcp_servers(sources, "claude")
     diagnostics.extend(issues)
     mcp_rules: dict[Decision, list[str]] = {"allow": [], "ask": [], "deny": []}
@@ -471,7 +470,6 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         )
         patches.append(patch)
         diagnostics.extend(issues)
-    _validate_patches(patches, permission_values)
     raw, raw_tree, issues = raw_files(
         config_root=ctx.config_root,
         target="claude",

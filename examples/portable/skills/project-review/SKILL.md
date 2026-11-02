@@ -1,7 +1,4 @@
 ---
-schema: coding-agents/v1
-kind: skill
-id: project-review
 name: project-review
 description: Review a project and report actionable findings with file references.
 targets:

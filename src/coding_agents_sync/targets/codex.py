@@ -8,10 +8,8 @@ from pydantic import ConfigDict, Field
 
 from ..ir import applies_to, resolve
 from ..models import SyncContext
-from ..output.patches import Patch, validate_generated_conflicts
 from ..output.plan import (
     Diagnostic,
-    NativePatch,
     NativeValue,
     OwnedFile,
     OwnedTree,
@@ -30,7 +28,6 @@ from .permissions import literal_directories
 from .support import (
     bundled_files,
     collision_error,
-    command_target_diagnostics,
     declared_trees,
     frontmatter,
     mcp_servers,
@@ -334,6 +331,10 @@ def _agent_toml(
     if agent.effort:
         values["model_reasoning_effort"] = agent.effort
     values.update(native.model_dump(exclude_none=True))
+    # A role's features apply to the spawned agent; its sandbox, web search,
+    # and spawn depth stay the parent's, which `limits` records.
+    if "shell" in agent.deny:
+        values["features"] = {**values.get("features", {}), "shell_tool": False}
     overlap = set(raw) & set(values)
     if overlap:
         raise ValueError(
@@ -437,13 +438,6 @@ def _mcp_tool_values(
     return values
 
 
-def _validate_patches(patch: NativePatch, generated: list[NativeValue]) -> None:
-    validate_generated_conflicts(
-        Patch(patch.operations),
-        {value.pointer: value.value for value in generated},
-    )
-
-
 def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.codex
     files: list[OwnedFile] = []
@@ -488,10 +482,7 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             continue
         meta, issues = frontmatter(
             command.path,
-            {
-                "name": command.stem,
-                "description": command.description.replace("<", "").replace(">", ""),
-            },
+            {"name": command.stem, "description": command.description},
             native.model_copy(update={"openai": None}),
             resolved.raw,
         )
@@ -547,7 +538,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
     if permissions := sources.permissions:
         _, issues = resolve("codex", [permissions])
         diagnostics.extend(issues)
-        diagnostics.extend(command_target_diagnostics(permissions, "codex"))
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
     # no registration for them.
     servers, issues = mcp_servers(sources, "codex")
@@ -582,7 +572,6 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         patch_name="codex",
     )
     diagnostics.extend(issues)
-    _validate_patches(patch, native_values)
     raw, raw_tree, raw_issues = raw_files(
         config_root=ctx.config_root,
         target="codex",

@@ -1,8 +1,4 @@
 ---
-schema: coding-agents/v1
-kind: agent
-id: reviewer
-name: reviewer
 description: Review code and return actionable defects without making changes.
 only: [claude, codex, opencode]
 targets:

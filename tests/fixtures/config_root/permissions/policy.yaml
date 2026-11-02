@@ -1,7 +1,3 @@
-schema: coding-agents/v1
-kind: permission-policy
-id: fixture-policy
-name: Fixture policy
 description: Neutral fixture permission policy.
 wrappers:
   - env
@@ -23,10 +19,10 @@ secret_names:
 targets:
   codex:
     omit:
-      tools: Codex has no portable user permission channel.
-      workspace.ask: Codex has no workspace ask channel.
+      - tools
+      - workspace.ask
   cursor:
     omit:
-      tools: Cursor Desktop and Agent do not share a full tool permission surface.
-      workspace: Cursor has no shared workspace permission channel.
-      secret_names: Cursor has no secret-name ask channel.
+      - tools
+      - workspace
+      - secret_names

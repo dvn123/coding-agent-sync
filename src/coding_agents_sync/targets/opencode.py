@@ -11,11 +11,9 @@ from pydantic import ConfigDict, field_validator
 from ..ir import applies_to, resolve
 from ..models import SyncContext
 from ..output.patches import (
-    Patch,
     PatchError,
     display_pointer,
     touches,
-    validate_generated_conflicts,
 )
 from ..output.plan import (
     Diagnostic,
@@ -26,6 +24,7 @@ from ..output.plan import (
     Plan,
 )
 from ..sources import (
+    AgentTool,
     Decision,
     McpServerSource,
     PermissionSource,
@@ -47,7 +46,6 @@ from .permissions import (
     wrapper_prefixes,
 )
 from .support import (
-    command_target_diagnostics,
     declared_trees,
     frontmatter,
     markdown,
@@ -111,6 +109,16 @@ class OpenCodeRule(StrictModel):
     action: str
     resource: str = "*"
     effect: Literal["allow", "ask", "deny"]
+
+
+# The OpenCode permission action each portable agent `deny` entry denies.
+OPENCODE_AGENT_TOOLS: dict[AgentTool, str] = {
+    "shell": "shell",
+    "edit": "edit",
+    "webfetch": "webfetch",
+    "websearch": "websearch",
+    "delegate": "subagent",
+}
 
 
 class OpenCodeAgentNative(StrictModel):
@@ -279,12 +287,8 @@ def _permissions(
     return (NativeValue("opencode", config, ("permissions",), rules + mcp),)
 
 
-def _validate_patches(
-    patches: list[NativePatch], generated: tuple[NativeValue, ...]
-) -> None:
-    values = {value.pointer: value.value for value in generated}
+def _validate_patches(patches: list[NativePatch]) -> None:
     for patch in patches:
-        validate_generated_conflicts(Patch(patch.operations), values)
         for operation in patch.operations:
             # OpenCode applies the V1 `/permission` map ahead of the native
             # list, so no patch may write it. Contributions append after every
@@ -394,6 +398,14 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 )
             native = native.model_copy(update={"model": policy.model})
             effort = policy.effort
+        if agent.deny:
+            denied = [
+                OpenCodeRule(action=OPENCODE_AGENT_TOOLS[entry], effect="deny")
+                for entry in agent.deny
+            ]
+            native = native.model_copy(
+                update={"permissions": [*denied, *(native.permissions or [])]}
+            )
         agent_meta: dict[str, Any] = {"description": agent.description}
         if agent.color:
             agent_meta["color"] = PORTABLE_COLORS.get(agent.color, agent.color)
@@ -431,7 +443,6 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(issues)
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
-        diagnostics.extend(command_target_diagnostics(permissions, "opencode"))
         files.append(
             OwnedFile(
                 root / "plugins" / UNWRAP_PLUGIN.name, UNWRAP_PLUGIN.read_bytes(), root
@@ -470,7 +481,7 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         patch_name="opencode",
     )
     diagnostics.extend(issues)
-    _validate_patches([patch], native_values)
+    _validate_patches([patch])
     raw, raw_tree, raw_issues = raw_files(
         config_root=ctx.config_root,
         target="opencode",

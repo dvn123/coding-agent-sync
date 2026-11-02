@@ -71,7 +71,10 @@ Skills otherwise inherit from the parent. File paths must exist on the target
 machine; keep machine-specific paths in local-only source artifacts.
 
 Custom agents inherit the parent sandbox and approval policy and cannot
-override them, so agent `sandbox_mode` is rejected. An instruction to avoid
+override them, so agent `sandbox_mode` is rejected: the `codex.agent-tool-gates`
+probe shows a role's `sandbox_mode`, `web_search`, and `features.multi_agent`
+leave the spawned agent unchanged, while `features.shell_tool = false` removes
+its shell tools. A portable agent `deny: [shell]` lowers to that feature. An instruction to avoid
 edits is not an enforced read-only sandbox. Configure the sandbox and approval
 policy on the parent session. See the official
 [custom agent schema](https://learn.chatgpt.com/docs/agent-configuration/subagents).
@@ -108,7 +111,7 @@ command into a skill, so a command lowers to `skills/<stem>/` with
 never does by itself. Codex skills do not expand `$ARGUMENTS` or `$1`, so such
 a placeholder stays literal and the user's text after the skill mention
 carries the arguments. `execution.agent` and `execution.subtask` have no
-skill equivalent and need `omit.execution`.
+skill equivalent and need `omit: [execution]`.
 
 ## Command permission projection
 
@@ -145,7 +148,7 @@ selected by `default_permissions`:
 - `tools` decisions of `allow` are Codex's own behaviour and owe nothing. A
   `websearch: deny` becomes `web_search = "disabled"`, which removes the tool
   from the request (the `codex.config` probe pins both modes); any other `ask`
-  or `deny` has no channel and needs `omit.tools`.
+  or `deny` has no channel and needs `omit: [tools]`.
 
 The profile carries no network settings: set
 `/permissions/coding-agents/network/enabled` in the `codex` patch. Legacy

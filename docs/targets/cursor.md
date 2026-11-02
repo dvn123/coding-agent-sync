@@ -31,7 +31,7 @@ A command becomes a skill with `disable-model-invocation: true`, which is how
 Cursor's own `migrate-to-skills` converts `.cursor/commands`: the user invokes
 it from the `/` menu and the model never does by itself. Cursor skills have no
 delegated execution, so `execution.agent` or `execution.subtask` needs
-`omit.execution`.
+`omit: [execution]`.
 
 Desktop loads user agents from `<home>/.cursor/agents` (the
 `cursor-desktop.agents` probe pins the user provider); the CLI does not
@@ -80,14 +80,20 @@ native content under pointer ownership. Cursor CLI reads the same file (the
 no generated `cli-config.json` shell entries. The CLI is second class: it has
 no hard deny of its own, so a guarded command prompts there as on Desktop,
 and `--force` approves it. Desktop stays on `allowlist` whatever the policy
-says, so `unmatched: allow` requires `targets.cursor.omit.unmatched`.
+says, so `unmatched: allow` requires `unmatched` in `targets.cursor.omit`.
+Desktop's agent runs file tools unasked inside the workspace: a write asks
+only outside it, for a protected config file, or when `promptWorkspaceWrites`
+is set, which Desktop never sets. A web fetch asks unless the host is in the
+in-app `webFetchDomainAllowlist`, and a web search asks unless the in-app
+toggle or run-everything mode is on; both live in Cursor's state store, not
+in a file, and a subagent approves both itself.
 
 - Allows lower to allowlist entries. Cursor matches a plain entry as the whole
   command or a prefix of it at a word boundary, so a rule without a hole is
   one `git status`. A rule with a hole uses the `prog:args` glob form, bare
   and with a trailing `*`, which is not optional. Both shapes are pinned by
-  the `cursor-agent.permissions` probe. A bare exact rule (`command: fd,
-  exact: true`) lowers to the exact-bare form `fd:`, which matches the program
+  the `cursor-agent.permissions` probe. A bare exact rule (`exact: fd`)
+  lowers to the exact-bare form `fd:`, which matches the program
   with no arguments. A rule with a text predicate has no token-bounded form
   and does not project.
 - An allow whose command is an interpreter (`sh`, `bash`, `zsh`, `eval`)

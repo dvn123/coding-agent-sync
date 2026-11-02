@@ -49,18 +49,19 @@ def source_path(source: Any) -> Path:
 
 
 def omissions(
-    source: Path, target: str, value: TargetBlock, required: set[str]
+    source: Path, target: str, value: TargetBlock, required: Mapping[str, str]
 ) -> tuple[Diagnostic, ...]:
     diagnostics: list[Diagnostic] = []
-    for path in sorted(required - set(value.omit)):
+    for path in sorted(set(required) - set(value.omit)):
         diagnostics.append(
             Diagnostic(
                 "error",
-                f"{path} is unsupported on {target}; add targets.{target}.omit.{path}",
+                f"{path} is unsupported on {target}: {required[path]} List it in "
+                f"targets.{target}.omit",
                 source,
             )
         )
-    # An acknowledged omission is silent: its reason lives in the source.
+    # An acknowledged omission is silent.
     for path in value.omit:
         if path not in required:
             diagnostics.append(

@@ -81,9 +81,11 @@ def load_patch(path: Path) -> Patch:
         parsed = load_yaml(path.read_text(encoding="utf-8"))
     except yaml.YAMLError:
         raise PatchError(f"invalid patch: {path}") from None
-    if not isinstance(parsed, dict) or parsed.get("schema") != "coding-agents/patch/v1":
-        raise PatchError(f"invalid patch schema: {path}")
-    if set(parsed) - {"schema", "set", "replace", "delete", "extend", "overlay"}:
+    if parsed is None:
+        return Patch()
+    if not isinstance(parsed, dict):
+        raise PatchError(f"patch must be a mapping: {path}")
+    if set(parsed) - {"set", "replace", "delete", "extend", "overlay"}:
         raise PatchError(f"invalid patch section: {path}")
     operations: list[Operation] = []
     for kind in ("set", "replace", "extend", "overlay"):
@@ -140,20 +142,6 @@ def contributes_to_generated(
         or (operation.kind == "extend" and isinstance(value, list))
         or (operation.kind == "overlay" and isinstance(value, Mapping))
     )
-
-
-def validate_generated_conflicts(
-    patch: Patch, generated: Mapping[Pointer, Any]
-) -> None:
-    for operation in patch.operations:
-        for pointer, value in generated.items():
-            if contributes_to_generated(operation, pointer, value):
-                continue
-            if (
-                pointer[: len(operation.pointer)] == operation.pointer
-                or operation.pointer[: len(pointer)] == pointer
-            ):
-                raise PatchError(f"reserved generated path {display_pointer(pointer)}")
 
 
 def get_value(document: Mapping[str, Any], pointer: Pointer) -> tuple[bool, Any]:

@@ -12,10 +12,6 @@ def source(root: Path, kind: str, native: dict, **extra) -> Path:
     path = root / ("skills/probe/SKILL.md" if kind == "skill" else "agents/probe.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     meta = {
-        "schema": "coding-agents/v1",
-        "kind": kind,
-        "id": "probe",
-        "name": "probe",
         "description": "Probe current capabilities",
         "only": ["codex"],
         "targets": {"codex": {"native": native}},
@@ -94,7 +90,6 @@ def test_agent_controls_and_model_policy_compile_to_toml(tmp_path: Path) -> None
     (root / "model-policy.yaml").write_text(
         yaml.safe_dump(
             {
-                "schema": "coding-agents/model-policy/v1",
                 "default": "sweet-spot",
                 "profiles": {
                     "sweet-spot": {
@@ -166,7 +161,6 @@ def test_model_policy_conflict_fails_before_writes(tmp_path: Path) -> None:
     (root / "model-policy.yaml").write_text(
         yaml.safe_dump(
             {
-                "schema": "coding-agents/model-policy/v1",
                 "default": "sweet-spot",
                 "profiles": {
                     "sweet-spot": {"codex": {"model": "policy-model"}},

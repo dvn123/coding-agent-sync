@@ -1,8 +1,5 @@
 ---
-schema: coding-agents/v1
-kind: skill
-id: fixture-skill
-name: fixture-skill
+name: sample
 description: Neutral fixture skill.
 paths:
   - "**/*.py"

@@ -1,10 +1,10 @@
 """Portable fields a target cannot represent.
 
-A source that uses one must acknowledge the loss with
-`targets.<target>.omit.<field>`, and an omit no limitation asks for is an
-error. Each limitation's `probe` names the negative live capability case that
-shows the target still lacks the feature: when that case observes support, the
-live run fails and names the limitation for removal.
+A source that uses one must acknowledge the loss by listing the field in
+`targets.<target>.omit`, and an omit no limitation asks for is an error. Each
+limitation's `probe` names the negative live capability case that shows the
+target still lacks the feature: when that case observes support, the live run
+fails and names the limitation for removal.
 """
 
 from collections.abc import Callable
@@ -47,6 +47,16 @@ def _codex_gated(permissions: PermissionSource) -> bool:
     )
 
 
+def _cursor_gated(permissions: PermissionSource) -> bool:
+    """A tool decision other than Desktop's default: file tools run unasked in
+    the workspace (`cursor-desktop.tool-defaults`), while web tools ask in a
+    session but not in a subagent, and an in-app toggle can change that."""
+    return any(
+        decision != "allow" or tool in {"webfetch", "websearch"}
+        for tool, decision in permissions.tools.items()
+    )
+
+
 def _directories(permissions: PermissionSource) -> bool:
     workspace = permissions.workspace
     return bool(
@@ -73,6 +83,15 @@ LIMITATIONS = (
         "Codex agent roles have no background field.",
         lambda agent: agent.background,
         probe="codex.agent-background",
+    ),
+    Limitation(
+        "codex",
+        AgentSource,
+        "deny",
+        "A Codex role keeps its parent's sandbox, web search, and spawn depth; "
+        "only its shell tool can be turned off.",
+        lambda agent: bool(set(agent.deny) - {"shell"}),
+        probe="codex.agent-tool-gates",
     ),
     Limitation(
         "codex",
@@ -114,15 +133,25 @@ LIMITATIONS = (
         "effort",
         "Cursor agent files have no effort field.",
         lambda agent: agent.effort is not None,
-        probe="cursor-desktop.agent-effort",
+        probe="cursor-desktop.agent-fields",
+    ),
+    Limitation(
+        "cursor",
+        AgentSource,
+        "deny",
+        "Cursor agent files list the tools an agent may use, not those it may "
+        "not; `readonly` stands in for edits only.",
+        lambda agent: bool(set(agent.deny) - {"edit"}),
+        probe="cursor-desktop.agent-fields",
     ),
     Limitation(
         "cursor",
         PermissionSource,
         "tools",
         "Cursor Desktop's permission file, which the CLI reads too, has no "
-        "per-tool channel.",
-        lambda permissions: bool(permissions.tools),
+        "per-tool channel; only its default holds, file tools running unasked "
+        "in the workspace.",
+        _cursor_gated,
         probe="cursor-desktop.permission-channels",
     ),
     Limitation(
@@ -172,10 +201,11 @@ LIMITATIONS = (
 )
 
 
-def required_omissions(source: Any, target: ToolName) -> set[str]:
-    """The omits `source` owes `target` for the portable fields it uses."""
+def required_omissions(source: Any, target: ToolName) -> dict[str, str]:
+    """The omits `source` owes `target` for the portable fields it uses, each
+    with the reason the target loses it."""
     return {
-        limitation.field
+        limitation.field: limitation.reason
         for limitation in LIMITATIONS
         if limitation.target == target
         and isinstance(source, limitation.source)

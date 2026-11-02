@@ -32,41 +32,23 @@ RECORDER = "unwrap-recorder"
 TOOL = "unwrap-tool"
 REASON = "run unwrap-tool instead"
 POLICY = """\
-schema: coding-agents/v1
-kind: permission-policy
-id: user
-name: user
 description: permissions
 unmatched: allow
 wrappers: [timeout, env, nohup, sudo]
 targets:
-  codex: {omit: {unmatched: Codex gates unmatched commands by sandbox.}}
-  cursor: {omit: {unmatched: Cursor Desktop has no deny channel.}}
+  codex: {omit: [unmatched]}
+  cursor: {omit: [unmatched]}
 """
 RULES = f"""\
-schema: coding-agents/v1
-kind: permission-rules
-id: test
-name: test
-description: permission rules
 deny:
-  - {{command: {RECORDER}, reason: {REASON}}}
+  - {{prefix: {RECORDER}, reason: {REASON}}}
   - [{TOOL}, push]
 """
 ASK_POLICY = """\
-schema: coding-agents/v1
-kind: permission-policy
-id: user
-name: user
 description: permissions
 wrappers: [timeout]
 """
 ASK_RULES = f"""\
-schema: coding-agents/v1
-kind: permission-rules
-id: test
-name: test
-description: permission rules
 allow:
   - [{TOOL}, status]
 """

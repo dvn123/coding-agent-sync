@@ -1,6 +1,3 @@
-schema: coding-agents/v1
-kind: mcp-server
-id: fixture-local
 description: Neutral local fixture server.
 command: fixture-mcp
 args: [--stdio]
@@ -15,4 +12,4 @@ targets:
     native:
       command: /opt/fixture/bin/fixture-mcp
     omit:
-      tools: Cursor Desktop has no MCP deny list.
+      - tools

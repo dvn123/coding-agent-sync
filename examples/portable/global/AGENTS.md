@@ -1,8 +1,4 @@
 ---
-schema: coding-agents/v1
-kind: global
-id: global
-name: Personal instructions
 description: Shared working preferences.
 ---
 

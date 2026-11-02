@@ -1,3 +1,2 @@
-schema: coding-agents/patch/v1
 set:
   /fixture/cursor_settings: true

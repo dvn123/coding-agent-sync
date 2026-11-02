@@ -567,7 +567,7 @@ def test_a_gain_names_the_limitation_its_probe_guards() -> None:
         "limitation codex.PermissionSource.workspace.ask from "
         "coding_agents_sync/limits.py (Codex has no directory ask channel.) and "
         "lowering `workspace.ask`, so sources stop needing "
-        "targets.codex.omit.workspace.ask"
+        "workspace.ask in targets.codex.omit"
     )
 
 
