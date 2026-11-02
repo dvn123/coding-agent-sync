@@ -401,6 +401,84 @@ def test_codex_permission_profile_has_no_ask_access_level(runtime: Runtime) -> N
     assert "permissions" in process.stderr
 
 
+@pytest.mark.capability_case("codex.loading")
+@pytest.mark.capability_live
+def test_codex_lists_a_skill_description_with_angle_brackets(runtime: Runtime) -> None:
+    """A description keeps its `<` and `>`; nothing needs stripping them."""
+    paths = paths_for(runtime, "skill-description")
+    skills = write_api_config(paths, runtime) / "skills"
+    for name, description in (
+        ("angle-probe", "Uses <angle> brackets ANGLE_PROBE_SENTINEL"),
+        ("plain-probe", "Plain PLAIN_PROBE_SENTINEL"),
+    ):
+        (skills / name).mkdir(parents=True)
+        (skills / name / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\nProbe.\n"
+        )
+
+    process = run_probe(
+        run,
+        runtime.codex,
+        "debug",
+        "prompt-input",
+        "Probe.",
+        cwd=paths.work,
+        env=environment(paths),
+        timeout=30,
+        stdin=-3,
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert "- plain-probe: Plain PLAIN_PROBE_SENTINEL" in process.stdout
+    assert "- angle-probe: Uses <angle> brackets ANGLE_PROBE_SENTINEL" in process.stdout
+
+
+@pytest.mark.capability_case("codex.permission-profiles")
+@pytest.mark.capability_live
+def test_codex_root_write_profile_keeps_its_deny_entries(runtime: Runtime) -> None:
+    """`":root" = "write"` opens every directory, and a deny entry still binds."""
+    paths = paths_for(runtime, "root-write")
+    codex_home = paths.home / ".codex"
+    codex_home.mkdir()
+    outside = paths.root / "outside"
+    private = paths.root / "private"
+    outside.mkdir()
+    private.mkdir()
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            (
+                'default_permissions = "open"',
+                "",
+                "[permissions.open]",
+                'extends = ":workspace"',
+                "",
+                "[permissions.open.filesystem]",
+                '":root" = "write"',
+                f'{json.dumps(str(private))} = "deny"',
+            )
+        )
+    )
+
+    process = run_probe(
+        run,
+        runtime.codex,
+        "sandbox",
+        "-P",
+        "open",
+        "-C",
+        str(paths.work),
+        "/bin/sh",
+        "-c",
+        f'/usr/bin/touch "{outside}/written"; /usr/bin/touch "{private}/written"',
+        cwd=paths.work,
+        env=environment(paths),
+        timeout=10,
+    )
+
+    assert (outside / "written").exists(), process.stderr
+    assert not (private / "written").exists()
+
+
 COMPILED_POLICY = """\
 schema: coding-agents/v1
 kind: permission-policy

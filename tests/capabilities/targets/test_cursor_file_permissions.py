@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -117,19 +116,31 @@ def file_permissions(
     return observed
 
 
+# Whether the read reached the model or the write reached the disk. With no
+# rule the CLI reads and writes anywhere; a deny binds, under --force too; an
+# allow changes nothing the default does not already give.
+EXPECTED = {
+    "read-inside": True,
+    "read-outside": True,
+    "read-inside-deny": False,
+    "read-outside-allow": True,
+    "read-outside-deny-force": False,
+    "write-inside": True,
+    "write-outside": True,
+    "write-inside-deny": False,
+    "write-outside-allow": True,
+    "write-inside-deny-force": False,
+}
+
+
 @pytest.mark.capability_case("cursor-agent.file-permissions")
 @pytest.mark.capability_live
-def test_cursor_file_permissions_characterization(
-    file_permissions: dict[str, CheckResult],
+@pytest.mark.parametrize(("scenario", "done"), EXPECTED.items())
+def test_cursor_cli_file_permissions(
+    file_permissions: dict[str, CheckResult], scenario: str, done: bool
 ) -> None:
-    out = Path(
-        "/private/tmp/claude-501/-Users-diogonunes--local-share-src-coding-agent-sync"
-        "/dd296b1c-3fa4-4f8c-86db-a40ccaa854c3/scratchpad"
-    )
-    (out / "cursorfile.json").write_text(
-        json.dumps({k: v.checks for k, v in file_permissions.items()})
-    )
-    (out / "cursorfile-detail.txt").write_text(
-        "\n\n".join(f"== {k}\n{v.detail}" for k, v in file_permissions.items())
-    )
-    raise AssertionError
+    observation = file_permissions[scenario]
+    checks = observation.checks
+
+    assert checks["exit-zero"] and checks["tool-called"], observation.detail
+    assert checks["done"] is done, observation.detail

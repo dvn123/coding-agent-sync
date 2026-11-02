@@ -30,6 +30,16 @@ FILE_AGENT = "file-agent-probe"
 FILE_AGENT_DESCRIPTION = "OPENCODE_FILE_AGENT_DESCRIPTION"
 FILE_AGENT_BODY = "OPENCODE_FILE_AGENT_BODY"
 BACKGROUND_AGENT = "background-agent-probe"
+# Agent files whose frontmatter the compiler shapes around OpenCode's schema:
+# a hex and a named color, a key outside the 2.x schema, and reasoning effort
+# in `request.body` and at the top level.
+SHAPE_AGENTS = {
+    "color-hex-probe": "color: '#123456'\n",
+    "color-name-probe": "color: blue\n",
+    "extra-key-probe": "color: '#123456'\ntemperature: 0.3\n",
+    "effort-body-probe": "request:\n  body:\n    reasoningEffort: high\n",
+    "effort-top-probe": "reasoningEffort: high\n",
+}
 COMPILER_GLOBAL = "OPENCODE_COMPILER_GLOBAL"
 COMPILER_RULE = "OPENCODE_COMPILER_RULE"
 COMPILER_AGENT = "opencode-compiler-agent"
@@ -97,6 +107,10 @@ def write_fixtures(paths: Paths, base_url: str) -> Path:
         "---\n"
         f"{FILE_AGENT_BODY}\n"
     )
+    for name, frontmatter in SHAPE_AGENTS.items():
+        (agent.parent / f"{name}.md").write_text(
+            f"---\ndescription: {name}\nmode: primary\n{frontmatter}---\n{name}\n"
+        )
     (agent.parent / f"{BACKGROUND_AGENT}.md").write_text(
         "---\ndescription: Background probe.\nmode: subagent\nbackground: true\n---\n"
         "Background probe.\n"
@@ -344,3 +358,39 @@ def test_opencode_agents(runtime: Runtime) -> None:
 )
 def test_opencode_compiler(observation: CheckResult, check: str) -> None:
     assert observation.checks[check], observation.detail
+
+
+@pytest.fixture(scope="module")
+def shaped_agents(runtime: Runtime) -> dict[str, dict[str, Any]]:
+    agents = settled(
+        runtime,
+        ("debug", "agents"),
+        lambda value: set(SHAPE_AGENTS) <= {item["id"] for item in value},
+    )
+    return {item["id"]: item for item in agents if item["id"] in SHAPE_AGENTS}
+
+
+# How OpenCode resolves each shaped agent file: a hex color stays, a named one
+# is dropped (so the compiler maps portable names to hex), a key outside the 2.x
+# schema is migrated into `request.body` rather than dropping the file, and
+# reasoning effort lands in `request.body` from either spelling.
+SHAPE_EXPECTED = {
+    "color-hex-probe": ("#123456", {}),
+    "color-name-probe": (None, {}),
+    "extra-key-probe": ("#123456", {"temperature": 0.3}),
+    "effort-body-probe": (None, {"reasoningEffort": "high"}),
+    "effort-top-probe": (None, {"reasoningEffort": "high"}),
+}
+
+
+@pytest.mark.capability_case("opencode.agents")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(("agent", "expected"), SHAPE_EXPECTED.items())
+def test_opencode_resolves_agent_frontmatter_shapes(
+    shaped_agents: dict[str, dict[str, Any]],
+    agent: str,
+    expected: tuple[str | None, dict[str, Any]],
+) -> None:
+    resolved = shaped_agents[agent]
+
+    assert (resolved.get("color"), resolved["request"]["body"]) == expected, resolved

@@ -28,6 +28,11 @@ EXPLICIT_DESCRIPTION = "EXPLICIT_SKILL_DESCRIPTION_SENTINEL"
 EXPLICIT_BODY = "EXPLICIT_SKILL_BODY_SENTINEL"
 LEGACY_DESCRIPTION = "LEGACY_COMMAND_DESCRIPTION_SENTINEL"
 LEGACY_BODY = "LEGACY_COMMAND_BODY_SENTINEL"
+# Skills in the shared `.agents/skills` roots Codex, Cursor, and OpenCode read.
+SHARED_SKILLS = {
+    "user-shared": ("user-shared-loading-probe", "USER_SHARED_SKILL_SENTINEL"),
+    "project-shared": ("project-shared-loading-probe", "PROJECT_SHARED_SKILL_SENTINEL"),
+}
 CLAUDE_FLAGS = (
     "--print",
     "--output-format",
@@ -88,6 +93,15 @@ def runtime(
     claude, sandbox = require_command("claude"), require_command("sandbox-exec")
     paths = Paths.create(tmp_path_factory.mktemp("claude-loading").resolve())
     write_fixtures(paths.config)
+    for root, (name, description) in (
+        (paths.home, SHARED_SKILLS["user-shared"]),
+        (paths.work, SHARED_SKILLS["project-shared"]),
+    ):
+        skill = root / ".agents" / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\nShared probe.\n"
+        )
     stub = recorded_server(request, AnthropicResponder().respond)
     value = Runtime(
         claude,
@@ -206,3 +220,15 @@ def test_claude_loading(
     observation: AnthropicRequest, channel: str, sentinel: str, present: bool
 ) -> None:
     assert (sentinel in observation.text(channel)) is present
+
+
+@pytest.mark.capability_case("claude.shared-skills")
+@pytest.mark.capability_live
+@pytest.mark.parametrize("root", SHARED_SKILLS)
+def test_claude_ignores_the_shared_skill_roots(runtime: Runtime, root: str) -> None:
+    """Claude lists its own skills but not those in `.agents/skills`, so the
+    compiler writes Claude its own copy of every shared skill."""
+    request = invoke(runtime, f"SHARED_SKILLS_PROMPT_{root}")
+
+    assert VISIBLE_DESCRIPTION in request.text("system")
+    assert SHARED_SKILLS[root][1] not in request.text("system")
