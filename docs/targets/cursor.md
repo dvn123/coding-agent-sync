@@ -6,10 +6,11 @@
 | --- | --- |
 | Global | `<home>/.cursor/rules/coding-agents-global.mdc` |
 | Rule | `<home>/.cursor/rules/<stem>.mdc` |
-| Skill | `<home>/.cursor/skills/<directory>/` |
+| Skill | `<home>/.agents/skills/<directory>/`, shared with Codex and OpenCode; `<home>/.cursor/skills/<directory>/` when `only` leaves out Codex, Cursor, or OpenCode |
 | Command | `<home>/.cursor/skills/<stem>/SKILL.md` |
 | Agent | `<home>/.cursor/agents/<file>.md` (Desktop only) |
 | Permissions | owned pointers in `<home>/.cursor/permissions.json` |
+| Secret paths and denied directories | `<home>/.cursorignore` |
 
 Desktop is the primary host; the CLI is second class. Every surface here is a
 native user-scope file, not a plugin: Cursor's local plugins
@@ -22,8 +23,9 @@ from the workspace up through its ancestors for `.cursor/rules`, so the user
 rules apply to workspaces below `<home>`; the `cursor-desktop.rules` probe
 pins that ancestor load. The global rule filename is reserved. Typed rule
 fields are `description`, `globs`, and `alwaysApply`; a scoped rule must state
-`alwaysApply: false`. Typed skill fields are `name`, `description`, `paths`,
-`disable-model-invocation`, and `metadata`.
+`alwaysApply: false`. Typed skill fields are `name`, `description`, `license`, `paths`,
+`disable-model-invocation`, and `metadata`; Cursor ignores frontmatter it
+does not read.
 
 A command becomes a skill with `disable-model-invocation: true`, which is how
 Cursor's own `migrate-to-skills` converts `.cursor/commands`: the user invokes
@@ -38,21 +40,36 @@ YAML: it splits each line at its first colon and keeps the rest verbatim,
 quotes included. The compiler therefore writes each value bare on one line,
 collapses the description's whitespace, and exempts these files from YAML
 validation. Fields are `name`, `description`, `model` (a slug from
-`cursor-agent models`, absent to inherit), `readonly`, and `background`.
+`cursor-agent models`, absent to inherit), `readonly`, `tools` (a list,
+written comma-separated), and `background`.
 Cursor slugs carry the effort, so the model policy's `cursor` profile takes
-only `model`, and a portable `effort` or `color` needs an omission.
+only `model`, and a portable `effort` needs an omission; `color` is dropped.
 
 ### Third-party extensibility
 
 Cursor's "third-party extensibility" setting is on by default. It makes Cursor
 also load `<home>/.claude/skills`, `<home>/.codex/skills`,
 `<home>/.claude/agents`, `<home>/.claude/commands`, and enabled Claude Code
-plugins. Skills are merged by path, not by name, so with the setting on each
-skill the Claude and Codex targets also receive appears more than once, and
-Claude agents load in Claude's dialect. An agent of the same name in
+plugins. Skills are merged by path, not by name, so with the setting on a
+skill Claude also receives appears twice, once from `<home>/.agents/skills`
+and once from Claude's copy, and Claude agents load in Claude's dialect. An agent of the same name in
 `<home>/.cursor/agents` wins. The setting lives in Cursor's application
 storage, not a configuration file, so the compiler cannot own it: turn it off
 in Cursor Settings to make this target Cursor's only source.
+
+## Secret paths
+
+Cursor's agent reads a `.cursorignore` in the workspace and in every directory
+above it, for its file tools and for its sandboxed shell, so the compiler
+writes `secret_paths` and denied workspace directories to `<home>/.cursorignore`
+and every workspace below home gets them. A `**/` pattern is written as is and
+a `~/` path is anchored at home (`/.aws/credentials`). An absolute path outside
+home has no such ancestor and is skipped, and a workspace outside home gets
+none of the file. The file's manifest is `<home>/.coding-agents-managed.json`.
+The `cursor-agent.ignore` live scenario runs the compiled file against the
+CLI's agent, which shares this runtime with Desktop. Desktop's
+`cursor.general.globalCursorIgnoreList` setting is not read by the agent
+runtime, so it does not stop the agent's tools.
 
 ## Command permission projection
 

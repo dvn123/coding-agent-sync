@@ -58,13 +58,20 @@ def with_skill_scripts(
     """
     if not (permissions := sources.permissions):
         return sources
-    skills_root = root / "skills"
-    bases = (f"~/{skills_root.relative_to(home).as_posix()}", skills_root.as_posix())
     seen = {rule.predicates for rule in permissions.commands.allow}
     added: list[CommandPermission] = []
     for skill in sources.skills:
         if not applies_to(skill, target):
             continue
+        skills_root = (
+            shared_skills_root(home)
+            if target in SHARED_SKILL_READERS and shared_skill(skill)
+            else root / "skills"
+        )
+        bases = (
+            f"~/{skills_root.relative_to(home).as_posix()}",
+            skills_root.as_posix(),
+        )
         for relative in sorted(bundled_files(skill.source_dir)[1]):
             for base in bases:
                 path = f"{base}/{skill.source_dir.name}/{relative.as_posix()}"
@@ -83,6 +90,20 @@ def with_skill_scripts(
     return sources.model_copy(
         update={"permissions": permissions.model_copy(update={"commands": commands})}
     )
+
+
+# Codex, Cursor, and OpenCode all read `~/.agents/skills`; Claude does not.
+SHARED_SKILL_READERS = ("codex", "cursor", "opencode")
+
+
+def shared_skills_root(home: Path) -> Path:
+    return home / ".agents" / "skills"
+
+
+def shared_skill(skill: Any) -> bool:
+    """A skill every shared reader receives lands once, in the shared root;
+    one that `only` narrows keeps each reader's own skills directory."""
+    return all(applies_to(skill, target) for target in SHARED_SKILL_READERS)
 
 
 def applies_to(source: Any, target: str) -> bool:
@@ -131,7 +152,8 @@ def omissions(
                 source,
             )
         )
-    for path, reason in value.omit.items():
+    # An acknowledged omission is silent: its reason lives in the source.
+    for path in value.omit:
         if path not in required:
             diagnostics.append(
                 Diagnostic(
@@ -139,10 +161,6 @@ def omissions(
                     f"{path} is not an omitted {target} capability",
                     source,
                 )
-            )
-        else:
-            diagnostics.append(
-                Diagnostic("warning", f"omitted {path}: {reason}", source)
             )
     return tuple(diagnostics)
 
@@ -227,6 +245,18 @@ def frontmatter(
     return {**rendered, **raw}, diagnostics
 
 
+def skill_tree(skill: Any, root: Path, meta: Mapping[str, Any]) -> OwnedTree:
+    """A skill's bundled files below `root`, with `meta` as its frontmatter."""
+    files, executables = bundled_files(skill.source_dir)
+    files[Path("SKILL.md")] = markdown(meta, skill.body)
+    return OwnedTree(
+        root / skill.source_dir.name,
+        tuple(sorted(files.items(), key=lambda item: item[0].as_posix())),
+        root,
+        executables=executables,
+    )
+
+
 def markdown(meta: Mapping[str, Any], body: str) -> bytes:
     header = yaml.safe_dump(dict(meta), sort_keys=False, allow_unicode=True).rstrip()
     return f"---\n{header}\n---\n\n{body.rstrip()}\n".encode()
@@ -307,7 +337,12 @@ def raw_files(
                 )
             else:
                 files.append(OwnedFile(root / relative, source.read_bytes(), root))
-                diagnostics.append(
-                    Diagnostic("warning", "using unvalidated raw target file", source)
-                )
+    if files:
+        diagnostics.append(
+            Diagnostic(
+                "warning",
+                f"using {len(files)} unvalidated raw target file(s)",
+                source_root,
+            )
+        )
     return tuple(files), declaration, tuple(diagnostics)

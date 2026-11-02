@@ -238,7 +238,6 @@ targets:
   cursor:
     omit:
       workspace: probe
-      secret_paths: probe
 """
 
 
@@ -288,3 +287,14 @@ def test_codex_compiled_profile_denies_secret_reads_and_writes_allowed_roots(
         assert sandboxed(f'/bin/cat "{denied}"') != 0, denied
     assert sandboxed(f'/usr/bin/touch "{paths.home / "shared" / "new"}"') == 0
     assert sandboxed(f'/usr/bin/touch "{paths.home / "outside"}"') != 0
+
+    # With unmatched directories allowed the whole disk is writable, and the
+    # deny entries still hold.
+    (config_root / "permissions" / "policy.yaml").write_text(
+        COMPILED_POLICY.replace("workspace:\n", "workspace:\n  unmatched: allow\n")
+    )
+    run_sync(config_root=config_root, home=paths.home)
+    assert sandboxed(f'/usr/bin/touch "{paths.home / "outside"}"') == 0
+    for denied in (paths.home / "vault" / "key", paths.home / "private" / "note"):
+        assert sandboxed(f'/bin/cat "{denied}"') != 0, denied
+        assert sandboxed(f'/usr/bin/touch "{denied}"') != 0, denied

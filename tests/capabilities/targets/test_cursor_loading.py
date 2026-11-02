@@ -70,14 +70,16 @@ def runtime(
     (cursor / "cli-config.json").write_text(
         json.dumps({"version": 1, "approvalMode": "allowlist"})
     )
+    # The compiler writes skills every shared reader receives here.
+    shared = paths.home / ".agents" / "skills"
     write_skill(
-        cursor / "skills" / "probe-skill",
+        shared / "probe-skill",
         "probe-skill",
         SKILL_DESCRIPTION,
         f"{SKILL_BODY}\nArguments: $ARGUMENTS",
     )
     write_skill(
-        cursor / "skills" / "manual-skill",
+        shared / "manual-skill",
         "manual-skill",
         MANUAL_DESCRIPTION,
         f"{MANUAL_BODY}\nArguments: $ARGUMENTS",

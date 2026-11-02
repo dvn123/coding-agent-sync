@@ -38,8 +38,10 @@ targets:
 ```
 
 Interface fields also include `icon_small`, `icon_large`, and `brand_color`.
+`policy.products` limits a skill to `chatgpt`, `codex`, or `atlas`.
 Tool dependencies require a non-empty `value`; optional fields are
-`description`, `transport` (`stdio` or `streamable_http`), and `url`. They
+`description`, `transport` (`stdio` or `streamable_http`), `command`, and
+`url`. They
 declare dependencies, not credentials or authorization to install a server.
 Register executable MCP configuration in the parent native patch.
 
@@ -86,7 +88,7 @@ pointer-owned and preserve unnamed siblings.
 | --- | --- |
 | Global and rules | `<home>/.codex/AGENTS.md` |
 | Typed rule policy | `<home>/.codex/rules/coding-agents.rules` |
-| Skill | `<home>/.codex/skills/<directory>/` |
+| Skill | `<home>/.agents/skills/<directory>/`, shared with Cursor and OpenCode; `<home>/.codex/skills/<directory>/` when `only` leaves out Codex, Cursor, or OpenCode |
 | Command | `<home>/.codex/skills/<stem>/` with implicit invocation off |
 | Agent | `<home>/.codex/agents/<stem>.toml` |
 | Permissions | owned `default_permissions` and `permissions.coding-agents` in `<home>/.codex/config.toml` |
@@ -134,7 +136,8 @@ selected by `default_permissions`:
 
 - `extends = ":workspace"` inherits Codex's workspace sandbox: the project and
   temp directories are writable and the rest of the disk readable.
-- Literal `workspace.allow` directories become absolute `write` entries.
+- Literal `workspace.allow` directories become absolute `write` entries, or,
+  when `workspace.unmatched` is `allow`, one `":root" = "write"` entry.
 - `secret_paths` and `workspace.deny` directories become `deny` entries, which
   block reads as well as writes inside the sandbox. A `**/` path becomes the
   absolute glob `/**/…`, which macOS enforces natively; Linux warns that an
@@ -148,16 +151,22 @@ The profile carries no network settings: set
 is selected. The ChatGPT app lists the profile, with the policy's description,
 in its permission picker and starts threads on it unless the user picks
 another mode; Codex keeps the read denials when a session switches to another
-profile. `workspace.ask`, `workspace.unmatched: allow`, and `secret_names`
-have no channel and each need an omit, and so does `unmatched: allow`: Codex
+profile. `secret_names` land in `shell_environment_policy.exclude`, owned by
+entry, so no command sees those variables; a patch broadens the list with
+`extend`. A command that only names one is not refused, since prefix rules
+cannot match text. `workspace.ask` has no channel and needs an omit, and so
+does `unmatched: allow`: Codex
 0.166 retired the `untrusted` approval policy, and `on-request` already runs
 an unlisted command inside the sandbox, so the approval policy stays with the
 user's patch.
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,
-`developer_instructions`, `model`, `model_reasoning_effort`, and
-`nickname_candidates`. `targets.codex.raw` is supported for agent TOML
+`developer_instructions`, `model`, `model_reasoning_effort`,
+`model_reasoning_summary`, `model_verbosity`, `personality` (`none`,
+`friendly`, `pragmatic`), `service_tier` (a catalog tier id such as `fast` or
+`flex`), `features`, `skills`, and `nickname_candidates`. Codex rejects a role
+file with any other key, so portable `color` is dropped. `targets.codex.raw` is supported for agent TOML
 fields and is visibly unvalidated. Non-equivalent portable skill or agent
 fields require a reasoned omit acknowledgement.
 

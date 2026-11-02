@@ -48,6 +48,14 @@ def test_desktop_reads_agent_frontmatter_line_by_line() -> None:
         r"\"true\"===\([\w$]+\.readonly\?\?\"\"\)\.trim\(\)\.toLowerCase\(\)", bundle
     )
     assert re.search(r"[\w$]+\.background\?\?[\w$]+\.is_background", bundle)
+    assert re.search(
+        r"tools:void 0!==[\w$]+&&[\w$]+\.length>0\?[\w$]+\.split\(\",\"\)", bundle
+    )
+    # `~/.agents/skills` is first party: read even with third-party
+    # extensibility off, unlike `~/.claude` and `~/.codex`.
+    assert re.search(
+        r"\{configDir:\"\.agents\",subdir:\"skills\",thirdParty:!1", bundle
+    )
 
 
 @pytest.mark.capability_case("cursor-desktop.mcp")

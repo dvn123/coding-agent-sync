@@ -108,7 +108,12 @@ else:
 
 
 def _drain_pty(master: int, output: bytearray) -> None:
-    while readable := select.select([master], [], [], 0)[0]:
+    # Bounded: a descendant outside the killed group can hold the PTY open and
+    # keep writing to it.
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and (
+        readable := select.select([master], [], [], 0)[0]
+    ):
         try:
             if chunk := os.read(readable[0], 65_536):
                 output.extend(chunk)
@@ -116,6 +121,25 @@ def _drain_pty(master: int, output: bytearray) -> None:
                 return
         except OSError:
             return
+
+
+def _stop_pty(child: subprocess.Popen[bytes], master: int, output: bytearray) -> None:
+    """Signal the group and read the terminal until the child exits.
+
+    A process that exits with unread terminal output waits for it to drain, so
+    a reader that stops first and then waits deadlocks with it.
+    """
+    for signal_number, grace in ((signal.SIGTERM, 1), (signal.SIGKILL, 5)):
+        if child.poll() is not None:
+            break
+        with suppress(PermissionError, ProcessLookupError):
+            os.killpg(child.pid, signal_number)
+        deadline = time.monotonic() + grace
+        while child.poll() is None and time.monotonic() < deadline:
+            if select.select([master], [], [], 0.05)[0]:
+                with suppress(OSError):
+                    output.extend(os.read(master, 65_536))
+    _drain_pty(master, output)
 
 
 def run_pty(
@@ -155,8 +179,7 @@ def run_pty(
         timed_out = (
             not completed and child.poll() is None and time.monotonic() >= deadline
         )
-        _terminate_group(child)
-        _drain_pty(master, output)
+        _stop_pty(child, master, output)
         if timed_out:
             raise CommandTimeout(
                 f"{command[0]} did not finish within {timeout:g} seconds"
@@ -164,5 +187,5 @@ def run_pty(
         assert child.returncode is not None
         return CommandResult(child.returncode, output.decode(errors="replace"), "")
     finally:
-        _terminate_group(child)
+        _stop_pty(child, master, output)
         os.close(master)

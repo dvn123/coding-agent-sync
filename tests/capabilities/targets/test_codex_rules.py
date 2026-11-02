@@ -63,14 +63,17 @@ class Responder:
                     {"targets": [json.loads(output)["agent_id"]]},
                     namespace="multi_agent_v1",
                 ), "text/event-stream"
-        if (
-            self.agent_type
-            and isinstance(inputs, list)
-            and any(
-                isinstance(item, dict) and item.get("type") == "tool_search_output"
-                for item in inputs
-            )
-        ):
+        tools = request.get("tools")
+        # Codex lists the multi-agent tools directly, or behind a tool search.
+        listed = isinstance(tools, list) and any(
+            isinstance(tool, dict) and tool.get("name") == "multi_agent_v1"
+            for tool in tools
+        )
+        searched = isinstance(inputs, list) and any(
+            isinstance(item, dict) and item.get("type") == "tool_search_output"
+            for item in inputs
+        )
+        if self.agent_type and (listed or searched):
             agent_type, self.agent_type = self.agent_type, None
             self.wait_for_agent = True
             return responses_function_call(
@@ -83,7 +86,6 @@ class Responder:
                 },
                 namespace="multi_agent_v1",
             ), "text/event-stream"
-        tools = request.get("tools")
         if (
             self.agent_type
             and isinstance(tools, list)

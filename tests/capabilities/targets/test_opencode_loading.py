@@ -37,6 +37,8 @@ SKILL_NAME = "blackbox-loading-probe"
 SKILL_DESCRIPTION = "Discover the black-box OpenCode loading marker."
 SKILL_BODY = "OPEN_CODE_SKILL_BODY_7f43c1"
 DENIED_SKILL = "blackbox-denied-probe"
+# Skills that set `disable-model-invocation` stay out of the model's list.
+MANUAL_SKILL = "blackbox-manual-skill-probe"
 DENIED_BODY = "OPEN_CODE_DENIED_SKILL_BODY_2d95a8"
 COMMAND_NAME = "blackbox-command-probe"
 COMMAND_BODY = "OPEN_CODE_COMMAND_BODY_63a70e"
@@ -60,18 +62,25 @@ class Runtime:
     env: dict[str, str]
 
 
-def write_fixtures(config_home: Path) -> None:
+def write_fixtures(config_home: Path, home: Path) -> None:
     skills = config_home / "opencode" / "skills"
+    # The compiler writes skills every shared reader receives here.
+    shared = home / ".agents" / "skills"
     commands = config_home / "opencode" / "commands"
-    (skills / SKILL_NAME).mkdir(parents=True)
-    (skills / DENIED_SKILL).mkdir()
+    (shared / SKILL_NAME).mkdir(parents=True)
+    (skills / DENIED_SKILL).mkdir(parents=True)
+    (shared / MANUAL_SKILL).mkdir()
     commands.mkdir()
-    (skills / SKILL_NAME / "SKILL.md").write_text(
+    (shared / SKILL_NAME / "SKILL.md").write_text(
         f"---\nname: {SKILL_NAME}\ndescription: {SKILL_DESCRIPTION}\n---\n"
         f"{SKILL_BODY}\n"
     )
     (skills / DENIED_SKILL / "SKILL.md").write_text(
         f"---\nname: {DENIED_SKILL}\ndescription: denied fixture\n---\n{DENIED_BODY}\n"
+    )
+    (shared / MANUAL_SKILL / "SKILL.md").write_text(
+        f"---\nname: {MANUAL_SKILL}\ndescription: manual fixture\n"
+        "disable-model-invocation: true\n---\nmanual body\n"
     )
     (commands / f"{COMMAND_NAME}.md").write_text(
         f"---\ndescription: command fixture\n---\n{COMMAND_BODY}\n"
@@ -151,7 +160,7 @@ def runtime(
     }
     probe_config["skills"] = [str(path_skills), remote.url_for("/skills/")]
     config.write_text(json.dumps(probe_config))
-    write_fixtures(paths.config)
+    write_fixtures(paths.config, paths.home)
     env = environment(
         paths,
         config,
@@ -306,6 +315,7 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
                 for value in (SKILL_NAME, SKILL_DESCRIPTION)
             ),
             "denied-metadata-hidden": DENIED_SKILL not in initial.text(),
+            "manual-metadata-hidden": MANUAL_SKILL not in initial.text("system"),
             "loaded-status": event is not None and event.status == "completed",
             "loaded-body-event": event is not None and SKILL_BODY in str(event.output),
             "loaded-body-model": any(
@@ -341,6 +351,7 @@ EXPECTATIONS = (
     ("allowed", "tool-advertised"),
     ("allowed", "allowed-metadata-visible"),
     ("allowed", "denied-metadata-hidden"),
+    ("allowed", "manual-metadata-hidden"),
     ("allowed", "loaded-status"),
     ("allowed", "loaded-body-event"),
     ("allowed", "loaded-body-model"),

@@ -69,7 +69,6 @@ def compiler_sources(root: Path) -> None:
             COMPILER_AGENT,
             "compiler agent",
             "compiler agent",
-            "targets:\n  cursor:\n    omit:\n      agent: Cursor has no user agents.\n",
         )
     )
 
@@ -81,13 +80,15 @@ def base_config(base_url: str, model: str) -> dict[str, Any]:
 def write_fixtures(paths: Paths, base_url: str) -> Path:
     (paths.work / ".git").mkdir()
     config_path = paths.root / "opencode.json"
-    config = base_config(base_url, "rules-probe") | {"instructions": ["IGNORED.md"]}
+    config = base_config(base_url, "rules-probe") | {
+        "instructions": ["INSTRUCTIONS.md"]
+    }
     write_json(config_path, config)
     global_agents = paths.config / "opencode" / "AGENTS.md"
     global_agents.parent.mkdir(parents=True)
     global_agents.write_text(f"{GLOBAL_INSTRUCTIONS}\n")
     (paths.work / "AGENTS.md").write_text(f"{PROJECT_INSTRUCTIONS}\n")
-    (paths.work / "IGNORED.md").write_text(f"{CONFIG_INSTRUCTIONS}\n")
+    (paths.work / "INSTRUCTIONS.md").write_text(f"{CONFIG_INSTRUCTIONS}\n")
     agent = paths.config / "opencode" / "agents" / f"{FILE_AGENT}.md"
     agent.parent.mkdir(parents=True)
     agent.write_text(
@@ -175,6 +176,7 @@ def compiler(runtime: Runtime) -> CheckResult:
     run_sync(config_root=sources, home=paths.home)
     instructions_path = paths.home / ".config" / "opencode" / "AGENTS.md"
     agent_path = paths.home / ".config" / "opencode" / "agents" / f"{COMPILER_AGENT}.md"
+    rule_path = paths.home / ".config" / "opencode" / "rules" / "rule.md"
     config = json.loads(config_path.read_text())
     compiled_runtime = Runtime(
         runtime.executable,
@@ -220,13 +222,13 @@ def compiler(runtime: Runtime) -> CheckResult:
     return CheckResult(
         {
             "compiler-files": all(
-                path.is_file() for path in (instructions_path, agent_path, config_path)
+                path.is_file()
+                for path in (instructions_path, rule_path, agent_path, config_path)
             ),
-            # 2.x accepts `instructions` but never loads it, so rules join the
-            # global AGENTS.md and the config carries no list.
+            # Rules land as their own files, which an `instructions` glob loads.
             "compiler-content": COMPILER_GLOBAL in instructions_path.read_text()
-            and COMPILER_RULE in instructions_path.read_text()
-            and "instructions" not in config,
+            and COMPILER_RULE in rule_path.read_text()
+            and config.get("instructions") == ["~/.config/opencode/rules/*.md"],
             "compiler-runtime": COMPILER_GLOBAL in payload,
             "compiler-rules-runtime": COMPILER_RULE in payload,
         },
@@ -258,8 +260,7 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
         {
             "global-agents-visible": GLOBAL_INSTRUCTIONS in payload,
             "project-agents-visible": PROJECT_INSTRUCTIONS in payload,
-            # 2.x documents `instructions` as accepted but not yet loaded.
-            "config-instructions-ignored": CONFIG_INSTRUCTIONS not in payload,
+            "config-instructions-loaded": CONFIG_INSTRUCTIONS in payload,
             "agents-order": payload.find(GLOBAL_INSTRUCTIONS)
             < payload.find(PROJECT_INSTRUCTIONS),
         },
@@ -293,7 +294,7 @@ def test_opencode_instructions(observation: CheckResult, check: str) -> None:
 @pytest.mark.capability_live
 @pytest.mark.parametrize(
     ("observation", "check"),
-    (pytest.param("instructions", "config-instructions-ignored"),),
+    (pytest.param("instructions", "config-instructions-loaded"),),
     indirect=("observation",),
     scope="module",
 )

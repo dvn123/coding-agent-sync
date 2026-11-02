@@ -78,12 +78,10 @@ def source_doc(
                     ] = "Explicit-only skills have no delegated execution."
     if kind == "agent":
         only = set(meta.get("only") or ())
-        if not only or "cursor" in only:
-            for field in ("effort", "color"):
-                if meta.get(field):
-                    target_blocks.setdefault("cursor", {}).setdefault("omit", {})[
-                        field
-                    ] = f"Cursor agents have no {field} field."
+        if meta.get("effort") and (not only or "cursor" in only):
+            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["effort"] = (
+                "Cursor agents have no effort field."
+            )
         if meta.get("background"):
             if not only or "codex" in only:
                 target_blocks.setdefault("codex", {}).setdefault("omit", {})[
@@ -93,34 +91,11 @@ def source_doc(
                 target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
                     "background"
                 ] = "OpenCode agents have no background field."
-        if meta.get("color") and (not only or "codex" in only):
-            target_blocks.setdefault("codex", {}).setdefault("omit", {})["color"] = (
-                "Codex agents have no color field."
-            )
     if kind == "rule" and isinstance(activation := meta.pop("activation", None), dict):
         native = target_blocks.setdefault("cursor", {}).setdefault("native", {})
         native["alwaysApply"] = activation.get("always") is not False
         if activation.get("globs"):
             native["globs"] = activation["globs"]
-    if kind == "skill":
-        only = set(meta.get("only") or ())
-        if meta.get("license") and (not only or "cursor" in only):
-            target_blocks.setdefault("cursor", {}).setdefault("omit", {})["license"] = (
-                "Cursor skills have no license field."
-            )
-        if meta.get("paths"):
-            if not only or "codex" in only:
-                target_blocks.setdefault("codex", {}).setdefault("omit", {})[
-                    "paths"
-                ] = "Codex skills have no path activation."
-            if not only or "opencode" in only:
-                target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
-                    "paths"
-                ] = "OpenCode skills have no path activation."
-        if meta.get("disable_model_invocation") and (not only or "opencode" in only):
-            target_blocks.setdefault("opencode", {}).setdefault("omit", {})[
-                "disable_model_invocation"
-            ] = "OpenCode skills have no invocation toggle."
     if target_blocks:
         meta["targets"] = target_blocks
     yaml_text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).rstrip()
@@ -167,20 +142,9 @@ def permission_policy_doc(
         targets.setdefault("codex", {}).setdefault("omit", {})["workspace.ask"] = (
             "Codex has no workspace ask channel."
         )
-    if workspace.get("unmatched", "ask") != "ask":
-        targets.setdefault("codex", {}).setdefault("omit", {})[
-            "workspace.unmatched"
-        ] = "Codex has no unmatched-directory channel."
-    if source["secret_paths"]:
-        targets.setdefault("cursor", {}).setdefault("omit", {})["secret_paths"] = (
-            "Cursor lacks a shared secret-path channel."
-        )
     if source["secret_names"]:
         targets.setdefault("cursor", {}).setdefault("omit", {})["secret_names"] = (
             "Cursor has no secret-name ask channel."
-        )
-        targets.setdefault("codex", {}).setdefault("omit", {})["secret_names"] = (
-            "Codex has no portable secret-name channel."
         )
     if workspace.get("ask"):
         targets.setdefault("claude", {}).setdefault("omit", {})["workspace.ask"] = (
@@ -420,6 +384,7 @@ class ModelPolicyTests(unittest.TestCase):
                         "background": True,
                         "cursor:readonly": True,
                         "cursor:model": "composer-2",
+                        "cursor:tools": ["read_file", "grep"],
                     },
                 ),
             )
@@ -428,7 +393,8 @@ class ModelPolicyTests(unittest.TestCase):
             self.assertEqual(
                 (home / ".cursor/agents/scout.md").read_text(),
                 "---\nname: scout\ndescription: Look around: report back\n"
-                "model: composer-2\nreadonly: true\nbackground: true\n---\n\n"
+                "model: composer-2\nreadonly: true\ntools: read_file, grep\n"
+                "background: true\n---\n\n"
                 "Scout body\n",
             )
 
@@ -1275,6 +1241,67 @@ class SyncTests(unittest.TestCase):
                 (home / ".codex/rules/coding-agents.rules").read_text(),
             )
 
+    def test_a_skill_narrowed_by_only_keeps_each_readers_own_directory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "skills/narrow/SKILL.md",
+                source_doc(
+                    "skill",
+                    "narrow",
+                    "narrow",
+                    "Body\n",
+                    description="Narrow",
+                    extra={"only": ["claude", "codex", "cursor"]},
+                ),
+            )
+
+            run_sync(config_root=config_root, home=home)
+
+            self.assertEqual(
+                {
+                    directory: (home / directory / "narrow/SKILL.md").exists()
+                    for directory in (
+                        ".agents/skills",
+                        ".claude/skills",
+                        ".codex/skills",
+                        ".cursor/skills",
+                        ".config/opencode/skills",
+                    )
+                },
+                {
+                    ".agents/skills": False,
+                    ".claude/skills": True,
+                    ".codex/skills": True,
+                    ".cursor/skills": True,
+                    ".config/opencode/skills": False,
+                },
+            )
+
+    def test_a_shared_skill_rejects_readers_that_need_different_frontmatter(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_root, home = config_root_home(tmp)
+            write(
+                config_root / "skills/split/SKILL.md",
+                source_doc(
+                    "skill",
+                    "split",
+                    "split",
+                    "Body\n",
+                    description="Split",
+                    extra={"cursor:description": "Cursor wording"},
+                ),
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "Codex and Cursor need different `description`"
+            ):
+                run_sync(config_root=config_root, home=home)
+
     def test_an_assignment_value_is_literal(self) -> None:
         for assignments, message in (
             ({"tool": ["EDITOR=*"]}, "String should match pattern"),
@@ -1462,8 +1489,8 @@ class SyncTests(unittest.TestCase):
                 run_sync(config_root=config_root, home=home)
 
             self.assertIn(
-                "omitted deny git push ~--force: Codex prefix rules cannot hold a "
-                "text predicate",
+                "Codex prefix rules cannot hold a text predicate or an exact match, "
+                "so these fall to its sandbox: deny git push:",
                 stderr.getvalue(),
             )
             # Cursor withholds guarded allows rather than lowering the deny, so
@@ -1560,6 +1587,7 @@ class SyncTests(unittest.TestCase):
                 allow=[["git", "status"]],
                 tools={"read": "allow", "edit": "allow"},
                 secret_paths=["**/.env", "~/.aws/credentials"],
+                secret_names=["EXAMPLE_TOKEN"],
                 workspace={"allow": ["~/Developer"], "deny": ["~/.ssh"]},
             )
 
@@ -1582,6 +1610,15 @@ class SyncTests(unittest.TestCase):
             codex = tomllib.loads((home / ".codex/config.toml").read_text())
             self.assertEqual(codex["default_permissions"], "coding-agents")
             self.assertNotIn("approval_policy", codex)
+            self.assertEqual(
+                codex["shell_environment_policy"], {"exclude": ["EXAMPLE_TOKEN"]}
+            )
+            # Cursor's agent reads a .cursorignore in every workspace ancestor.
+            self.assertEqual(
+                (home / ".cursorignore").read_text(),
+                "# Generated by coding-agents sync\n"
+                "**/.env\n/.aws/credentials\n/.ssh/**\n",
+            )
             self.assertEqual(
                 codex["permissions"]["coding-agents"],
                 {
@@ -1661,6 +1698,11 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(
                 opencode_rules(opencode, "external_directory"),
                 {"*": "allow", "~/.ssh/**": "deny"},
+            )
+            codex = tomllib.loads((home / ".codex/config.toml").read_text())
+            self.assertEqual(
+                codex["permissions"]["coding-agents"]["filesystem"],
+                {":root": "write", str(home / ".ssh"): "deny"},
             )
 
     def test_opencode_guards_deny_over_narrower_allows(self) -> None:
@@ -1823,8 +1865,7 @@ class SyncTests(unittest.TestCase):
             for absent in ("git", "rg", "ls", "EXAMPLE_TOKEN", ".env"):
                 with self.subTest(absent=absent):
                     self.assertNotIn(f'"{absent}"', codex_rules)
-            self.assertIn("omitted deny rg ~--pre", stderr.getvalue())
-            self.assertIn("omitted deny ls", stderr.getvalue())
+            self.assertIn("fall to its sandbox: deny ls, deny rg:", stderr.getvalue())
 
     def test_codex_rules_share_alternatives_across_wrappers_and_siblings(
         self,
@@ -2318,7 +2359,11 @@ class SyncTests(unittest.TestCase):
                     "s1",
                     "Skill body\n",
                     description="skill",
-                    extra={"paths": ["**/*.py"], "metadata": {"owner": "platform"}},
+                    extra={
+                        "paths": ["**/*.py"],
+                        "license": "MIT",
+                        "metadata": {"owner": "platform"},
+                    },
                 ),
             )
             write(
@@ -2339,6 +2384,8 @@ class SyncTests(unittest.TestCase):
                         "opencode:color": "#06b6d4",
                         "codex:model": "gpt-5",
                         "codex:nickname_candidates": ["Ada"],
+                        "codex:personality": "pragmatic",
+                        "codex:service_tier": "flex",
                     },
                 ),
             )
@@ -2413,16 +2460,19 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn("---", claude_rule)
             self.assertIn("Rule body", claude_rule)
 
-            for path in [
-                home / ".cursor" / "skills" / "s1" / "SKILL.md",
-                home / ".claude" / "skills" / "s1" / "SKILL.md",
-                home / ".config" / "opencode" / "skills" / "s1" / "SKILL.md",
-            ]:
-                self.assertTrue(path.exists(), str(path))
+            # Codex, Cursor, and OpenCode share one copy; Claude keeps its own.
+            for directory in (".codex/skills", ".cursor/skills", ".config/opencode"):
+                self.assertFalse((home / directory / "skills/s1").exists())
+                self.assertFalse((home / directory / "s1").exists())
             claude_skill = (home / ".claude" / "skills" / "s1" / "SKILL.md").read_text(
                 encoding="utf-8"
             )
             self.assertIn("paths:", claude_skill)
+            shared_skill = (home / ".agents/skills/s1/SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("license: MIT", shared_skill)
+            self.assertIn("paths:", shared_skill)
 
             claude_agent = (home / ".claude" / "agents" / "reviewer.md").read_text(
                 encoding="utf-8"
@@ -2478,7 +2528,6 @@ class SyncTests(unittest.TestCase):
 
             # Codex discovers skills/ and agents/ itself: nothing to register.
             self.assertFalse((home / ".codex" / "config.toml").exists())
-            self.assertTrue((home / ".codex" / "skills" / "s1" / "SKILL.md").exists())
 
             codex_agent = (home / ".codex" / "agents" / "reviewer.toml").read_text(
                 encoding="utf-8"
@@ -2493,6 +2542,10 @@ class SyncTests(unittest.TestCase):
             self.assertIn('nickname_candidates = ["Ada"]', codex_agent)
             parsed_codex_agent = tomllib.loads(codex_agent)
             self.assertEqual(parsed_codex_agent["developer_instructions"], "Agent body")
+            self.assertEqual(
+                (parsed_codex_agent["personality"], parsed_codex_agent["service_tier"]),
+                ("pragmatic", "flex"),
+            )
 
             codex_command = home / ".codex" / "skills" / "review-pr"
             self.assertEqual(
@@ -2602,9 +2655,7 @@ class SyncTests(unittest.TestCase):
 
             for path in [
                 home / ".claude" / "skills" / "s1" / "SKILL.md",
-                home / ".codex" / "skills" / "s1" / "SKILL.md",
-                home / ".config" / "opencode" / "skills" / "s1" / "SKILL.md",
-                home / ".cursor" / "skills" / "s1" / "SKILL.md",
+                home / ".agents" / "skills" / "s1" / "SKILL.md",
             ]:
                 text = path.read_text(encoding="utf-8")
                 self.assertNotIn("version", text)
@@ -2685,11 +2736,10 @@ class SyncTests(unittest.TestCase):
             cursor_rule = (home / ".cursor/rules/scoped.mdc").read_text()
             self.assertIn("alwaysApply: false", cursor_rule)
             self.assertIn("globs: '**/*.py'", cursor_rule)
-            cursor_skill = (home / ".cursor/skills/native/SKILL.md").read_text()
-            self.assertIn("disable-model-invocation: true", cursor_skill)
-            codex_skill = (home / ".codex/skills/native/SKILL.md").read_text()
-            self.assertIn("allowed-tools:", codex_skill)
-            self.assertIn("- Bash", codex_skill)
+            shared_skill = (home / ".agents/skills/native/SKILL.md").read_text()
+            self.assertIn("disable-model-invocation: true", shared_skill)
+            self.assertIn("allowed-tools:", shared_skill)
+            self.assertIn("- Bash", shared_skill)
             opencode_agent = (home / ".config/opencode/agents/native.md").read_text()
             self.assertIn("reasoningEffort: high", opencode_agent)
 
@@ -2797,9 +2847,7 @@ class SyncTests(unittest.TestCase):
 
             for root in (
                 home / ".claude/skills/runner",
-                home / ".codex/skills/runner",
-                home / ".cursor/skills/runner",
-                home / ".config/opencode/skills/runner",
+                home / ".agents/skills/runner",
             ):
                 with self.subTest(root=root):
                     script = root / "scripts/poll.sh"
@@ -2833,7 +2881,7 @@ class SyncTests(unittest.TestCase):
 
             self.assertEqual(
                 yaml.safe_load(
-                    (home / ".codex/skills/explicit/agents/openai.yaml").read_text()
+                    (home / ".agents/skills/explicit/agents/openai.yaml").read_text()
                 ),
                 {
                     "interface": {"display_name": "Explicit"},
@@ -2852,7 +2900,15 @@ class SyncTests(unittest.TestCase):
                     "explicit",
                     "explicit",
                     "Body\n",
-                    extra={"disable_model_invocation": True},
+                    extra={
+                        "disable_model_invocation": True,
+                        "codex:openai": {
+                            "policy": {"products": ["codex"]},
+                            "dependencies": {
+                                "tools": [{"value": "docs", "command": "docs-mcp"}]
+                            },
+                        },
+                    },
                 ),
             )
 
@@ -2860,9 +2916,23 @@ class SyncTests(unittest.TestCase):
 
             self.assertEqual(
                 yaml.safe_load(
-                    (home / ".codex/skills/explicit/agents/openai.yaml").read_text()
+                    (home / ".agents/skills/explicit/agents/openai.yaml").read_text()
                 ),
-                {"policy": {"allow_implicit_invocation": False}},
+                {
+                    "policy": {
+                        "allow_implicit_invocation": False,
+                        "products": ["codex"],
+                    },
+                    "dependencies": {
+                        "tools": [
+                            {"type": "mcp", "value": "docs", "command": "docs-mcp"}
+                        ]
+                    },
+                },
+            )
+            self.assertIn(
+                "disable-model-invocation: true",
+                (home / ".agents/skills/explicit/SKILL.md").read_text(),
             )
 
     def test_resync_repairs_stale_script_mode(self) -> None:
@@ -2899,14 +2969,14 @@ class SyncTests(unittest.TestCase):
             )
             for text, root in (
                 (claude_allow, ".claude"),
-                (opencode_allow, ".config/opencode"),
+                (opencode_allow, ".agents"),
             ):
                 with self.subTest(root=root):
                     for base in (f"~/{root}", f"{home.as_posix()}/{root}"):
                         self.assertIn(f"{base}/skills/runner/scripts/poll.sh", text)
                     # Only executables, and only this target's own path.
                     self.assertNotIn("notes.md", text)
-            self.assertNotIn(".config/opencode/skills", claude_allow)
+            self.assertNotIn(".agents/skills", claude_allow)
 
     def test_deny_reasons_land_beside_the_opencode_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3093,6 +3163,10 @@ class SyncTests(unittest.TestCase):
                     "permissionMode": "acceptEdits",
                     "memory": "project",
                     "isolation": "worktree",
+                    "mcpServers": ["docs"],
+                    "autoCompactWindow": 100000,
+                    "omitClaudeMd": True,
+                    "observer": "watcher",
                 },
             )
             write(
@@ -3126,9 +3200,27 @@ class SyncTests(unittest.TestCase):
 
             run_sync(config_root=config_root, home=home)
 
-            self.assertIn(
-                "permissionMode: acceptEdits",
-                (home / ".claude/agents/reviewer.md").read_text(),
+            claude = yaml.safe_load(
+                (home / ".claude/agents/reviewer.md").read_text().split("---")[1]
+            )
+            self.assertEqual(
+                {
+                    key: claude[key]
+                    for key in (
+                        "permissionMode",
+                        "mcpServers",
+                        "autoCompactWindow",
+                        "omitClaudeMd",
+                        "observer",
+                    )
+                },
+                {
+                    "permissionMode": "acceptEdits",
+                    "mcpServers": ["docs"],
+                    "autoCompactWindow": 100000,
+                    "omitClaudeMd": True,
+                    "observer": "watcher",
+                },
             )
             second = (home / ".config/opencode/agents/second.md").read_text()
             self.assertIn("mode: subagent", second)
@@ -3397,7 +3489,7 @@ class SyncTests(unittest.TestCase):
             run_sync(config_root=config_root, home=home)
 
             opencode_skill = (
-                home / ".config" / "opencode" / "skills" / "s1" / "SKILL.md"
+                home / ".agents" / "skills" / "s1" / "SKILL.md"
             ).read_text(encoding="utf-8")
             self.assertIn("name: s1", opencode_skill)
             self.assertIn("description: skill", opencode_skill)
@@ -3596,35 +3688,6 @@ approval_policy = "on-request"
             run_sync(config_root=config_root, home=home)
 
             self.assertEqual(target.stat().st_mtime_ns, before)
-
-    def test_codex_skill_copy_replaces_invalid_description_characters(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_root, home = config_root_home(tmp)
-            write(
-                config_root / "skills" / "s1" / "SKILL.md",
-                source_doc(
-                    "skill",
-                    "s1",
-                    "s1",
-                    "body\n",
-                    description=(
-                        "Create files under days/<date>/itinerary.md: daily plan."
-                    ),
-                ),
-            )
-
-            run_sync(config_root=config_root, home=home)
-
-            source = (config_root / "skills" / "s1" / "SKILL.md").read_text(
-                encoding="utf-8"
-            )
-            codex_skill = (home / ".codex" / "skills" / "s1" / "SKILL.md").read_text(
-                encoding="utf-8"
-            )
-            self.assertIn("days/<date>/itinerary.md: daily plan", source)
-            self.assertIn("days/date/itinerary.md: daily plan", codex_skill)
-            self.assertNotIn("<", codex_skill.split("---", 2)[1])
-            self.assertNotIn(">", codex_skill.split("---", 2)[1])
 
     def test_codex_skill_rejects_unknown_typed_frontmatter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

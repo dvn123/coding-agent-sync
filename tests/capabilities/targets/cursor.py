@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import shutil
 import subprocess
 from functools import cache
@@ -38,13 +39,15 @@ def local_executable() -> str | None:
 @cache
 def help_output(*arguments: str) -> str:
     # The installed launcher may be a PATH wrapper that resolves the real CLI
-    # through $HOME, so help probes keep the caller's HOME.
+    # through $HOME, which the test suite points at a temporary directory, so
+    # this read-only call gets the account's own home back.
     result = subprocess.run(
         [require_command("cursor-agent"), *arguments],
         capture_output=True,
         check=False,
         text=True,
         timeout=15,
+        env=os.environ | {"HOME": pwd.getpwuid(os.getuid()).pw_dir},
     )
     assert result.returncode == 0, result.stderr
     return result.stdout

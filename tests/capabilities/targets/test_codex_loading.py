@@ -20,7 +20,7 @@ from capabilities.server import RecordedServer
 from capabilities.targets.codex import write_config
 
 SKILL_NAME = "managed-loading-probe"
-SKILL_DESCRIPTION = "Load the managed Codex black-box marker on explicit request."
+SKILL_DESCRIPTION = "Load the managed Codex <black-box> marker on explicit request."
 SKILL_BODY = "MANAGED_SKILL_BODY_MARKER_7D37"
 SKILL_ARGUMENT = "SKILL_ARGUMENT_MARKER_294A"
 COMMAND_NAME = "managed-command-probe"
@@ -87,7 +87,8 @@ def invoke(runtime: Runtime, name: str) -> ResponsesRequest:
     paths = Paths.create(runtime.root / name)
     codex_home = paths.home / ".codex"
     codex_home.mkdir()
-    skill_dir = codex_home / "skills" / SKILL_NAME
+    # The compiler writes skills every shared reader receives here.
+    skill_dir = paths.home / ".agents" / "skills" / SKILL_NAME
     command_dir = codex_home / "skills" / COMMAND_NAME
     skill_dir.mkdir(parents=True)
     command_dir.mkdir(parents=True)

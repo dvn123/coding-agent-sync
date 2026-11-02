@@ -49,7 +49,6 @@ from .permissions import (
 from .support import (
     applies_to,
     block,
-    bundled_files,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
@@ -58,6 +57,8 @@ from .support import (
     omissions,
     one_of,
     raw_files,
+    shared_skill,
+    skill_tree,
     strict_native,
     unhandled_target_block,
     with_skill_scripts,
@@ -137,15 +138,32 @@ class OpenCodeAgentNative(StrictModel):
         return one_of("mode", value, OPENCODE_AGENT_MODES)
 
 
-def _tree(skill: SkillSource, root: Path, meta: dict[str, Any]) -> OwnedTree:
-    files, executables = bundled_files(skill.source_dir)
-    files[Path("SKILL.md")] = markdown(meta, skill.body)
-    return OwnedTree(
-        root / skill.source_dir.name,
-        tuple(sorted(files.items(), key=lambda item: item[0].as_posix())),
-        root,
-        executables=executables,
+def opencode_skill(
+    skill: SkillSource, root: Path
+) -> tuple[tuple[OwnedTree, ...], list[Diagnostic]]:
+    """The skill's tree below `root`, if its native block validates."""
+    value = block(skill, "opencode")
+    native, issues = strict_native(skill.path, "opencode", value, OpenCodeSkillNative)
+    diagnostics = [*issues, *omissions(skill.path, "opencode", value, set())]
+    if not native:
+        return (), diagnostics
+    meta, issues = frontmatter(
+        skill.path,
+        {
+            "name": skill.name,
+            "description": skill.description,
+            **({"license": skill.license} if skill.license else {}),
+            **({"metadata": skill.metadata} if skill.metadata else {}),
+            **(
+                {"disable-model-invocation": True}
+                if skill.disable_model_invocation
+                else {}
+            ),
+        },
+        native,
+        value.raw,
     )
+    return (skill_tree(skill, root, meta),), [*diagnostics, *issues]
 
 
 # OpenCode matches a shell rule against a command's raw text. The bundled
@@ -313,42 +331,10 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         for rule in rules_
     )
     for skill in sources.skills:
-        if not applies_to(skill, "opencode"):
-            continue
-        value = block(skill, "opencode")
-        native, issues = strict_native(
-            skill.path, "opencode", value, OpenCodeSkillNative
-        )
-        diagnostics.extend(issues)
-        diagnostics.extend(
-            omissions(
-                skill.path,
-                "opencode",
-                value,
-                {
-                    *({"paths"} if skill.paths else set()),
-                    *(
-                        {"disable_model_invocation"}
-                        if skill.disable_model_invocation
-                        else set()
-                    ),
-                },
-            )
-        )
-        if native:
-            meta, issues = frontmatter(
-                skill.path,
-                {
-                    "name": skill.name,
-                    "description": skill.description,
-                    **({"license": skill.license} if skill.license else {}),
-                    **({"metadata": skill.metadata} if skill.metadata else {}),
-                },
-                native,
-                value.raw,
-            )
+        if applies_to(skill, "opencode") and not shared_skill(skill):
+            tree, issues = opencode_skill(skill, root / "skills")
             diagnostics.extend(issues)
-            trees.append(_tree(skill, root / "skills", meta))
+            trees.extend(tree)
     for command in sources.commands:
         if not applies_to(command, "opencode"):
             continue

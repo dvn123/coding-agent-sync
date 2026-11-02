@@ -13,7 +13,13 @@ from .runtime_config import (
     publish_native_manifest,
 )
 from .sources import load_sources
-from .targets import compile_claude, compile_codex, compile_cursor, compile_opencode
+from .targets import (
+    compile_claude,
+    compile_codex,
+    compile_cursor,
+    compile_opencode,
+    compile_shared_skills,
+)
 from .writer import (
     plan_drift,
     preflight_plan,
@@ -54,6 +60,7 @@ def run_sync(*, config_root: Path, home: Path, check: bool = False) -> tuple[Pat
         compile_cursor(ctx, sources),
         compile_opencode(ctx, sources),
         compile_codex(ctx, sources),
+        compile_shared_skills(ctx, sources),
     )
     for diagnostic in plan.diagnostics:
         if diagnostic.level == "warning":
