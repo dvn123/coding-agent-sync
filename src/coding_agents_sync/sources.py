@@ -1,4 +1,5 @@
 import re
+import stat
 from itertools import combinations, product
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
@@ -736,7 +737,11 @@ def load_sources(config_root: Path) -> SourceBundle:
         )
     mcp_servers: list[McpServerSource] = []
     mcp_errors: list[str] = []
-    for path in sorted(config_root.glob("mcp/*.yaml")):
+    local_mcp_paths = sorted(config_root.glob("mcp.local/*.yaml"))
+    for path in (*sorted(config_root.glob("mcp/*.yaml")), *local_mcp_paths):
+        if path in local_mcp_paths and stat.S_IMODE(path.stat().st_mode) != 0o600:
+            mcp_errors.append(f"{path}: local MCP server must use mode 0600")
+            continue
         try:
             server = McpServerSource.model_validate({**_load_yaml(path), "path": path})
         except SourceSchemaError as exc:
@@ -744,6 +749,9 @@ def load_sources(config_root: Path) -> SourceBundle:
             continue
         except ValidationError as exc:
             mcp_errors.append(str(_model_error(path, exc)))
+            continue
+        if any(other.id == server.id for other in mcp_servers):
+            mcp_errors.append(f"{path}: MCP server {server.id!r} is already declared")
             continue
         mcp_servers.append(server)
     permission_root = config_root / "permissions"
