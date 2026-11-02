@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import shlex
 import subprocess
@@ -9,8 +7,8 @@ from typing import Annotated, Never
 import typer
 
 from .io import ManagedEntryConflict
-from .patches import PatchError
-from .runtime_config import NativeConfigError
+from .output.native import NativeConfigError
+from .output.patches import PatchError
 from .sources import SourceSchemaError
 from .sync import run_sync
 

@@ -5,18 +5,19 @@ description = "Deterministic compiler for portable coding-agent configuration"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "pydantic>=2.13.4",
+  "pydantic>=2.14.2",
   "PyYAML>=6.0.2",
-  "tomlkit>=0.15.0",
-  "typer>=0.27.0",
+  "tomlkit>=0.15.2",
+  "typer>=0.27.3",
 ]
 
 [dependency-groups]
 dev = [
-  "basedpyright>=1.35.0",
-  "pytest>=9.0.0",
-  "pytest-httpserver>=1.1.5",
-  "ruff>=0.14.0",
+  "basedpyright>=1.40.2",
+  "inline-snapshot>=0.36.1",
+  "pytest>=9.2.0",
+  "pytest-httpserver>=1.2.0",
+  "ruff>=0.17.3",
   "types-PyYAML>=6.0.12.20250915",
 ]
 

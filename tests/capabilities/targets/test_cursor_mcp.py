@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,120 +103,110 @@ def test_cursor_agent_executes_a_project_stdio_mcp_tool(runtime: Runtime) -> Non
     assert all(observation.checks.values()), observation.detail
 
 
-@pytest.fixture(scope="module")
-def allowlist_runtime(
-    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
-) -> Runtime:
-    executable, seatbelt = cursor_runtime()
-    paths = Paths.create(tmp_path_factory.mktemp("cursor-mcp-allowlist").resolve())
-    cursor = paths.home / ".cursor"
-    cursor.mkdir()
-    (cursor / "cli-config.json").write_text(
-        json.dumps({"version": 1, "approvalMode": "allowlist"})
-    )
-    # The Desktop permissions file's mcpAllowlist maps to Mcp(...) allows in
-    # the CLI's shared permission provider. --approve-mcps still starts the
-    # server; the allowlist is what approves the tool call without --force.
-    (cursor / "permissions.json").write_text(
-        json.dumps({"approvalMode": "allowlist", "mcpAllowlist": ["probe:*"]})
-    )
-    project = paths.work / ".cursor"
-    project.mkdir()
-    log = paths.root / "mcp.jsonl"
-    command, *args = stdio_command(log)
-    (project / "mcp.json").write_text(
-        json.dumps({"mcpServers": {"probe": {"command": command, "args": args}}})
-    )
-    responder = CursorMCPResponder(MODEL)
-    stub = recorded_server(request, responder.respond)
-    env = environment(paths, cursor)
-    value = Runtime(executable, seatbelt, paths, stub, responder, env, log)
-    require_containment(value.seatbelt, stub, paths, env)
-    return value
-
-
-@pytest.mark.capability_case("cursor-agent.mcp-allowlist")
-@pytest.mark.capability_live
-def test_cursor_agent_mcp_allowlist_approves_the_listed_server(
-    allowlist_runtime: Runtime,
-) -> None:
-    result = run_probe(
-        run,
-        *allowlist_runtime.seatbelt.command(
-            *cursor_command(
-                allowlist_runtime.executable,
-                allowlist_runtime.stub.base_url,
-                MODEL,
-                "Call the MCP probe tool exactly as instructed by the model.",
-                disable_project_configs=False,
-                approve_mcps=True,
-            )
-        ),
-        cwd=allowlist_runtime.paths.work,
-        env=allowlist_runtime.env,
-        timeout=30,
-    )
-    checks = mcp_checks(read_stdio_requests(allowlist_runtime.log))
-    assert result.returncode == 0, (
-        f"exit={result.returncode} checks={checks} stderr={result.stderr}"
-    )
-    assert all(checks.values()), checks
-
-
-@pytest.mark.capability_case("cursor-agent.mcp-allowlist")
-@pytest.mark.capability_live
-def test_cursor_agent_mcp_allowlist_ignores_an_unlisted_server(
-    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
-) -> None:
-    executable, seatbelt = cursor_runtime()
-    paths = Paths.create(tmp_path_factory.mktemp("cursor-mcp-unlisted").resolve())
-    cursor = paths.home / ".cursor"
-    cursor.mkdir()
-    (cursor / "cli-config.json").write_text(
-        json.dumps({"version": 1, "approvalMode": "allowlist"})
-    )
-    (cursor / "permissions.json").write_text(
-        json.dumps({"approvalMode": "allowlist", "mcpAllowlist": ["other:*"]})
-    )
-    project = paths.work / ".cursor"
-    project.mkdir()
-    log = paths.root / "mcp.jsonl"
-    command, *args = stdio_command(log)
-    (project / "mcp.json").write_text(
-        json.dumps({"mcpServers": {"probe": {"command": command, "args": args}}})
-    )
-    responder = CursorMCPResponder(MODEL)
-    stub = recorded_server(request, responder.respond)
-    env = environment(paths, cursor)
-    require_containment(seatbelt, stub, paths, env)
-
-    result = run_probe(
-        run,
-        *seatbelt.command(
-            *cursor_command(
-                executable,
-                stub.base_url,
-                MODEL,
-                "Call the MCP probe tool exactly as instructed by the model.",
-                disable_project_configs=False,
-                approve_mcps=True,
-            )
-        ),
-        cwd=paths.work,
-        env=env,
-        timeout=30,
-    )
-
-    assert result.returncode == 0, f"exit={result.returncode} stderr={result.stderr}"
-    methods = {request.get("method") for request in read_stdio_requests(log)}
-    # The server started and advertised its tool; only the call was blocked
-    # at the allowlist layer. Without this gate a dead runtime would pass
-    # vacuously.
-    assert {"initialize", "tools/list"} <= methods, methods
-    assert "tools/call" not in methods, methods
-
-
 @pytest.mark.capability_case("cursor-agent.mcp-oauth")
 @pytest.mark.capability_live
 def test_cursor_agent_mcp_oauth_requires_external_authority() -> None:
     pytest.skip("unavailable: MCP OAuth requires external authorization")
+
+
+# The Desktop permission file's mcpAllowlist and the CLI's own Mcp(...)
+# rules, on the probe tool. Without --force the CLI cannot answer an ask.
+MCP_PERMISSION_SCENARIOS: dict[str, tuple[list[str], dict[str, list[str]]]] = {
+    "unlisted": ([], {}),
+    "allowlist-server": (["probe:*"], {}),
+    "allowlist-tool": (["probe:echo"], {}),
+    "allowlist-any-server": (["*:echo"], {}),
+    "allowlist-other-tool": (["probe:other"], {}),
+    "cli-allow-tool": ([], {"allow": ["Mcp(probe:echo)"]}),
+    "cli-allow-server": ([], {"allow": ["Mcp(probe:*)"]}),
+    "cli-deny-over-allowlist": (["probe:*"], {"deny": ["Mcp(probe:echo)"]}),
+}
+
+
+@pytest.fixture(scope="module")
+def mcp_permissions(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, CheckResult]:
+    executable, seatbelt = cursor_runtime()
+    observed = {}
+    for name, (allowlist, rules) in MCP_PERMISSION_SCENARIOS.items():
+        paths = Paths.create(tmp_path_factory.mktemp(f"cursor-mcp-{name}").resolve())
+        cursor = paths.home / ".cursor"
+        cursor.mkdir()
+        (cursor / "cli-config.json").write_text(
+            json.dumps(
+                {"version": 1, "approvalMode": "allowlist"}
+                | ({"permissions": {"allow": [], "deny": []} | rules} if rules else {})
+            )
+        )
+        (cursor / "permissions.json").write_text(
+            json.dumps({"approvalMode": "allowlist", "mcpAllowlist": allowlist})
+        )
+        project = paths.work / ".cursor"
+        project.mkdir()
+        log = paths.root / "mcp.jsonl"
+        command, *args = stdio_command(log)
+        (project / "mcp.json").write_text(
+            json.dumps({"mcpServers": {"probe": {"command": command, "args": args}}})
+        )
+        responder = CursorMCPResponder(MODEL)
+        stub = recorded_server(request, responder.respond)
+        env = environment(paths, cursor)
+        result = run_probe(
+            run,
+            *seatbelt.command(
+                *cursor_command(
+                    executable,
+                    stub.base_url,
+                    MODEL,
+                    "Call the MCP probe tool exactly as instructed by the model.",
+                    disable_project_configs=False,
+                    approve_mcps=True,
+                )
+            ),
+            cwd=paths.work,
+            env=env,
+            timeout=40,
+        )
+        methods = {item.get("method") for item in read_stdio_requests(log)}
+        observed[name] = CheckResult(
+            {
+                "exit-zero": result.returncode == 0,
+                "listed": "tools/list" in methods,
+                "called": "tools/call" in methods,
+            },
+            f"exit={result.returncode} stdout={result.stdout[-800:]} "
+            f"stderr={result.stderr[-500:]}",
+        )
+    return observed
+
+
+# Listed by the server, then called. The shared allowlist approves a server,
+# a tool, or a tool on any server; a call nothing approves waits for an approval
+# the CLI cannot give; the CLI's own Mcp(...) rules allow too, and its deny
+# outranks the shared allowlist.
+MCP_PERMISSION_EXPECTED = {
+    "unlisted": False,
+    "allowlist-server": True,
+    "allowlist-tool": True,
+    "allowlist-any-server": True,
+    "allowlist-other-tool": False,
+    "cli-allow-tool": True,
+    "cli-allow-server": True,
+    "cli-deny-over-allowlist": False,
+}
+
+
+@pytest.mark.capability_case("cursor-agent.mcp-allowlist")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(("scenario", "called"), MCP_PERMISSION_EXPECTED.items())
+def test_cursor_mcp_tool_permissions(
+    mcp_permissions: dict[str, CheckResult], scenario: str, called: bool
+) -> None:
+    observation = mcp_permissions[scenario]
+    checks = observation.checks
+
+    # The server always starts and lists its tool, so a dead runtime cannot
+    # pass a scenario that expects no call.
+    assert checks["exit-zero"] and checks["listed"], observation.detail
+    assert checks["called"] is called, observation.detail

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from typing import Any, Self
@@ -172,19 +170,20 @@ class AnthropicRequest(DecodedRequest):
         return None
 
 
+type ToolCall = tuple[str, dict[str, Any], str]
+
+
 @dataclass(slots=True)
 class AnthropicResponder:
-    tool_call: tuple[str, dict[str, Any], str] | None = None
+    tool_call: ToolCall | None = None
+    # Calls made, in order, before `tool_call`, such as the Read an Edit needs.
+    prelude: tuple[ToolCall, ...] = ()
 
     def respond(self, request: dict[str, Any], _count: int) -> tuple[bytes, str]:
-        tool_result = (
-            AnthropicRequest.decode(request).tool_result(self.tool_call[2])
-            if self.tool_call
-            else None
+        decoded = AnthropicRequest.decode(request)
+        calls = (*self.prelude, self.tool_call) if self.tool_call else ()
+        pending = next(
+            (call for call in calls if decoded.tool_result(call[2]) is None), None
         )
-        body = (
-            tool_call_response(*self.tool_call)
-            if self.tool_call and tool_result is None
-            else FINAL_RESPONSE
-        )
+        body = tool_call_response(*pending) if pending else FINAL_RESPONSE
         return body, "text/event-stream"

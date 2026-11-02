@@ -6,8 +6,6 @@ a `model` value: Claude treats it as a literal tool name, matches nothing, and
 refuses to spawn the agent. Inheriting the full pool means omitting the field.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 

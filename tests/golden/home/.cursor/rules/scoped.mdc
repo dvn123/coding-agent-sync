@@ -1,0 +1,7 @@
+---
+description: Neutral scoped rule.
+globs: '**/*.py'
+alwaysApply: false
+---
+
+Apply the neutral scoped rule.

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 from dataclasses import dataclass
@@ -137,3 +135,130 @@ def test_codex_executes_a_stdio_mcp_tool(runtime: Runtime) -> None:
 @pytest.mark.capability_live
 def test_codex_mcp_oauth_requires_external_authority() -> None:
     pytest.skip("unavailable: MCP OAuth requires external authorization")
+
+
+# Each per-tool setting Codex 0.166 accepts on an MCP server: sandbox mode,
+# keys on the server table, keys on the `echo` tool table. `exec` runs with
+# approval policy `never` and cancels any approval it would have to ask for;
+# with full disk write, `never` approves every MCP call instead.
+MCP_PERMISSION_SCENARIOS = {
+    "default": ("workspace-write", "", ""),
+    "approve": ("workspace-write", "", "approval_mode = 'approve'"),
+    "auto": ("workspace-write", "", "approval_mode = 'auto'"),
+    "writes": ("workspace-write", "", "approval_mode = 'writes'"),
+    "prompt": ("workspace-write", "", "approval_mode = 'prompt'"),
+    "prompt-full-access": ("danger-full-access", "", "approval_mode = 'prompt'"),
+    "default-approve": (
+        "workspace-write",
+        "default_tools_approval_mode = 'approve'",
+        "",
+    ),
+    "tool-over-server": (
+        "workspace-write",
+        "default_tools_approval_mode = 'approve'",
+        "approval_mode = 'prompt'",
+    ),
+    "disabled": ("workspace-write", "disabled_tools = ['echo']", ""),
+    "enabled-other": ("workspace-write", "enabled_tools = ['other']", ""),
+}
+
+
+@pytest.fixture(scope="module")
+def mcp_permissions(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, CheckResult]:
+    codex, sandbox = require_command("codex"), require_command("sandbox-exec")
+    seatbelt = loopback_seatbelt(sandbox)
+    observed = {}
+    for name, (sandbox_mode, server, tool) in MCP_PERMISSION_SCENARIOS.items():
+        paths = Paths.create(tmp_path_factory.mktemp(f"codex-mcp-{name}").resolve())
+        codex_home = paths.home / ".codex"
+        codex_home.mkdir()
+        responder = ResponsesMCPResponder(search_deferred=True)
+        stub = recorded_server(request, responder.respond)
+        write_config(codex_home, paths.work, stub.base_url, approval="never")
+        log = paths.root / "mcp.jsonl"
+        command, *args = stdio_command(log)
+        config = codex_home / "config.toml"
+        config.write_text(
+            config.read_text().replace(
+                'sandbox_mode = "danger-full-access"',
+                f"sandbox_mode = {json.dumps(sandbox_mode)}",
+            )
+            + "\n\n[mcp_servers.probe]\n"
+            + f"command = {json.dumps(command)}\n"
+            + f"args = {json.dumps(args)}\n"
+            + "startup_timeout_sec = 10\n"
+            + "tool_timeout_sec = 10\n"
+            + (f"{server}\n" if server else "")
+            + (f"\n[mcp_servers.probe.tools.echo]\n{tool}\n" if tool else "")
+        )
+        env = sanitized_env(
+            {
+                "CODEX_HOME": str(codex_home),
+                "CODEX_CAPABILITY_KEY": "local-placeholder",
+                "HOME": str(paths.home),
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "TMPDIR": str(paths.tmp),
+            }
+        )
+        result = run_probe(
+            run,
+            *seatbelt.command(
+                codex,
+                "exec",
+                "--skip-git-repo-check",
+                "--strict-config",
+                "--ephemeral",
+                "--json",
+                "-C",
+                str(paths.work),
+                "Call the MCP probe tool exactly as instructed by the model.",
+            ),
+            cwd=paths.work,
+            env=env,
+            timeout=30,
+            stdin=-3,
+        )
+        observed[name] = CheckResult(
+            {
+                "exit-zero": result.returncode == 0,
+                "advertised": responder.tool_name is not None,
+                "called": mcp_checks(read_stdio_requests(log))["mcp-tool-called"],
+            },
+            f"exit={result.returncode} stdout={result.stdout[-1500:]} "
+            f"stderr={result.stderr[-1500:]}",
+        )
+    return observed
+
+
+# Offered to the model, then called: `approve` allows, `prompt` asks (and
+# `exec` cancels the ask), `disabled_tools` removes the tool, a tool's own mode
+# overrides its server's default, and an unannotated tool asks by default.
+MCP_PERMISSION_EXPECTED = {
+    "default": (True, False),
+    "approve": (True, True),
+    "auto": (True, False),
+    "writes": (True, False),
+    "prompt": (True, False),
+    "prompt-full-access": (True, True),
+    "default-approve": (True, True),
+    "tool-over-server": (True, False),
+    "disabled": (False, False),
+    "enabled-other": (False, False),
+}
+
+
+@pytest.mark.capability_case("codex.mcp-permissions")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(("scenario", "expected"), MCP_PERMISSION_EXPECTED.items())
+def test_codex_mcp_tool_permissions(
+    mcp_permissions: dict[str, CheckResult],
+    scenario: str,
+    expected: tuple[bool, bool],
+) -> None:
+    observation = mcp_permissions[scenario]
+    checks = observation.checks
+
+    assert checks["exit-zero"], observation.detail
+    assert (checks["advertised"], checks["called"]) == expected, observation.detail

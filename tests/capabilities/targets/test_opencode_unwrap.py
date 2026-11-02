@@ -6,8 +6,6 @@ program path, or wrappers peeled. This runs OpenCode on exactly what
 `run_sync` writes; the same home without the plugin is the control.
 """
 
-from __future__ import annotations
-
 import json
 import stat
 from dataclasses import dataclass

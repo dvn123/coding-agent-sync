@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +29,7 @@ CONFIG_INSTRUCTIONS = "OPENCODE_CONFIG_INSTRUCTIONS_SENTINEL"
 FILE_AGENT = "file-agent-probe"
 FILE_AGENT_DESCRIPTION = "OPENCODE_FILE_AGENT_DESCRIPTION"
 FILE_AGENT_BODY = "OPENCODE_FILE_AGENT_BODY"
+BACKGROUND_AGENT = "background-agent-probe"
 COMPILER_GLOBAL = "OPENCODE_COMPILER_GLOBAL"
 COMPILER_RULE = "OPENCODE_COMPILER_RULE"
 COMPILER_AGENT = "opencode-compiler-agent"
@@ -97,6 +96,10 @@ def write_fixtures(paths: Paths, base_url: str) -> Path:
         "mode: subagent\n"
         "---\n"
         f"{FILE_AGENT_BODY}\n"
+    )
+    (agent.parent / f"{BACKGROUND_AGENT}.md").write_text(
+        "---\ndescription: Background probe.\nmode: subagent\nbackground: true\n---\n"
+        "Background probe.\n"
     )
     return config_path
 
@@ -243,15 +246,22 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
         agents = settled(
             runtime,
             ("debug", "agents"),
-            lambda value: any(item["id"] == FILE_AGENT for item in value),
+            lambda value: (
+                {FILE_AGENT, BACKGROUND_AGENT} <= {item["id"] for item in value}
+            ),
         )
-        agent = next((item for item in agents if item["id"] == FILE_AGENT), None)
+        by_id = {item["id"]: item for item in agents}
+        agent = by_id.get(FILE_AGENT)
+        background = by_id.get(BACKGROUND_AGENT)
         return CheckResult(
             {
                 "agent-file-discovered": agent is not None
                 and agent["description"] == FILE_AGENT_DESCRIPTION
                 and agent["mode"] == "subagent"
-                and FILE_AGENT_BODY in agent["system"]
+                and FILE_AGENT_BODY in agent["system"],
+                # The agent still loads, and nothing of `background` survives.
+                "agent-background-dropped": background is not None
+                and not any("background" in key.lower() for key in background),
             },
             json.dumps(agents),
         )
@@ -269,6 +279,13 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
 
 
 observation = cached_scenario_fixture(observe)
+
+
+@pytest.mark.capability_case("opencode.agent-background")
+@pytest.mark.capability_live
+@pytest.mark.parametrize("observation", ("agents",), indirect=True, scope="module")
+def test_opencode_agent_has_no_background_field(observation: CheckResult) -> None:
+    assert observation.checks["agent-background-dropped"], observation.detail
 
 
 @pytest.mark.capability_case("opencode.instructions")

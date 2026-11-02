@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "fixture-local": {
+      "type": "stdio",
+      "command": "fixture-mcp",
+      "args": [
+        "--stdio"
+      ],
+      "env": {
+        "FIXTURE_MODE": "neutral"
+      }
+    }
+  },
+  "fixture": {
+    "claude_mcp": true
+  }
+}

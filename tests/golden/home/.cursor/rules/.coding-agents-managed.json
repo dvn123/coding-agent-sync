@@ -1,0 +1,7 @@
+{
+  "entries": {
+    "always.mdc": "sha256:c24844cf88203788fedbe6aadbab5b0f8a71379a29b89ab6c5cf21a9b0ebd6da",
+    "coding-agents-global.mdc": "sha256:3b80bd4c866e7cb3a45fbc5e06b1f55320d0d2eeca0bc51e6b90691f64413cd0",
+    "scoped.mdc": "sha256:f2d5b2371ad7b5b56d46dac1d976a56753ee92c6925bef61a6584ebd26163332"
+  }
+}

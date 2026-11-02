@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 from capabilities.protocols.anthropic import AnthropicRequest
 from capabilities.protocols.common import ProtocolShapeError

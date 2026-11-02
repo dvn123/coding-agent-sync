@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 from itertools import combinations
 from pathlib import Path
@@ -450,6 +448,36 @@ class PermissionSource(BaseModel):
     command_targets: tuple[tuple[Path, TargetBlocks, frozenset[str]], ...] = ()
 
 
+class McpServerSource(StrictModel):
+    """One MCP server, registered under `id` by every target that receives it.
+
+    A local server has `command` with optional `args` and `env`; a remote one
+    has `url`. Per-target settings such as approval modes stay in patches.
+    """
+
+    path: Path
+    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
+    kind: Literal["mcp-server"]
+    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]+$")]
+    description: str = ""
+    only: Annotated[tuple[ToolName, ...], Unique] = ()
+    command: NonEmpty | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = Field(default_factory=dict)
+    url: NonEmpty | None = None
+    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
+
+    @model_validator(mode="after")
+    def _validate_transport(self) -> McpServerSource:
+        if (self.command is None) == (self.url is None):
+            raise ValueError("set exactly one of command (local) or url (remote)")
+        if self.url is not None and (self.args or self.env):
+            raise ValueError("args and env apply only to a local server")
+        if self.only and (extra := set(self.targets.root) - set(self.only)):
+            raise ValueError(f"targets outside only: {sorted(extra)}")
+        return self
+
+
 class SourceBundle(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -460,6 +488,7 @@ class SourceBundle(BaseModel):
     agents: tuple[AgentSource, ...] = ()
     model_policy: ModelPolicyDocument | None = None
     permissions: PermissionSource | None = None
+    mcp_servers: tuple[McpServerSource, ...] = ()
 
 
 def _model_error(path: Path, exc: ValidationError) -> SourceSchemaError:
@@ -678,6 +707,21 @@ def load_sources(config_root: Path) -> SourceBundle:
         model_policy_errors.append(
             f"{config_root / 'model-policy.yaml'}: required by an agent model_policy"
         )
+    mcp_servers: list[McpServerSource] = []
+    mcp_errors: list[str] = []
+    for path in sorted(config_root.glob("mcp/*.yaml")):
+        try:
+            server = McpServerSource.model_validate({**_load_yaml(path), "path": path})
+        except SourceSchemaError as exc:
+            mcp_errors.append(str(exc))
+            continue
+        except ValidationError as exc:
+            mcp_errors.append(str(_model_error(path, exc)))
+            continue
+        if server.id != path.stem:
+            mcp_errors.append(f"{path}: id must match the file name")
+        else:
+            mcp_servers.append(server)
     permission_root = config_root / "permissions"
     permission_errors: list[str] = []
     permissions: list[PermissionSource] = []
@@ -695,6 +739,7 @@ def load_sources(config_root: Path) -> SourceBundle:
         + skill_errors
         + command_errors
         + agent_errors
+        + mcp_errors
         + permission_errors
     )
     if errors:
@@ -708,4 +753,5 @@ def load_sources(config_root: Path) -> SourceBundle:
         agents=tuple(agents),
         model_policy=model_policy,
         permissions=permissions[0] if permissions else None,
+        mcp_servers=tuple(mcp_servers),
     )

@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -147,6 +146,74 @@ def test_codex_resolves_strict_user_config_into_request(runtime: Runtime) -> Non
     assert request.raw["reasoning"]["effort"] == "high"
 
 
+@pytest.mark.capability_case("codex.config")
+@pytest.mark.capability_live
+@pytest.mark.parametrize(("mode", "offered"), (("disabled", False), ("cached", True)))
+def test_codex_web_search_mode_decides_whether_the_tool_is_offered(
+    runtime: Runtime, mode: str, offered: bool
+) -> None:
+    """`web_search = "disabled"` is how a policy's websearch deny reaches Codex."""
+    paths = paths_for(runtime, f"web-search-{mode}")
+    config = write_api_config(paths, runtime) / "config.toml"
+    config.write_text(
+        config.read_text().replace('web_search = "disabled"', f'web_search = "{mode}"')
+    )
+
+    request = invoke(runtime, paths)
+
+    tools = request.raw.get("tools", [])
+    assert any("web_search" in tool.get("type", "") for tool in tools) is offered
+
+
+def app_server_schema(runtime: Runtime, name: str) -> dict[str, Any]:
+    """One response schema of the app-server protocol the installed Codex speaks."""
+    paths = paths_for(runtime, f"schema-{name}")
+    out = paths.tmp / "schema"
+    process = run_probe(
+        run,
+        runtime.codex,
+        "app-server",
+        "generate-json-schema",
+        "--out",
+        str(out),
+        cwd=paths.work,
+        env=environment(paths),
+        timeout=30,
+    )
+    assert process.returncode == 0, process.stderr
+    return json.loads((out / "v2" / f"{name}.json").read_text())
+
+
+@pytest.mark.capability_case("codex.tool-gates")
+@pytest.mark.capability_live
+def test_codex_config_has_no_per_tool_gate(runtime: Runtime) -> None:
+    """The config schema holds one tool setting, `web_search`; a new one may
+    be the per-tool ask or deny Codex lacks."""
+    schema = app_server_schema(runtime, "ConfigReadResponse")
+
+    assert set(schema["definitions"]["ToolsV2"]["properties"]) == {"web_search"}
+
+
+@pytest.mark.capability_case("codex.skill-execution")
+@pytest.mark.capability_live
+def test_codex_skills_carry_no_delegated_execution(runtime: Runtime) -> None:
+    """What Codex keeps of a skill has no agent or subtask; a new field may be
+    the delegated execution a command needs."""
+    schema = app_server_schema(runtime, "SkillsListResponse")
+
+    assert set(schema["definitions"]["SkillMetadata"]["properties"]) == {
+        "dependencies",
+        "description",
+        "enabled",
+        "interface",
+        "name",
+        "path",
+        "pluginId",
+        "scope",
+        "shortDescription",
+    }
+
+
 @pytest.mark.capability_case("codex.model-providers")
 @pytest.mark.capability_live
 def test_codex_routes_custom_model_provider_to_isolated_responses_stub(
@@ -222,6 +289,116 @@ def test_codex_custom_permission_profile_denies_workspace_subpath(
     assert process.returncode != 0
     assert allowed.exists(), process.stderr
     assert not denied.exists()
+
+
+@pytest.mark.capability_case("codex.agent-background")
+@pytest.mark.capability_live
+def test_codex_refuses_an_agent_role_with_background(runtime: Runtime) -> None:
+    """Codex drops a role file with a field it does not know, with a warning."""
+    paths = paths_for(runtime, "agent-background")
+    agents = write_api_config(paths, runtime) / "agents"
+    agents.mkdir()
+    for name, extra in (("background-probe", "background = true\n"), ("control", "")):
+        (agents / f"{name}.toml").write_text(
+            f'name = "{name}"\ndescription = "Role probe."\n'
+            f'developer_instructions = "Role probe."\n{extra}'
+        )
+
+    process = run_probe(
+        run,
+        *runtime.seatbelt.command(
+            runtime.codex,
+            "exec",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "-C",
+            str(paths.work),
+            "Reply with configuration probe complete.",
+        ),
+        cwd=paths.work,
+        env=environment(paths),
+        timeout=20,
+        stdin=-3,
+    )
+    output = process.stdout + process.stderr
+
+    assert process.returncode == 0, output
+    assert "background-probe.toml: unknown field `background`" in output
+    assert "control.toml" not in output
+
+
+@pytest.mark.capability_case("codex.unmatched-ask")
+@pytest.mark.capability_live
+def test_codex_has_no_policy_that_asks_for_every_unlisted_command(
+    runtime: Runtime,
+) -> None:
+    """`untrusted`, the policy that asked unless a rule allowed, is refused."""
+    paths = paths_for(runtime, "unmatched-ask")
+    config = write_api_config(paths, runtime) / "config.toml"
+    config.write_text(
+        config.read_text().replace(
+            'approval_policy = "never"', 'approval_policy = "untrusted"'
+        )
+    )
+
+    process = run_probe(
+        run,
+        *runtime.seatbelt.command(
+            runtime.codex,
+            "exec",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "-C",
+            str(paths.work),
+            "Reply with configuration probe complete.",
+        ),
+        cwd=paths.work,
+        env=environment(paths),
+        timeout=20,
+        stdin=-3,
+    )
+
+    assert process.returncode != 0
+    assert 'approval_policy = "untrusted" is no longer supported' in process.stderr
+
+
+@pytest.mark.capability_case("codex.workspace-ask")
+@pytest.mark.capability_live
+def test_codex_permission_profile_has_no_ask_access_level(runtime: Runtime) -> None:
+    """Codex refuses a directory whose access level is `ask` at config load."""
+    paths = paths_for(runtime, "workspace-ask")
+    codex_home = paths.home / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        "\n".join(
+            (
+                'default_permissions = "review"',
+                "",
+                "[permissions.review]",
+                'extends = ":workspace"',
+                "",
+                '[permissions.review.filesystem.":workspace_roots"]',
+                '"review" = "ask"',
+            )
+        )
+    )
+
+    process = run_probe(
+        run,
+        runtime.codex,
+        "sandbox",
+        "-P",
+        "review",
+        "-C",
+        str(paths.work),
+        "/usr/bin/true",
+        cwd=paths.work,
+        env=environment(paths),
+        timeout=10,
+    )
+
+    assert process.returncode != 0
+    assert "permissions" in process.stderr
 
 
 COMPILED_POLICY = """\

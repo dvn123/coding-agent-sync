@@ -1,16 +1,20 @@
-from __future__ import annotations
-
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .models import SyncContext
-from .plan import Plan, merge_plans
-from .runtime_config import (
+from .output.native import (
     NativePlan,
     apply_native_candidates,
     prepare_plan_native,
     publish_native_manifest,
+)
+from .output.plan import Plan, merge_plans
+from .output.writer import (
+    plan_drift,
+    preflight_plan,
+    publish_plan_manifests,
+    write_plan,
 )
 from .sources import load_sources
 from .targets import (
@@ -19,12 +23,6 @@ from .targets import (
     compile_cursor,
     compile_opencode,
     compile_shared_skills,
-)
-from .writer import (
-    plan_drift,
-    preflight_plan,
-    publish_plan_manifests,
-    write_plan,
 )
 
 

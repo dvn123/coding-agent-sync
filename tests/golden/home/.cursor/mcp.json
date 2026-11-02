@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "fixture-local": {
+      "command": "/opt/fixture/bin/fixture-mcp",
+      "args": [
+        "--stdio"
+      ],
+      "env": {
+        "FIXTURE_MODE": "neutral"
+      }
+    }
+  },
+  "fixture": {
+    "cursor_mcp": true
+  }
+}

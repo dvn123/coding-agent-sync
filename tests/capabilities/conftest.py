@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +8,7 @@ from capabilities.harness import resolve_cursor_local, update, version
 from capabilities.model import Case, Comparison, Observation, Support
 from capabilities.registry import CASES, CASES_BY_ID, TARGETS, validate_registry
 from capabilities.report import capability_report, write_report
+from coding_agents_sync.limits import LIMITATIONS
 
 
 @dataclass(slots=True)
@@ -36,6 +35,13 @@ class State:
             actual, detail = (
                 Support.HARNESS_ERROR,
                 f"{len(errors)} pytest setup/teardown errors",
+            )
+        elif failures and case.expected is Support.UNSUPPORTED:
+            # A negative probe fails when the target starts accepting what it
+            # used to refuse.
+            actual, detail = (
+                Support.SUPPORTED,
+                f"{len(failures)} of {len(calls)} negative checks failed",
             )
         elif failures:
             actual, detail = (
@@ -292,5 +298,25 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         f"{len(gains)} gains, {len(unavailable)} unavailable, "
         f"{unprobed} surfaces not probed",
     )
-    if failures:
+    for gain in gains:
+        line(session.config, gain_message(gain))
+    if failures or gains:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+def gain_message(observation: Observation) -> str:
+    """What a target gaining a capability should make the maintainer revisit."""
+    case = observation.case
+    head = (
+        f"gain     {case.target} {observation.version} now passes what negative "
+        f"case {case.id} ({case.evidence}) expected it to refuse"
+    )
+    linked = [item for item in LIMITATIONS if item.probe == case.id]
+    if not linked:
+        return f"{head}; revisit the design it records, then mark it supported"
+    return f"{head}; consider removing " + "; ".join(
+        f"limitation {item.id} from coding_agents_sync/limits.py ({item.reason}) "
+        f"and lowering `{item.field}`, so sources stop needing "
+        f"targets.{item.target}.omit.{item.field}"
+        for item in linked
+    )

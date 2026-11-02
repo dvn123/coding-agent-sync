@@ -8,8 +8,6 @@ requires every observed decision to equal the prediction. The sample favours
 probes whose prediction the plugin decides.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import random

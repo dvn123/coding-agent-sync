@@ -1,0 +1,252 @@
+{
+  "entries": [
+    {
+      "target": "claude",
+      "pointer": "/permissions/additionalDirectories",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude",
+      "pointer": "/permissions/allow",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude",
+      "pointer": "/permissions/ask",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude",
+      "pointer": "/permissions/deny",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude",
+      "pointer": "/sandbox/credentials/envVars",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude-mcp",
+      "pointer": "/mcpServers/fixture-local/args",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude-mcp",
+      "pointer": "/mcpServers/fixture-local/command",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "claude-mcp",
+      "pointer": "/mcpServers/fixture-local/env",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "claude-mcp",
+      "pointer": "/mcpServers/fixture-local/type",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/default_permissions",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-local/args",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-local/command",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-local/env",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-remote/url",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/permissions/coding-agents/description",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/permissions/coding-agents/extends",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/permissions/coding-agents/filesystem",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/shell_environment_policy/exclude",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "cursor-desktop",
+      "pointer": "/approvalMode",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "cursor-desktop",
+      "pointer": "/terminalAllowlist",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "cursor-mcp",
+      "pointer": "/mcpServers/fixture-local/args",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "cursor-mcp",
+      "pointer": "/mcpServers/fixture-local/command",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "cursor-mcp",
+      "pointer": "/mcpServers/fixture-local/env",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/instructions",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-local/command",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-local/environment",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-local/type",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-remote/type",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-remote/url",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/permissions",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    }
+  ]
+}

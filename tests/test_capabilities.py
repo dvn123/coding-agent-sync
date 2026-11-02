@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import sys
@@ -16,6 +14,7 @@ import capabilities.report as capability_report_module
 import pytest
 from capabilities.conftest import (
     State,
+    gain_message,
     prepare_targets,
     requested_case_ids,
     selected_case_ids,
@@ -518,7 +517,7 @@ def test_report_classification(
     assert observation and observation.actual is expected
 
 
-def test_passing_negative_evidence_reports_unsupported() -> None:
+def test_negative_evidence_reports_unsupported_until_it_fails_as_a_gain() -> None:
     case = Case(
         "sample.negative",
         "claude",
@@ -553,7 +552,23 @@ def test_passing_negative_evidence_reports_unsupported() -> None:
     passed_observation = passed.observation(case)
     failed_observation = failed.observation(case)
     assert passed_observation and passed_observation.actual is Support.UNSUPPORTED
-    assert failed_observation and failed_observation.actual is Support.CONTRADICTED
+    assert failed_observation and failed_observation.actual is Support.SUPPORTED
+    assert failed_observation.comparison is Comparison.CAPABILITY_GAIN
+
+
+def test_a_gain_names_the_limitation_its_probe_guards() -> None:
+    case = CASES_BY_ID["codex.workspace-ask"]
+
+    message = gain_message(Observation(case, Support.SUPPORTED, "", "9.9.9"))
+
+    assert message == (
+        "gain     codex 9.9.9 now passes what negative case codex.workspace-ask "
+        "(targets/test_codex_config.py) expected it to refuse; consider removing "
+        "limitation codex.PermissionSource.workspace.ask from "
+        "coding_agents_sync/limits.py (Codex has no directory ask channel.) and "
+        "lowering `workspace.ask`, so sources stop needing "
+        "targets.codex.omit.workspace.ask"
+    )
 
 
 def test_mixed_pass_and_skip_is_not_reported_supported() -> None:

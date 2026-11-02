@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from capabilities.harness import Paths, sanitized_env
 
 

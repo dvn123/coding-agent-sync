@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -7,9 +6,10 @@ import tomlkit
 import yaml
 from pydantic import ConfigDict, Field
 
+from ..ir import applies_to, resolve
 from ..models import SyncContext
-from ..patches import Patch, validate_generated_conflicts
-from ..plan import (
+from ..output.patches import Patch, validate_generated_conflicts
+from ..output.plan import (
     Diagnostic,
     NativePatch,
     NativeValue,
@@ -27,20 +27,16 @@ from ..sources import (
 )
 from .permissions import literal_directories
 from .support import (
-    applies_to,
-    block,
     bundled_files,
     collision_error,
     command_target_diagnostics,
     declared_trees,
     frontmatter,
+    mcp_servers,
     native_patch,
-    omissions,
     raw_files,
     shared_skill,
     skill_collisions,
-    strict_native,
-    unhandled_target_block,
 )
 
 
@@ -151,11 +147,10 @@ def codex_skill(
     skill: SkillSource, root: Path
 ) -> tuple[tuple[OwnedTree, ...], list[Diagnostic]]:
     """The skill's tree below `root`, if its native block validates."""
-    value = block(skill, "codex")
-    native, issues = strict_native(skill.path, "codex", value, CodexSkillNative)
-    diagnostics = [*issues, *omissions(skill.path, "codex", value, set())]
-    if not native:
+    resolved, diagnostics = resolve("codex", [skill], CodexSkillNative)
+    if not resolved:
         return (), diagnostics
+    native = resolved[0].native
     meta, issues = frontmatter(
         skill.path,
         {
@@ -165,7 +160,7 @@ def codex_skill(
             **({"metadata": skill.metadata} if skill.metadata else {}),
         },
         native.model_copy(update={"openai": None}),
-        value.raw,
+        resolved[0].raw,
     )
     diagnostics.extend(issues)
     try:
@@ -327,7 +322,7 @@ def _command_rules(
 
 
 def _agent_toml(
-    agent: AgentSource, native: CodexAgentNative, raw: dict[str, Any]
+    agent: AgentSource, native: CodexAgentNative, raw: Mapping[str, Any]
 ) -> bytes:
     values: dict[str, Any] = {
         "name": agent.name,
@@ -425,33 +420,19 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
     )
     diagnostics: list[Diagnostic] = []
-    globals_ = [item for item in sources.globals if applies_to(item, "codex")]
-    rules_ = [item for item in sources.rules if applies_to(item, "codex")]
-    if globals_ or rules_:
-        if globals_:
-            global_source = globals_[0]
-            value = block(global_source, "codex")
-            diagnostics.extend(
-                unhandled_target_block(global_source.path, "codex", value)
-            )
-            diagnostics.extend(omissions(global_source.path, "codex", value, set()))
-        parts = [globals_[0].body.rstrip()] if globals_ else []
-        parts.extend(rule.body.rstrip() for rule in rules_)
+    globals_, issues = resolve("codex", sources.globals[:1])
+    diagnostics.extend(issues)
+    # Codex has no rules directory: every rule joins the global instructions,
+    # and a rule's native prefix rules join the generated rules file.
+    rules_, issues = resolve("codex", sources.rules, CodexRuleNative, raw=False)
+    diagnostics.extend(issues)
+    if parts := [item.source.body.rstrip() for item in (*globals_, *rules_)]:
         files.append(
             OwnedFile(root / "AGENTS.md", ("\n\n".join(parts) + "\n").encode(), root)
         )
-    rules: list[tuple[str, CodexPrefixRule]] = []
-    for rule in rules_:
-        value = block(rule, "codex")
-        native, issues = strict_native(rule.path, "codex", value, CodexRuleNative)
-        diagnostics.extend(issues)
-        if value.raw:
-            diagnostics.append(
-                Diagnostic("error", "codex raw rule fields are not valid", rule.path)
-            )
-        diagnostics.extend(omissions(rule.path, "codex", value, set()))
-        if native:
-            rules.extend((rule.path.name, item) for item in native.rules)
+    rules = [
+        (rule.source.path.name, item) for rule in rules_ for item in rule.native.rules
+    ]
     command_rules, issues = _command_rules(sources.permissions)
     rules.extend(command_rules)
     diagnostics.extend(issues)
@@ -467,62 +448,41 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
     # Codex has no custom prompts left, so a command becomes a skill that only
     # the user invokes.
     collisions = skill_collisions(sources, "codex")
-    for command in sources.commands:
-        if not applies_to(command, "codex"):
-            continue
+    commands, issues = resolve("codex", sources.commands, CodexSkillNative)
+    diagnostics.extend(issues)
+    for resolved in commands:
+        command, native = resolved.source, resolved.native
         if command.stem in collisions:
             diagnostics.append(collision_error(command))
             continue
-        value = block(command, "codex")
-        native, issues = strict_native(command.path, "codex", value, CodexSkillNative)
+        meta, issues = frontmatter(
+            command.path,
+            {
+                "name": command.stem,
+                "description": command.description.replace("<", "").replace(">", ""),
+            },
+            native.model_copy(update={"openai": None}),
+            resolved.raw,
+        )
         diagnostics.extend(issues)
-        delegated = command.execution.agent or command.execution.subtask
-        diagnostics.extend(
-            omissions(
-                command.path, "codex", value, {"execution"} if delegated else set()
+        trees.append(
+            _tree(
+                command.stem,
+                command.body,
+                root / "skills",
+                meta,
+                native.openai,
+                explicit_only=True,
             )
         )
-        if native:
-            meta, issues = frontmatter(
-                command.path,
-                {
-                    "name": command.stem,
-                    "description": command.description.replace("<", "").replace(
-                        ">", ""
-                    ),
-                },
-                native.model_copy(update={"openai": None}),
-                value.raw,
-            )
-            diagnostics.extend(issues)
-            trees.append(
-                _tree(
-                    command.stem,
-                    command.body,
-                    root / "skills",
-                    meta,
-                    native.openai,
-                    explicit_only=True,
-                )
-            )
-    for agent in sources.agents:
-        if not applies_to(agent, "codex"):
-            continue
-        value = block(agent, "codex")
-        native, issues = strict_native(agent.path, "codex", value, CodexAgentNative)
-        diagnostics.extend(issues)
-        diagnostics.extend(
-            omissions(
-                agent.path,
-                "codex",
-                value,
-                {"background"} if agent.background else set(),
-            )
-        )
+    agents, issues = resolve("codex", sources.agents, CodexAgentNative)
+    diagnostics.extend(issues)
+    for resolved in agents:
+        agent, native = resolved.source, resolved.native
         policy = resolve_model_policy(sources, agent, "codex")
         if policy is not None:
             conflicts = {"model", "model_reasoning_effort"} & (
-                value.native.keys() | value.raw.keys()
+                resolved.block.native.keys() | resolved.raw.keys()
             )
             if agent.effort:
                 conflicts.add("effort")
@@ -535,62 +495,54 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                         agent.path,
                     )
                 )
-            if native:
-                native = native.model_copy(
-                    update={
-                        "model": policy.model,
-                        "model_reasoning_effort": policy.effort,
-                    }
-                )
-        if native:
-            try:
-                content = _agent_toml(agent, native, value.raw)
-            except ValueError as exc:
-                diagnostics.append(Diagnostic("error", str(exc), agent.path))
-            else:
-                files.append(
-                    OwnedFile(
-                        root / "agents" / f"{agent.stem}.toml", content, root / "agents"
-                    )
-                )
-                if value.raw:
-                    diagnostics.append(
-                        Diagnostic(
-                            "warning",
-                            "using unvalidated raw target fields",
-                            agent.path,
-                        )
-                    )
-    if permissions := sources.permissions:
-        value = block(permissions, "codex")
-        diagnostics.extend(unhandled_target_block(permissions.paths[0], "codex", value))
-        diagnostics.extend(
-            omissions(
-                permissions.paths[0],
-                "codex",
-                value,
-                {
-                    # Codex already allows every tool; only a gate needs one.
-                    *(
-                        {"tools"}
-                        if set(permissions.tools.values()) - {"allow"}
-                        else set()
-                    ),
-                    *({"workspace.ask"} if permissions.workspace.ask else set()),
-                    # `on-request`, the only approval policy that asks, runs an
-                    # unlisted command in the sandbox; Codex retired `untrusted`.
-                    *({"unmatched"} if permissions.unmatched != "ask" else set()),
-                },
+            native = native.model_copy(
+                update={
+                    "model": policy.model,
+                    "model_reasoning_effort": policy.effort,
+                }
             )
+        try:
+            content = _agent_toml(agent, native, resolved.raw)
+        except ValueError as exc:
+            diagnostics.append(Diagnostic("error", str(exc), agent.path))
+            continue
+        files.append(
+            OwnedFile(root / "agents" / f"{agent.stem}.toml", content, root / "agents")
         )
+        if resolved.raw:
+            diagnostics.append(
+                Diagnostic("warning", "using unvalidated raw target fields", agent.path)
+            )
+    if permissions := sources.permissions:
+        _, issues = resolve("codex", [permissions])
+        diagnostics.extend(issues)
         diagnostics.extend(command_target_diagnostics(permissions, "codex"))
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
     # no registration for them.
-    native_values = (
-        _permission_profile(sources.permissions, ctx.home, root / "config.toml")
-        if sources.permissions
-        else []
+    servers, issues = mcp_servers(sources, "codex")
+    diagnostics.extend(issues)
+    websearch_denied = bool(
+        sources.permissions and sources.permissions.tools.get("websearch") == "deny"
     )
+    native_values = [
+        *(
+            _permission_profile(sources.permissions, ctx.home, root / "config.toml")
+            if sources.permissions
+            else []
+        ),
+        *(
+            (NativeValue("codex", root / "config.toml", ("web_search",), "disabled"),)
+            if websearch_denied
+            else ()
+        ),
+        *(
+            NativeValue(
+                "codex", root / "config.toml", ("mcp_servers", name, key), value
+            )
+            for name, fields in servers
+            for key, value in fields.items()
+        ),
+    ]
     patch, issues = native_patch(
         config_root=ctx.config_root,
         target="codex",

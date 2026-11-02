@@ -28,8 +28,10 @@ patch's to set. Claude anchors a bare path rule at the cwd and a `/` one at
 the settings file, so `**/` secret paths and absolute directories take the
 `//` root form, workspace directories receive `Edit(<dir>/**)` when edits are
 allowed, and `workspace.unmatched: allow` becomes `Read(//**)` and
-`Edit(//**)`. Denied workspace directories become Read and Edit denies.
-`workspace.ask` has no channel and needs an omit. A secret name becomes a
+`Edit(//**)`. Denied workspace directories become Read and Edit denies. An
+ask directory stays out of `additionalDirectories` and becomes `Read(<dir>/**)`
+and `Edit(<dir>/**)` ask rules, which outrank those broader allows (the
+`claude.permissions` probe pins both). A secret name becomes a
 `Bash(*NAME*)` deny and a `sandbox.credentials.envVars` deny, which unsets the
 variable for sandboxed commands so `env` cannot print it; that second half
 binds only while a patch enables `sandbox`. A Read deny also stops a shell

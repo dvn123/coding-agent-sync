@@ -1,0 +1,70 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(fixture-tool status *)",
+      "Bash(fixture-tool -C* status *)",
+      "Bash(fixture-tool -C* status)",
+      "Read(**)",
+      "WebFetch(*)"
+    ],
+    "ask": [
+      "Bash(fixture-tool publish --public *)",
+      "Bash(fixture-tool publish * --public *)",
+      "Bash(fixture-tool publish * --public)",
+      "Bash(fixture-tool -C* publish --public *)",
+      "Bash(fixture-tool -C* publish --public)",
+      "Bash(fixture-tool -C* publish * --public *)",
+      "Bash(fixture-tool -C* publish * --public)",
+      "WebSearch(*)",
+      "Read(//tmp/fixture-review/**)",
+      "Edit(//tmp/fixture-review/**)"
+    ],
+    "deny": [
+      "Bash(fixture-tool remove)",
+      "Bash(fixture-tool -C* remove)",
+      "Bash(<*)",
+      "Bash(>*)",
+      "Bash(&>*)",
+      "Bash(0<*)",
+      "Bash(0>*)",
+      "Bash(1<*)",
+      "Bash(1>*)",
+      "Bash(2<*)",
+      "Bash(2>*)",
+      "Bash(3<*)",
+      "Bash(3>*)",
+      "Bash(4<*)",
+      "Bash(4>*)",
+      "Bash(5<*)",
+      "Bash(5>*)",
+      "Bash(6<*)",
+      "Bash(6>*)",
+      "Bash(7<*)",
+      "Bash(7>*)",
+      "Bash(8<*)",
+      "Bash(8>*)",
+      "Bash(9<*)",
+      "Bash(9>*)",
+      "Bash(*FIXTURE_TOKEN*)",
+      "Read(//**/.env)",
+      "Edit(//**/.env)",
+      "Edit(**)"
+    ],
+    "additionalDirectories": [
+      "~/fixture-shared"
+    ]
+  },
+  "sandbox": {
+    "credentials": {
+      "envVars": [
+        {
+          "name": "FIXTURE_TOKEN",
+          "mode": "deny"
+        }
+      ]
+    }
+  },
+  "fixture": {
+    "claude": true
+  }
+}

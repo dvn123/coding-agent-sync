@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 from capabilities.cursor_desktop_probe import (

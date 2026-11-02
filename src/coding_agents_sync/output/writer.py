@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from contextlib import suppress
@@ -9,7 +7,7 @@ from tempfile import TemporaryDirectory
 import tomlkit
 import yaml
 
-from .io import (
+from ..io import (
     MANAGED_MANIFEST,
     ManagedEntryConflict,
     entry_hash,

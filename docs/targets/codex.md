@@ -142,8 +142,10 @@ selected by `default_permissions`:
   block reads as well as writes inside the sandbox. A `**/` path becomes the
   absolute glob `/**/…`, which macOS enforces natively; Linux warns that an
   unbounded `**` needs `glob_scan_max_depth`.
-- `tools` decisions of `allow` are Codex's own behaviour and owe nothing; an
-  `ask` or `deny` has no channel and needs `omit.tools`.
+- `tools` decisions of `allow` are Codex's own behaviour and owe nothing. A
+  `websearch: deny` becomes `web_search = "disabled"`, which removes the tool
+  from the request (the `codex.config` probe pins both modes); any other `ask`
+  or `deny` has no channel and needs `omit.tools`.
 
 The profile carries no network settings: set
 `/permissions/coding-agents/network/enabled` in the `codex` patch. Legacy

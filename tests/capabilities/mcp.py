@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import sys
 from dataclasses import dataclass, field
@@ -215,7 +213,12 @@ class ChatMCPResponder:
         from capabilities.protocols.openai import tool_call_sse
 
         self.tool_name = self.tool_name or find_tool_name(request)
-        called = TOOL_RESULT in json.dumps(request)
+        # Any result ends the turn, a refusal included, so a denied call is
+        # not retried.
+        called = any(
+            isinstance(message, dict) and message.get("role") == "tool"
+            for message in request.get("messages", [])
+        )
         body = (
             tool_call_sse(
                 self.tool_name,

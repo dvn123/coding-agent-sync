@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +40,8 @@ class Scenario:
     tool: str
     arguments: dict[str, str]
     permissions: dict[str, tuple[str, ...]]
+    # Read calls made first, because Edit refuses a file the session has not read.
+    reads: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +272,24 @@ SCENARIOS = {
         {"command": f"eval '{COMMAND} eval-allowed'"},
         {"allow": ("Bash(eval:*)", f"Bash({COMMAND} *)")},
     ),
+    # A directory outside the project that every tool may reach, where an ask
+    # rule on the directory has to outrank the broader allow.
+    **{
+        f"workspace-{tool.lower()}-{name}": Scenario(
+            tool,
+            {"file_path": f"{{root}}/outside/{tool.lower()}-{name}", **arguments},
+            {"allow": ("Read(//**)", "Edit(//**)")}
+            | ({"ask": (f"{tool}(/{{root}}/outside/**)",)} if name == "ask" else {}),
+            reads=(f"{{root}}/outside/{tool.lower()}-{name}",)
+            if tool == "Edit"
+            else (),
+        )
+        for tool, arguments in (
+            ("Read", {}),
+            ("Edit", {"old_string": "outside probe", "new_string": "edited"}),
+        )
+        for name in ("ask", "allow")
+    },
     "deny-env": Scenario(
         "Read",
         {"file_path": "{work}/.env"},
@@ -546,6 +564,15 @@ EXPECTED = {
     # Hypothesis: an assignment prefix is not peeled, so both are refused.
     "probe-var-plain": {"exit-zero": True, "executed": False},
     "probe-var-wrapper": {"exit-zero": True, "executed": False},
+    **{
+        f"workspace-{tool}-{name}": {
+            "exit-zero": True,
+            "denied": name == "ask",
+            "result-error": name == "ask",
+        }
+        for tool in ("read", "edit")
+        for name in ("ask", "allow")
+    },
     "deny-env": {"exit-zero": True, "result-error": True},
     "deny-env-example": {"exit-zero": True, "result-error": True},
     **{
@@ -649,6 +676,9 @@ def runtime(
     settings = paths.root / "settings.json"
     recorder_dir = paths.root / "recorder"
     recorder_dir.mkdir()
+    (paths.root / "outside").mkdir()
+    for name in ("read-ask", "read-allow", "edit-ask", "edit-allow"):
+        (paths.root / "outside" / name).write_text("outside probe\n")
     recorder = paths.bin / COMMAND
     # One marker per invocation, named after the first argument, so a chain can
     # attribute execution to a segment. `fail` forces a nonzero exit.
@@ -705,11 +735,12 @@ def invoke(runtime: Runtime, scenario: Scenario) -> CheckResult:
     recorder_dir, settings = runtime.recorder_dir, runtime.settings
     for stale in recorder_dir.iterdir():
         stale.unlink()
+    root = str(runtime.paths.root)
     settings.write_text(
         json.dumps(
             {
                 "permissions": {
-                    key: list(patterns)
+                    key: [pattern.replace("{root}", root) for pattern in patterns]
                     for key, patterns in scenario.permissions.items()
                 }
             }
@@ -718,10 +749,14 @@ def invoke(runtime: Runtime, scenario: Scenario) -> CheckResult:
     runtime.model.tool_call = (
         scenario.tool,
         {
-            key: value.format(work=runtime.paths.work, bin=runtime.paths.bin)
+            key: value.format(work=runtime.paths.work, bin=runtime.paths.bin, root=root)
             for key, value in scenario.arguments.items()
         },
         TOOL_ID,
+    )
+    runtime.model.prelude = tuple(
+        ("Read", {"file_path": path.format(root=root)}, f"toolu_read_{index}")
+        for index, path in enumerate(scenario.reads)
     )
     start = len(runtime.stub.requests)
     process = run_probe(
@@ -742,7 +777,9 @@ def invoke(runtime: Runtime, scenario: Scenario) -> CheckResult:
             "--permission-mode",
             "dontAsk",
             "--tools",
-            scenario.tool,
+            ",".join(
+                dict.fromkeys(("Read",) * bool(scenario.reads) + (scenario.tool,))
+            ),
         ),
         cwd=runtime.paths.work,
         env=runtime.env,
