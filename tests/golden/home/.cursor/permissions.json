@@ -6,6 +6,9 @@
     "fixture-tool:-C * status",
     "fixture-tool:-C * status *"
   ],
+  "mcpAllowlist": [
+    "fixture-local:inspect"
+  ],
   "fixture": {
     "cursor_desktop": true
   }

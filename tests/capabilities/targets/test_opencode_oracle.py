@@ -80,7 +80,7 @@ def runtime(
     sources = audit._with_unmatched(audit.load_sources(Path(root)), "allow")
     assert sources.permissions is not None
     tools = fold_edit_write(sources.permissions.tools, "OpenCode")[0]
-    (value,) = opencode._permissions(sources, Path("opencode.json"), tools)
+    (value,) = opencode._permissions(sources, Path("opencode.json"), tools, [])
     shell = [
         (rule["resource"], rule["effect"])
         for rule in value.value

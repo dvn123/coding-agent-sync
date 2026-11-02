@@ -27,6 +27,7 @@ from ..output.plan import (
 )
 from ..sources import (
     Decision,
+    McpServerSource,
     PermissionSource,
     PermissionTool,
     SkillSource,
@@ -51,6 +52,7 @@ from .support import (
     frontmatter,
     markdown,
     mcp_servers,
+    mcp_tool_decisions,
     native_patch,
     one_of,
     raw_files,
@@ -232,10 +234,18 @@ def _opencode_server(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def _permissions(
-    sources: SourceBundle, config: Path, tools: Mapping[PermissionTool, Decision]
+    sources: SourceBundle,
+    config: Path,
+    tools: Mapping[PermissionTool, Decision],
+    servers: list[tuple[McpServerSource, dict[str, Any]]],
 ) -> tuple[NativeValue, ...]:
+    # An MCP tool's action is `<server>_<tool>`, apart from every built-in one.
+    mcp = [
+        {"action": f"{server}_{tool}", "resource": "*", "effect": decision}
+        for server, tool, decision in mcp_tool_decisions(servers)
+    ]
     if not (permissions := sources.permissions):
-        return ()
+        return (NativeValue("opencode", config, ("permissions",), mcp),) if mcp else ()
     buckets = bucket_patterns(shell_entries(permissions))
     denied = [
         variant
@@ -266,7 +276,7 @@ def _permissions(
             add(tool, decision, ["*"])
     for effect, resources in external_directory_rules(permissions.workspace):
         add("external_directory", effect, resources)
-    return (NativeValue("opencode", config, ("permissions",), rules),)
+    return (NativeValue("opencode", config, ("permissions",), rules + mcp),)
 
 
 def _validate_patches(
@@ -441,10 +451,10 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
     servers, issues = mcp_servers(sources, "opencode")
     diagnostics.extend(issues)
     native_values = (
-        *_permissions(sources, config, folded[0]),
+        *_permissions(sources, config, folded[0], servers),
         *(
-            NativeValue("opencode", config, ("mcp", "servers", name, key), value)
-            for name, fields in servers
+            NativeValue("opencode", config, ("mcp", "servers", server.id, key), value)
+            for server, fields in servers
             for key, value in _opencode_server(fields).items()
         ),
         *(

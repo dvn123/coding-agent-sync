@@ -1,5 +1,5 @@
 import stat
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +12,7 @@ from ..output.patches import load_patch, merge_patches
 from ..output.plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
 from ..sources import (
     CommandPermission,
+    Decision,
     McpServerSource,
     PermissionSource,
     SourceBundle,
@@ -29,15 +30,24 @@ class McpNative(StrictModel):
 
 def mcp_servers(
     sources: SourceBundle, target: ToolName
-) -> tuple[list[tuple[str, dict[str, Any]]], list[Diagnostic]]:
-    """Each server `target` receives, as its id and its fields with empty ones
-    left out: `command`, `args`, and `env` for a local server, `url` for a
-    remote one."""
+) -> tuple[list[tuple[McpServerSource, dict[str, Any]]], list[Diagnostic]]:
+    """Each server `target` receives, with its fields with empty ones left
+    out: `command`, `args`, and `env` for a local server, `url` for a remote
+    one."""
     resolved, diagnostics = resolve(target, sources.mcp_servers, McpNative, raw=False)
     return [
-        (server.source.id, _mcp_fields(server.source, server.native.command))
+        (server.source, _mcp_fields(server.source, server.native.command))
         for server in resolved
     ], diagnostics
+
+
+def mcp_tool_decisions(
+    servers: list[tuple[McpServerSource, dict[str, Any]]],
+) -> Iterator[tuple[str, str, Decision]]:
+    """Each decided tool as its server id, its name, and its decision."""
+    for server, _ in servers:
+        for tool, decision in server.tools.items():
+            yield server.id, tool, decision
 
 
 def _mcp_fields(server: McpServerSource, command: str | None) -> dict[str, Any]:

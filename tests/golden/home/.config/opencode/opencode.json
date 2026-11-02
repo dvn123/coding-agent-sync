@@ -139,6 +139,21 @@
       "action": "external_directory",
       "resource": "/tmp/fixture-review/**",
       "effect": "ask"
+    },
+    {
+      "action": "fixture-local_inspect",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "fixture-local_submit",
+      "resource": "*",
+      "effect": "ask"
+    },
+    {
+      "action": "fixture-local_erase",
+      "resource": "*",
+      "effect": "deny"
     }
   ],
   "mcp": {

@@ -6,7 +6,13 @@ command: fixture-mcp
 args: [--stdio]
 env:
   FIXTURE_MODE: neutral
+tools:
+  inspect: allow
+  submit: ask
+  erase: deny
 targets:
   cursor:
     native:
       command: /opt/fixture/bin/fixture-mcp
+    omit:
+      tools: Cursor Desktop has no MCP deny list.

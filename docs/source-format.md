@@ -75,7 +75,7 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Agent | `only`, `model_policy`, `effort`, `background`, `color`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `options`, `assignments`, `allow`, `ask`, `deny`. |
-| MCP server | `only`, `command`, `args`, `env`, `url`. |
+| MCP server | `only`, `command`, `args`, `env`, `url`, `tools`. |
 
 `model-policy.yaml` is a strict compiler input with schema
 `coding-agents/model-policy/v1`. It names a `default` profile and defines
@@ -256,6 +256,9 @@ target it applies to. A local server sets `command` with optional `args` and
 command for one target, such as an absolute path for Cursor, which starts
 servers without the login shell's `PATH`.
 
+`tools` maps an exact tool name to `allow`, `ask`, or `deny`. A tool it does
+not name follows the target's own default and any patch rule.
+
 ```yaml
 schema: coding-agents/v1
 kind: mcp-server
@@ -263,6 +266,14 @@ id: browser
 command: browser-mcp
 args: [--headless]
 env: {MODE: quiet}
+tools:
+  browser_snapshot: allow
+  browser_click: ask
+  browser_run_code: deny
+targets:
+  cursor:
+    omit:
+      tools: Cursor Desktop has no MCP deny list.
 ```
 
 | Target | Generated pointers |
@@ -272,8 +283,15 @@ env: {MODE: quiet}
 | Cursor | the fields under `mcpServers/<id>` in `<home>/.cursor/mcp.json` |
 | OpenCode | `mcp/servers/<id>` as `type: local` with one `command` array and `environment`, or `type: remote` with `url` |
 
+| Target | `tools` lowering |
+| --- | --- |
+| Claude | `mcp__<id>__<tool>` in `permissions.allow`, `ask`, or `deny` of `settings.json` |
+| Codex | `mcp_servers/<id>/tools/<tool>/approval_mode` as `approve` or `prompt`; a deny joins `mcp_servers/<id>/disabled_tools`, which hides the tool |
+| Cursor | an allow joins `mcpAllowlist` as `<id>:<tool>` in `permissions.json`; an unlisted tool asks; a deny needs `targets.cursor.omit.tools` |
+| OpenCode | `{action: <id>_<tool>, resource: "*", effect}` after the policy's rules in `permissions` |
+
 The compiler owns only these leaf pointers, so a patch keeps the settings
-beside them: approval modes, enablement, tool allowlists, and OAuth. A value a
+beside them: server default approval modes, enablement, and OAuth. A value a
 patch already wrote is taken over when it matches; one that differs is
 refused until it does. Credentials stay out of the source: reference them
 through the target's environment interpolation or native login.
