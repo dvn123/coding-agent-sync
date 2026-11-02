@@ -99,9 +99,7 @@ def test_local_patch_mode_override_and_check_drift(tmp_path: Path) -> None:
     config_root = copy_config_root(tmp_path / "config")
     local_patch = config_root / "patches.local/claude-settings.yaml"
     local_patch.parent.mkdir()
-    local_patch.write_text(
-        "schema: coding-agents/patch/v1\nset:\n  /fixture/claude: local\n"
-    )
+    local_patch.write_text("set:\n  /fixture/claude: local\n")
     local_patch.chmod(0o600)
     runner = CliRunner()
     arguments = ["--config-root", str(config_root), "--home", str(home)]
@@ -110,9 +108,7 @@ def test_local_patch_mode_override_and_check_drift(tmp_path: Path) -> None:
     settings = home / ".claude/settings.json"
     assert json.loads(settings.read_text())["fixture"]["claude"] == "local"
 
-    local_patch.write_text(
-        "schema: coding-agents/patch/v1\nset:\n  /fixture/claude: changed\n"
-    )
+    local_patch.write_text("set:\n  /fixture/claude: changed\n")
     before = snapshot(home)
     drift = runner.invoke(main, [*arguments, "--check"])
     assert drift.exit_code == 1
@@ -130,7 +126,7 @@ def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
     home = tmp_path / "home"
     config_root = copy_config_root(tmp_path / "config")
     source = config_root / "rules/always.md"
-    source.write_text(source.read_text().replace("schema: coding-agents/v1\n", ""))
+    source.write_text(source.read_text().replace("---\n", "---\nbogus: true\n", 1))
 
     result = CliRunner().invoke(
         main,
@@ -139,6 +135,6 @@ def test_source_schema_error_is_a_clean_cli_diagnostic(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "Error: invalid coding-agent source(s)" in result.output
-    assert "missing or invalid schema `coding-agents/v1`" in result.output
+    assert "bogus" in result.output
     assert "Traceback" not in result.output
     assert not home.exists()

@@ -1,5 +1,5 @@
 import stat
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -7,17 +7,15 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from ..io import MANAGED_MANIFEST, is_incidental
-from ..ir import applies_to, omissions, resolve, unhandled_target_block
+from ..ir import applies_to, resolve
 from ..output.patches import load_patch, merge_patches
 from ..output.plan import Diagnostic, ManifestMode, NativePatch, OwnedFile, OwnedTree
 from ..sources import (
     CommandPermission,
     Decision,
     McpServerSource,
-    PermissionSource,
     SourceBundle,
     StrictModel,
-    TargetBlock,
     ToolName,
 )
 
@@ -178,24 +176,6 @@ def declared_trees(
         OwnedTree(root / name, (), root / name, manifest_mode=mode, declaration=True)
         for name, mode in roots
     ]
-
-
-def command_target_diagnostics(
-    permissions: PermissionSource,
-    target: ToolName,
-    required: Callable[[frozenset[str]], set[str]] = lambda _intent: set(),
-) -> tuple[Diagnostic, ...]:
-    """Check each command fragment's target block; `required` maps the
-    fragment's buckets to the omits the target owes for them."""
-    return tuple(
-        diagnostic
-        for path, targets, intent in permissions.command_targets
-        for value in (targets.root.get(target, TargetBlock()),)
-        for diagnostic in (
-            *unhandled_target_block(path, target, value),
-            *omissions(path, target, value, required(intent)),
-        )
-    )
 
 
 def frontmatter(

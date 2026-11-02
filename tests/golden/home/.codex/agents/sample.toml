@@ -1,4 +1,4 @@
-name = "fixture-agent"
+name = "sample"
 description = "Neutral fixture agent."
 developer_instructions = "Review the neutral fixture input."
 model_reasoning_effort = "high"

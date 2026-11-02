@@ -6,11 +6,9 @@ from pydantic import Field, model_validator
 from ..ir import Bare, applies_to, resolve
 from ..models import SyncContext
 from ..output.patches import (
-    Patch,
     PatchError,
     display_pointer,
     touches,
-    validate_generated_conflicts,
 )
 from ..output.plan import (
     Diagnostic,
@@ -32,7 +30,6 @@ from ..sources import (
 from .permissions import cursor_shell_variants, denied_paths
 from .support import (
     collision_error,
-    command_target_diagnostics,
     declared_trees,
     frontmatter,
     markdown,
@@ -258,17 +255,8 @@ def _permission_values(
     return tuple(values), diagnostics
 
 
-def _validate_patches(
-    patches: list[NativePatch], generated: tuple[NativeValue, ...]
-) -> None:
-    values = {
-        target: {
-            value.pointer: value.value for value in generated if value.target == target
-        }
-        for target in {patch.target for patch in patches}
-    }
+def _validate_patches(patches: list[NativePatch]) -> None:
     for patch in patches:
-        validate_generated_conflicts(Patch(patch.operations), values[patch.target])
         if patch.target == "cursor-desktop":
             for operation in patch.operations:
                 if touches(operation.pointer, ("terminalAllowlist",)):
@@ -292,7 +280,11 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     globals_, issues = resolve("cursor", sources.globals[:1])
     diagnostics.extend(issues)
     for global_ in globals_:
-        meta = {"description": global_.source.name, "globs": "", "alwaysApply": True}
+        meta = {
+            "description": global_.source.description,
+            "globs": "",
+            "alwaysApply": True,
+        }
         files.append(
             OwnedFile(
                 rules_root / "coding-agents-global.mdc",
@@ -370,7 +362,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             meta["description"] = description
         if model:
             meta["model"] = model
-        if native.readonly:
+        if native.readonly or "edit" in agent.deny:
             meta["readonly"] = True
         if native.tools:
             meta["tools"] = ", ".join(native.tools)
@@ -387,7 +379,6 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     if permissions := sources.permissions:
         _, issues = resolve("cursor", [permissions])
         diagnostics.extend(issues)
-        diagnostics.extend(command_target_diagnostics(permissions, "cursor"))
         if ignored := [
             pattern
             for path in denied_paths(permissions)
@@ -427,7 +418,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
         )
         patches.append(patch)
         diagnostics.extend(issues)
-    _validate_patches(patches, native_values)
+    _validate_patches(patches)
     raw, raw_tree, issues = raw_files(
         config_root=ctx.config_root,
         target="cursor",

@@ -65,17 +65,10 @@ def compiler_sources(root: Path) -> None:
     (root / "global").mkdir(parents=True)
     (root / "rules").mkdir()
     (root / "agents").mkdir()
-    (root / "global" / "AGENTS.md").write_text(
-        source_document("global", "global", "global", "", COMPILER_GLOBAL)
-    )
-    (root / "rules" / "rule.md").write_text(
-        source_document("rule", "rule", "rule", "", COMPILER_RULE)
-    )
+    (root / "global" / "AGENTS.md").write_text(source_document("", COMPILER_GLOBAL))
+    (root / "rules" / "rule.md").write_text(source_document("", COMPILER_RULE))
     (root / "agents" / f"{COMPILER_AGENT}.md").write_text(
         source_document(
-            "agent",
-            COMPILER_AGENT,
-            COMPILER_AGENT,
             "compiler agent",
             "compiler agent",
         )

@@ -1,4 +1,4 @@
-# Canonical Source Format (schema: coding-agents/v1)
+# Canonical Source Format
 
 Coding Agents Sync is a lossless, target-first compiler. A source shares a
 field only when its user-visible meaning is the same on every target that
@@ -12,8 +12,8 @@ Every source uses this support ladder:
    byte-for-byte raw target files.
 
 Unknown canonical and typed-native fields are errors. An unsupported or lossy
-non-default portable value is an error until the source acknowledges it with a
-reasoned `omit` entry.
+non-default portable value is an error until the source lists it under
+`omit`.
 
 ## Source tree
 
@@ -40,15 +40,11 @@ must be mode `0600`.
 
 ## Common Markdown shape
 
-`global`, `rule`, `skill`, `command`, and `agent` documents have YAML
-frontmatter and a Markdown body:
+`global`, `rule`, `skill`, `command`, and `agent` documents are Markdown with
+optional YAML frontmatter:
 
 ```yaml
 ---
-schema: coding-agents/v1
-kind: skill
-id: inspect-project
-name: inspect-project
 description: Inspect a project and report concrete findings.
 targets: {}
 ---
@@ -56,13 +52,17 @@ targets: {}
 Skill body.
 ```
 
-`schema`, `kind`, `id`, and `name` are required. `description` defaults to an
-empty string. `kind` must match the source directory. Unknown top-level fields
-are errors except the documented canonical fields below and `targets`.
-`internal` is ignored for source-author bookkeeping; it is never compiled.
-Duplicate YAML keys are errors, including nested target block keys.
+A source's directory gives its kind and its file name its name: a skill is
+named by its directory, every other kind by its file stem. A skill may also
+carry the Agent Skills `name` key, which must equal its directory, so a
+published `SKILL.md` drops in unchanged. `description` defaults to an empty
+string. Unknown top-level fields are errors except the documented canonical
+fields below and `targets`. `internal` is ignored for source-author
+bookkeeping; it is never compiled. Duplicate YAML keys are errors, including
+nested target block keys.
 
-Permission documents use the same common fields in YAML, without frontmatter.
+Permission and MCP documents are plain YAML with the same field rules. An
+empty file is an empty source.
 
 ## Canonical portable fields
 
@@ -72,13 +72,12 @@ Permission documents use the same common fields in YAML, without frontmatter.
 | Rule | `only`. |
 | Skill | `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `only`, `execution.agent`, `execution.subtask`. |
-| Agent | `only`, `model_policy`, `effort`, `background`, `color`. |
+| Agent | `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `options`, `assignments`, `allow`, `ask`, `deny`. |
 | MCP server | `only`, `command`, `args`, `env`, `url`, `tools`. |
 
-`model-policy.yaml` is a strict compiler input with schema
-`coding-agents/model-policy/v1`. It names a `default` profile and defines
+`model-policy.yaml` is a strict compiler input. It names a `default` profile and defines
 named target profiles; a profile without a `model` makes the agent inherit
 the invoking session's model. Each profile may set only `model` and `effort` for
 `claude`, `opencode`, and optionally `codex`, and only `model` for `cursor`,
@@ -141,7 +140,7 @@ the skill until `only` splits it. Claude reads only `<home>/.claude/skills`.
 `execution.agent` asks Claude and OpenCode to invoke a named subagent.
 `execution.subtask: true` asks each to run the command as an isolated subtask.
 Codex and Cursor receive a command as a skill the model cannot invoke by
-itself, and require `omit.execution` for either field. A command and a skill
+itself, and require `omit: [execution]` for either field. A command and a skill
 of the same name are rejected on every target that serves commands as skills.
 Prefer `only: [claude, opencode]` when delegation matters more than reaching
 the other hosts.
@@ -149,9 +148,18 @@ the other hosts.
 ### Agents
 
 `effort` is one of `low`, `medium`, `high`, `xhigh`, or `max`. `background`
-and `color` are portable only as described above. Tool allow/deny/inheritance
-is deliberately not portable agent intent: write strict target-native settings
-instead.
+and `color` are portable only as described above.
+
+`deny` lists the tool classes the agent may not use: `shell`, `edit` (every
+file-writing tool), `webfetch`, `websearch`, and `delegate` (spawning another
+agent). Claude adds the matching tools to `disallowedTools` ahead of any
+native ones, and OpenCode adds a deny rule per entry ahead of its native
+`permissions`. Cursor carries `edit` as `readonly: true`, which also blocks
+other write operations, and Codex carries `shell` as `features.shell_tool =
+false`; each still applies what it can and needs `omit: [deny]` for the rest,
+because a Cursor agent lists only the tools it may use and a Codex role keeps
+its parent's sandbox, web search, and spawn depth (`codex.agent-tool-gates`
+pins that). Tool allowlists and anything else stay target-native.
 
 Because those settings are target-native, they are checked against each host's
 closed vocabulary rather than passed through: Claude `permissionMode`,
@@ -165,9 +173,8 @@ A portable `color` reaches OpenCode as hex, Claude's color names mapped to
 it. OpenCode silently drops any other value, so the compiler rejects it; a
 native override replaces it. That value is checked after the merge.
 
-Cursor agents have no `effort` field, so it needs `omit.effort`.
-`background` lowers natively. Cursor's
-counterpart to denying edit tools is native `readonly: true`.
+Cursor agents have no `effort` field, so it needs `omit: [effort]`.
+`background` lowers natively.
 
 Fields whose accepted set is genuinely open stay unchecked: any `model` ID and
 Codex `model_reasoning_effort`, whose enum ends in a catch-all for
@@ -193,7 +200,10 @@ reference describes.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it
-takes no portable tool policy at all, so `edit` and `write` fold onto a single
+has no file channel for any tool: its file tools run unasked in the workspace,
+which `read`, `edit`, and `write` set to `allow` match, and any other decision
+or any web tool decision needs `omit: [tools]`
+(`cursor-desktop.tool-defaults`). So `edit` and `write` fold onto a single
 gate everywhere they project: Claude's Edit rules cover every file-editing
 tool, and OpenCode's write tool asks for its `edit` permission. A split
 decision narrows to the stricter side with a warning. `workspace.allow`,
@@ -203,8 +213,18 @@ project, and file tools honour it only where `tools` allows them. A denied
 directory's files are denied like secret paths. `secret_paths` are `**/`
 patterns, matching at any depth, or `~/` home paths; each target receives
 them in every anchor it checks a file by. `secret_names` deny any command
-that mentions them. Command rules use
-portable literal argv tokens. A token may start with `~` to match the
+that mentions them.
+
+A command rule is a token sequence: a string, split on whitespace, or a YAML
+list of literal tokens. A bare entry (`- git status`) allows, asks, or denies
+that prefix. A mapping sets `prefix` or `exact`, where an exact rule matches
+the sequence with nothing after it, and may add `tail`, token sequences that
+match after the head, or `text`, literal substrings, plus a deny's `reason`.
+In every rule string, `{a,b}` expands to its alternatives as a shell expands
+braces, so `gh pr {list,view}` is two rules and
+`tail: ['{-X,--method} {POST,PUT}']` is four sequences. Whitespace around an
+alternative is dropped, so a long group may wrap onto the next line. Tokens are portable
+literal argv tokens. A token may start with `~` to match the
 home-relative command text agents type; every target matches it literally and
 never expands it. Claude and OpenCode, which match the typed text, also receive
 a `~/` command under its `$HOME/` spelling, and a subcommand token holding a
@@ -224,23 +244,17 @@ predicate. OpenCode delivers it through the opencode-unwrap plugin and Codex as
 the forbidden rule's `justification`.
 
 ```yaml
-schema: coding-agents/v1
-kind: permission-rules
-id: version-control
-name: Version control
-description: Narrow command permissions
 options:
   git: [-C, --no-pager]
 allow:
-  - [git, status]
+  - git {status,log}
+  - exact: node --version
 ask:
-  - command: git
-    subcommand: [push]
-    tail: [[--force-with-lease]]
+  - prefix: git push
+    tail: --force-with-lease
 deny:
-  - command: git
-    subcommand: [push]
-    tail: [[--force]]
+  - prefix: git push
+    tail: ['{--force,-f}']
     reason: use --force-with-lease
 ```
 
@@ -250,8 +264,8 @@ lossy predicate combinations are errors.
 
 ### MCP servers
 
-Each `mcp/<id>.yaml` declares one server, registered under its `id` by every
-target it applies to. A local server sets `command` with optional `args` and
+Each `mcp/<id>.yaml` declares one server, registered under its file name by
+every target it applies to. A local server sets `command` with optional `args` and
 `env`; a remote one sets `url`. `targets.<target>.native.command` replaces the
 command for one target, such as an absolute path for Cursor, which starts
 servers without the login shell's `PATH`.
@@ -260,9 +274,7 @@ servers without the login shell's `PATH`.
 not name follows the target's own default and any patch rule.
 
 ```yaml
-schema: coding-agents/v1
-kind: mcp-server
-id: browser
+# mcp/browser.yaml
 command: browser-mcp
 args: [--headless]
 env: {MODE: quiet}
@@ -272,8 +284,7 @@ tools:
   browser_run_code: deny
 targets:
   cursor:
-    omit:
-      tools: Cursor Desktop has no MCP deny list.
+    omit: [tools]
 ```
 
 | Target | Generated pointers |
@@ -287,7 +298,7 @@ targets:
 | --- | --- |
 | Claude | `mcp__<id>__<tool>` in `permissions.allow`, `ask`, or `deny` of `settings.json` |
 | Codex | `mcp_servers/<id>/tools/<tool>/approval_mode` as `approve` or `prompt`; a deny joins `mcp_servers/<id>/disabled_tools`, which hides the tool |
-| Cursor | an allow joins `mcpAllowlist` as `<id>:<tool>` in `permissions.json`; an unlisted tool asks; a deny needs `targets.cursor.omit.tools` |
+| Cursor | an allow joins `mcpAllowlist` as `<id>:<tool>` in `permissions.json`; an unlisted tool asks; a deny needs `tools` in `targets.cursor.omit` |
 | OpenCode | `{action: <id>_<tool>, resource: "*", effect}` after the policy's rules in `permissions` |
 
 The compiler owns only these leaf pointers, so a patch keeps the settings
@@ -308,8 +319,7 @@ targets:
       model: sonnet
     raw:
       future-native-key: future-native-value
-    omit:
-      some.portable.path: Concrete reason this target cannot preserve it.
+    omit: [some.portable.path]
 ```
 
 `native` is validated by the relevant target compiler for that source kind.
@@ -323,9 +333,9 @@ raw field that shadows canonical or typed-native output is an error; an
 accepted raw field produces a warning naming its source. Raw is not available
 for rule surfaces that have no safe field-level representation.
 
-`omit` maps a dotted portable field path to a non-empty, trimmed reason. Every
-entry must be consumed by that target compiler. Stale, misspelled, unsupported,
-or unnecessary omissions are errors. This forces the source to record why a
+`omit` lists dotted portable field paths this target loses. Every entry must
+be consumed by that target compiler. Stale, misspelled, unsupported, or
+unnecessary omissions are errors. This forces the source to acknowledge that a
 non-default portable value is intentionally absent from one target. The fields
 each target owes an omit for, and why, are the `LIMITATIONS` table in
 `src/coding_agents_sync/limits.py`; a limitation with a probe fails the live
@@ -370,7 +380,7 @@ promise.
 
 ## Native pointer patches
 
-Patch files use `schema: coding-agents/patch/v1`. Committed files live below
+Committed patch files live below
 `patches/`; local files of the same name live below `patches.local/` and must
 be mode `0600`. The named patch surfaces are:
 

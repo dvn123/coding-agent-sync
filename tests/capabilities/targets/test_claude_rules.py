@@ -91,13 +91,10 @@ def test_claude_compiled_global_and_rule_reach_root_request(
     (config_root / "global").mkdir(parents=True)
     (config_root / "rules").mkdir()
     (config_root / "global" / "AGENTS.md").write_text(
-        source_document("global", "global", "global", "global", GLOBAL_SENTINEL)
+        source_document("global", GLOBAL_SENTINEL)
     )
     (config_root / "rules" / "python.md").write_text(
         source_document(
-            "rule",
-            "python",
-            "python",
             "rule",
             RULE_SENTINEL,
         )
@@ -127,9 +124,6 @@ def test_claude_compiled_agent_is_discoverable_in_root_request(
     agent_dir.mkdir(parents=True)
     (agent_dir / f"{AGENT_NAME}.md").write_text(
         source_document(
-            "agent",
-            AGENT_NAME,
-            AGENT_NAME,
             AGENT_DESCRIPTION,
             AGENT_BODY,
             "only: [claude]\ntargets:\n  claude:\n    native:\n      tools: Read\n",

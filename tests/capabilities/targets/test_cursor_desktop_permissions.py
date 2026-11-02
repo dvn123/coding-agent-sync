@@ -148,3 +148,34 @@ def test_desktop_evaluates_every_parsed_command_in_a_chain() -> None:
     assert "dashboardTerminalAllowlistOverriddenByPermissionsFile" in read(
         DESKTOP_BUNDLE
     )
+
+
+def method_body(bundle: str, name: str) -> str:
+    start = bundle.index(f"async {name}(")
+    return bundle[start : bundle.index("}async ", start)]
+
+
+@pytest.mark.capability_case("cursor-desktop.tool-defaults")
+@pytest.mark.capability_live
+def test_desktop_file_tools_ask_only_outside_the_workspace() -> None:
+    """In the workspace a read never asks and a write asks only for a protected
+    config file or when `promptWorkspaceWrites` is set, which nothing in Desktop
+    sets. A new reason or a Desktop writer of that flag is a file-tool gate."""
+    require_installed(DESKTOP_BUNDLE, AGENT_EXEC_BUNDLE)
+    agent = read(AGENT_EXEC_BUNDLE)
+
+    write = method_body(agent, "shouldBlockWrite")
+    reasons = set(re.findall(r'approvalReason:("[^"]*"|`[^`$]*)', write))
+
+    assert reasons == {
+        '"Out of workspace"',
+        '"Workspace write"',
+        "`Protected config file: ",
+    }
+    assert re.search(
+        r"!0===[\w$]+\.promptWorkspaceWrites\)\{"
+        r'.{0,120}?approvalReason:"Workspace write"',
+        write,
+    )
+    assert "approvalReason" not in method_body(agent, "shouldBlockReadInternal")
+    assert "promptWorkspaceWrites" not in read(DESKTOP_BUNDLE)

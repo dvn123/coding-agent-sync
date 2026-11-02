@@ -49,7 +49,7 @@ def test_pointer_decoding_and_patch_schema_validation(tmp_path: Path) -> None:
         "list-overlay": "overlay:\n  /x: [1]\n",
         "overlap": "set:\n  /x: 1\n  /x/y: 2\n",
     }.items():
-        write(tmp_path / name, f"schema: coding-agents/patch/v1\n{body}")
+        write(tmp_path / name, f"{body}")
         with pytest.raises(PatchError):
             load_patch(tmp_path / name)
 

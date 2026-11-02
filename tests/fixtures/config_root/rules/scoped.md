@@ -1,8 +1,4 @@
 ---
-schema: coding-agents/v1
-kind: rule
-id: fixture-scoped
-name: Fixture scoped rule
 description: Neutral scoped rule.
 targets:
   cursor:

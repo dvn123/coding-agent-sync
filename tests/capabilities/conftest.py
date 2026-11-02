@@ -317,6 +317,6 @@ def gain_message(observation: Observation) -> str:
     return f"{head}; consider removing " + "; ".join(
         f"limitation {item.id} from coding_agents_sync/limits.py ({item.reason}) "
         f"and lowering `{item.field}`, so sources stop needing "
-        f"targets.{item.target}.omit.{item.field}"
+        f"{item.field} in targets.{item.target}.omit"
         for item in linked
     )

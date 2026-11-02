@@ -1,5 +1,5 @@
 import re
-from itertools import combinations
+from itertools import combinations, product
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 
@@ -18,8 +18,6 @@ from pydantic import (
 )
 
 from .io import load_yaml, split_frontmatter
-
-SCHEMA = "coding-agents/v1"
 
 type ToolName = Literal["claude", "cursor", "opencode", "codex"]
 TOOL_NAMES: frozenset[str] = frozenset(get_args(ToolName.__value__))
@@ -62,7 +60,8 @@ type NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 type Token = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_./,@%+=~-]+$")]
 type Decision = Literal["allow", "ask", "deny"]
 # An MCP server or tool name every target spells unchanged in its rules.
-type McpName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]+$")]
+MCP_NAME = re.compile(r"[A-Za-z0-9_-]+")
+type McpName = Annotated[str, StringConstraints(pattern=rf"^{MCP_NAME.pattern}$")]
 type Effort = Literal["low", "medium", "high", "xhigh", "max"]
 EFFORT_LEVELS: frozenset[str] = frozenset(get_args(Effort.__value__))
 
@@ -72,10 +71,12 @@ class TargetBlock(StrictModel):
 
     native: dict[str, Any] = Field(default_factory=dict)
     raw: dict[str, Any] = Field(default_factory=dict)
-    # A dotted portable path, such as `workspace.ask`, to the reason it is lost.
-    omit: dict[Annotated[str, StringConstraints(pattern=r"^\w+(?:\.\w+)*$")], Line] = (
-        Field(default_factory=dict)
-    )
+    # Dotted portable paths, such as `workspace.ask`, this target loses; the
+    # reason is the limitation's.
+    omit: Annotated[
+        tuple[Annotated[str, StringConstraints(pattern=r"^\w+(?:\.\w+)*$")], ...],
+        Unique,
+    ] = ()
 
 
 class TargetBlocks(RootModel[dict[ToolName, TargetBlock]]):
@@ -126,18 +127,6 @@ class CommandPermission(StrictModel):
     exact: bool = False
     reason: Line | None = None
 
-    @field_validator("subcommand", "text", mode="before")
-    @classmethod
-    def _wrap_scalar(cls, value: Any) -> Any:
-        return (value,) if isinstance(value, str) else value
-
-    @field_validator("tail", mode="before")
-    @classmethod
-    def _wrap_single_tokens(cls, value: Any) -> Any:
-        if isinstance(value, list | tuple):
-            return [(item,) if isinstance(item, str) else item for item in value]
-        return value
-
     @property
     def predicates(self) -> tuple[Any, ...]:
         return (
@@ -169,9 +158,61 @@ class CommandPermission(StrictModel):
         )
 
 
-type CommandPermissionEntry = (
-    Annotated[tuple[str, ...], Field(min_length=1)] | CommandPermission
-)
+BRACES = re.compile(r"\{([^{}]*)\}")
+
+
+def _alternatives(text: str) -> list[str]:
+    """`text` with each `{a,b}` group expanded, as a shell does. Whitespace
+    around an alternative is dropped, so a long group may wrap."""
+    choices = [
+        [choice.strip() for choice in part.split(",")] if index % 2 else [part]
+        for index, part in enumerate(BRACES.split(text))
+    ]
+    return ["".join(choice) for choice in product(*choices)]
+
+
+def _sequences(value: Any) -> list[Any]:
+    """The token sequences a written value stands for: a string splits on
+    whitespace after brace expansion, and a list is one literal sequence."""
+    if isinstance(value, str):
+        return [tuple(text.split()) for text in _alternatives(value)]
+    return [value]
+
+
+def _listed(value: str | list[Any]) -> list[Any]:
+    return [value] if isinstance(value, str) else value
+
+
+def _expand_rule(entry: Any) -> list[Any]:
+    """The `CommandPermission` inputs one written rule stands for.
+
+    A bare string or list is a prefix. A mapping sets `prefix` or `exact`,
+    plus optional `tail`, `text`, and `reason`.
+    """
+    if not isinstance(entry, dict):
+        entry = {"prefix": entry}
+    fields = dict(entry)
+    if ("prefix" in fields) == ("exact" in fields):
+        raise ValueError("a rule sets exactly one of prefix or exact")
+    exact = "exact" in fields
+    heads = _sequences(fields.pop("exact" if exact else "prefix"))
+    if isinstance(tail := fields.get("tail"), str | list):
+        fields["tail"] = [
+            sequence for item in _listed(tail) for sequence in _sequences(item)
+        ]
+    if isinstance(text := fields.get("text"), str | list):
+        fields["text"] = [
+            alternative for item in _listed(text) for alternative in _alternatives(item)
+        ]
+    return [
+        {
+            **fields,
+            "command": head[0] if head else "",
+            "subcommand": tuple(head[1:]),
+            "exact": exact,
+        }
+        for head in heads
+    ]
 
 
 BUCKET_STRICTNESS = {"allow": 0, "ask": 1, "deny": 2}
@@ -290,10 +331,6 @@ class WorkspacePermissions(StrictModel):
 
 
 class PermissionPolicyDocument(StrictModel):
-    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
-    kind: Literal["permission-policy"]
-    id: NonEmpty
-    name: NonEmpty
     description: str = ""
     wrappers: Annotated[tuple[Token, ...], Unique] = ()
     unmatched: Literal["ask", "allow"] = "ask"
@@ -305,39 +342,28 @@ class PermissionPolicyDocument(StrictModel):
 
 
 class PermissionRulesDocument(StrictModel):
-    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
-    kind: Literal["permission-rules"]
-    id: NonEmpty
-    name: NonEmpty
-    description: str = ""
     options: dict[Token, Vocabulary[OptionToken]] = Field(default_factory=dict)
     assignments: dict[Token, Vocabulary[AssignmentToken]] = Field(default_factory=dict)
-    allow: tuple[CommandPermissionEntry, ...] = ()
-    ask: tuple[CommandPermissionEntry, ...] = ()
-    deny: tuple[CommandPermissionEntry, ...] = ()
-    targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
+    allow: tuple[CommandPermission, ...] = ()
+    ask: tuple[CommandPermission, ...] = ()
+    deny: tuple[CommandPermission, ...] = ()
 
-
-def _resolve_permission_entries(
-    entries: tuple[CommandPermissionEntry, ...],
-) -> tuple[CommandPermission, ...]:
-    """Expand `- [git, status]` into the predicate form."""
-    return tuple(
-        entry
-        if isinstance(entry, CommandPermission)
-        else CommandPermission(command=entry[0], subcommand=tuple(entry[1:]))
-        for entry in entries
-    )
+    @field_validator("allow", "ask", "deny", mode="before")
+    @classmethod
+    def _expand_rules(cls, entries: Any) -> Any:
+        if not isinstance(entries, list):
+            return entries
+        return [rule for entry in entries for rule in _expand_rule(entry)]
 
 
 class SourceModel(StrictModel):
-    """A Markdown source: its frontmatter fields, its path, and its body."""
+    """A Markdown source: its frontmatter fields, its path, and its body.
+
+    Its directory gives its kind and its file name gives its name.
+    """
 
     path: Path
     body: str
-    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
-    id: NonEmpty
-    name: NonEmpty
     description: Annotated[str, BeforeValidator(lambda value: value or "")] = ""
     # Restrict which targets receive this artifact. Absent or empty means all.
     only: Annotated[tuple[ToolName, ...], Unique] = ()
@@ -349,6 +375,10 @@ class SourceModel(StrictModel):
     def stem(self) -> str:
         return self.path.stem
 
+    @property
+    def name(self) -> str:
+        return self.stem
+
     @model_validator(mode="after")
     def _validate_only(self) -> SourceModel:
         if self.only and (extra := set(self.targets.root) - set(self.only)):
@@ -357,12 +387,10 @@ class SourceModel(StrictModel):
 
 
 class GlobalSource(SourceModel):
-    kind: Literal["global"]
+    pass
 
 
 class RuleSource(SourceModel):
-    kind: Literal["rule"]
-
     @model_validator(mode="after")
     def _validate_stem(self) -> RuleSource:
         if self.stem in RESERVED_RULE_STEMS:
@@ -371,7 +399,6 @@ class RuleSource(SourceModel):
 
 
 class SkillSource(SourceModel):
-    kind: Literal["skill"]
     paths: list[str] = Field(default_factory=list)
     disable_model_invocation: bool = False
     license: str | None = None
@@ -381,18 +408,36 @@ class SkillSource(SourceModel):
     def source_dir(self) -> Path:
         return self.path.parent
 
+    @property
+    def name(self) -> str:
+        return self.source_dir.name
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_spec_name(cls, data: Any) -> Any:
+        """Agent Skills frontmatter names the skill; it must be its directory."""
+        if isinstance(data, dict) and "name" in data:
+            data = dict(data)
+            if data.pop("name") != Path(data["path"]).parent.name:
+                raise ValueError("name must match the skill directory")
+        return data
+
 
 class CommandSource(SourceModel):
-    kind: Literal["command"]
     execution: CommandExecution = Field(default_factory=CommandExecution)
 
 
+# A tool class an agent may be kept from: `edit` covers every file-writing
+# tool and `delegate` the tool that spawns another agent.
+type AgentTool = Literal["shell", "edit", "webfetch", "websearch", "delegate"]
+
+
 class AgentSource(SourceModel):
-    kind: Literal["agent"]
     model_policy: str | None = None
     effort: Effort | None = None
     background: bool = False
     color: str | None = None
+    deny: Annotated[tuple[AgentTool, ...], Unique] = ()
 
 
 class ModelPolicyTarget(StrictModel):
@@ -419,7 +464,6 @@ class ModelPolicyProfile(StrictModel):
 
 
 class ModelPolicyDocument(StrictModel):
-    schema_: Literal["coding-agents/model-policy/v1"] = Field(alias="schema")
     default: str
     profiles: dict[str, ModelPolicyProfile]
 
@@ -436,8 +480,6 @@ class PermissionSource(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     paths: tuple[Path, ...]
-    id: str
-    name: str
     description: str
     wrappers: tuple[str, ...]
     unmatched: Literal["ask", "allow"]
@@ -447,11 +489,11 @@ class PermissionSource(BaseModel):
     secret_names: tuple[str, ...]
     commands: CommandPermissions
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
-    command_targets: tuple[tuple[Path, TargetBlocks, frozenset[str]], ...] = ()
 
 
 class McpServerSource(StrictModel):
-    """One MCP server, registered under `id` by every target that receives it.
+    """One MCP server, registered under its file name by every target that
+    receives it.
 
     A local server has `command` with optional `args` and `env`; a remote one
     has `url`. `tools` decides single tools by exact name; an undecided tool
@@ -459,9 +501,6 @@ class McpServerSource(StrictModel):
     """
 
     path: Path
-    schema_: Literal["coding-agents/v1"] = Field(alias="schema")
-    kind: Literal["mcp-server"]
-    id: McpName
     description: str = ""
     only: Annotated[tuple[ToolName, ...], Unique] = ()
     command: NonEmpty | None = None
@@ -471,8 +510,14 @@ class McpServerSource(StrictModel):
     tools: dict[McpName, Decision] = Field(default_factory=dict)
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
 
+    @property
+    def id(self) -> str:
+        return self.path.stem
+
     @model_validator(mode="after")
     def _validate_transport(self) -> McpServerSource:
+        if not MCP_NAME.fullmatch(self.id):
+            raise ValueError(f"the file name must match {MCP_NAME.pattern}")
         if (self.command is None) == (self.url is None):
             raise ValueError("set exactly one of command (local) or url (remote)")
         if self.url is not None and (self.args or self.env):
@@ -506,13 +551,10 @@ def load_markdown[S: SourceModel](path: Path, model: type[S]) -> S:
         raise SourceSchemaError(f"{path}: invalid Markdown source") from None
     header, body = split_frontmatter(text)
     meta = _parse_yaml(path, header, first_line=2) if header is not None else None
-    if not isinstance(meta, dict):
+    if meta is None:
         meta = {}
-    if meta.get("schema") != SCHEMA:
-        raise SourceSchemaError(f"{path}: missing or invalid schema `{SCHEMA}`")
-    kind = model.model_fields["kind"].annotation
-    if meta.get("kind") not in get_args(kind):
-        raise SourceSchemaError(f"{path}: expected kind `{get_args(kind)[0]}`")
+    if not isinstance(meta, dict):
+        raise SourceSchemaError(f"{path}: frontmatter must be a mapping")
     try:
         return model.model_validate({**meta, "path": path, "body": body.strip("\n")})
     except ValidationError as exc:
@@ -525,6 +567,8 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     except OSError:
         raise SourceSchemaError(f"{path}: invalid YAML") from None
     parsed = _parse_yaml(path, text)
+    if parsed is None:
+        return {}
     if not isinstance(parsed, dict):
         raise SourceSchemaError(f"{path}: source must be a mapping")
     return parsed
@@ -580,9 +624,6 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         except ValidationError as exc:
             raise _model_error(path, exc) from exc
         fragments.append((path, fragment))
-    ids = [fragment.id for _, fragment in fragments]
-    if len(ids) != len(set(ids)):
-        raise SourceSchemaError(f"{root}: duplicate permission fragment id")
 
     def rule_key(rule: CommandPermission) -> tuple[Any, ...]:
         return (
@@ -596,11 +637,7 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
     def bucket(name: str) -> tuple[CommandPermission, ...]:
         return tuple(
             sorted(
-                (
-                    rule
-                    for _, fragment in fragments
-                    for rule in _resolve_permission_entries(getattr(fragment, name))
-                ),
+                (rule for _, fragment in fragments for rule in getattr(fragment, name)),
                 key=rule_key,
             )
         )
@@ -636,8 +673,6 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         raise _model_error(root, exc) from exc
     return PermissionSource(
         paths=(policy_path, *rule_paths, *local_paths),
-        id=policy.id,
-        name=policy.name,
         description=policy.description,
         wrappers=policy.wrappers,
         unmatched=policy.unmatched,
@@ -647,18 +682,6 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         secret_names=policy.secret_names,
         commands=commands,
         targets=policy.targets,
-        command_targets=tuple(
-            (
-                path,
-                fragment.targets,
-                frozenset(
-                    name
-                    for name in ("options", "allow", "ask", "deny")
-                    if getattr(fragment, name)
-                ),
-            )
-            for path, fragment in fragments
-        ),
     )
 
 
@@ -722,10 +745,7 @@ def load_sources(config_root: Path) -> SourceBundle:
         except ValidationError as exc:
             mcp_errors.append(str(_model_error(path, exc)))
             continue
-        if server.id != path.stem:
-            mcp_errors.append(f"{path}: id must match the file name")
-        else:
-            mcp_servers.append(server)
+        mcp_servers.append(server)
     permission_root = config_root / "permissions"
     permission_errors: list[str] = []
     permissions: list[PermissionSource] = []

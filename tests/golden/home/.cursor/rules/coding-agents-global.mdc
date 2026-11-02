@@ -1,5 +1,5 @@
 ---
-description: Fixture global
+description: Neutral global fixture.
 globs: ''
 alwaysApply: true
 ---

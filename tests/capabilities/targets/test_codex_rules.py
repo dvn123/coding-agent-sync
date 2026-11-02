@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -183,10 +184,10 @@ def test_codex_compiled_global_and_rule_reach_ordered_instructions(
     (config_root / "global").mkdir(parents=True)
     (config_root / "rules").mkdir()
     (config_root / "global" / "AGENTS.md").write_text(
-        source_document("global", "global", "global", "global", GLOBAL_SENTINEL)
+        source_document("global", GLOBAL_SENTINEL)
     )
     (config_root / "rules" / "rule.md").write_text(
-        source_document("rule", "rule", "rule", "rule", RULE_SENTINEL)
+        source_document("rule", RULE_SENTINEL)
     )
     configure(paths, runtime)
     run_sync(config_root=config_root, home=paths.home)
@@ -212,9 +213,6 @@ def test_codex_compiled_agent_registration_is_used_by_spawned_agent(
     agent_dir.mkdir(parents=True)
     (agent_dir / f"{AGENT_NAME}.md").write_text(
         source_document(
-            "agent",
-            AGENT_NAME,
-            AGENT_NAME,
             AGENT_DESCRIPTION,
             AGENT_BODY,
             "only: [codex]\ntargets:\n  codex:\n    native:\n      model: gpt-5.2\n",
@@ -246,6 +244,64 @@ def test_codex_compiled_agent_registration_is_used_by_spawned_agent(
     assert spawned[0].raw["model"] == "gpt-5.2"
 
 
+SANDBOX_LINE = re.compile(r"`sandbox_mode` is `([^`]*)`")
+
+
+def spawned_child(runtime: Runtime, role: str, extra: str) -> ResponsesRequest:
+    """The request of a child spawned from a role with `extra` config, under a
+    parent that has live web search and lets children spawn again."""
+    paths = paths_for(runtime, f"tool-gates-{role}")
+    codex_home = configure(paths, runtime)
+    config = codex_home / "config.toml"
+    config.write_text(
+        config.read_text().replace('web_search = "disabled"', 'web_search = "live"')
+        + "\n[agents]\nmax_depth = 3\n"
+    )
+    marker = f"{AGENT_BODY}_{role}"
+    (codex_home / "agents").mkdir()
+    (codex_home / "agents" / f"{role}.toml").write_text(
+        f'name = "{role}"\ndescription = "Role probe."\n'
+        f'developer_instructions = "{marker}"\n{extra}'
+    )
+    runtime.responder.agent_type = role
+    [child] = [
+        request for request in invoke(runtime, paths) if marker in request.text()
+    ]
+    return child
+
+
+def gates(child: ResponsesRequest) -> tuple[set[str], list[str]]:
+    tools = {tool.get("name") or tool.get("type") for tool in child.raw["tools"]}
+    return tools, SANDBOX_LINE.findall(json.dumps(child.raw))
+
+
+@pytest.mark.capability_case("codex.agent-tool-gates")
+@pytest.mark.capability_live
+def test_codex_role_turns_off_its_shell_but_not_its_sandbox_search_or_spawning(
+    runtime: Runtime,
+) -> None:
+    """A role is a config layer for the agent it spawns, yet only its features
+    reach the child: its sandbox, web search, and spawn switches do not."""
+    control_tools, control_sandbox = gates(spawned_child(runtime, "control", ""))
+    assert {"exec_command", "web_search", "multi_agent_v1"} <= control_tools
+    assert control_sandbox == ["danger-full-access"]
+
+    no_shell, _ = gates(
+        spawned_child(runtime, "no-shell", "[features]\nshell_tool = false\n")
+    )
+    assert no_shell == control_tools - {"exec_command", "write_stdin"}
+
+    for role, extra in (
+        ("read-only", 'sandbox_mode = "read-only"\n'),
+        ("no-search", 'web_search = "disabled"\n'),
+        ("no-spawn", "[features]\nmulti_agent = false\n"),
+    ):
+        assert gates(spawned_child(runtime, role, extra)) == (
+            control_tools,
+            control_sandbox,
+        ), role
+
+
 @pytest.mark.capability_case("codex.rule-fragments")
 @pytest.mark.capability_live
 def test_codex_compiled_and_native_rule_fragments_have_effective_execpolicy(
@@ -257,9 +313,6 @@ def test_codex_compiled_and_native_rule_fragments_have_effective_execpolicy(
     rule_dir.mkdir(parents=True)
     (rule_dir / "generated.md").write_text(
         source_document(
-            "rule",
-            "generated",
-            "generated",
             "generated rule",
             "Generated rule body",
             "only: [codex]\ntargets:\n  codex:\n    native:\n      rules:\n"

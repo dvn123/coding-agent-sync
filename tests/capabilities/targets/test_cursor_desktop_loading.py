@@ -64,11 +64,12 @@ AGENT_FRONTMATTER = re.compile(
 )
 
 
-@pytest.mark.capability_case("cursor-desktop.agent-effort")
+@pytest.mark.capability_case("cursor-desktop.agent-fields")
 @pytest.mark.capability_live
-def test_desktop_agent_files_have_no_effort_key() -> None:
+def test_desktop_agent_files_have_no_effort_or_tool_deny_key() -> None:
     """The agent-file parser reads a fixed set of keys; a new one may be the
-    reasoning-effort field Cursor agents lack."""
+    reasoning-effort field Cursor agents lack, or a list of denied tools beside
+    the `tools` allowlist."""
     require_installed(AGENT_EXEC_BUNDLE)
     bundle = read(AGENT_EXEC_BUNDLE)
 

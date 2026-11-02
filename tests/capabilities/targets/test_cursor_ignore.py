@@ -34,10 +34,6 @@ FILES = {
     "control": ("work/notes.txt", "IGNORE_PROBE_CONTROL_b52e"),
 }
 POLICY = """\
-schema: coding-agents/v1
-kind: permission-policy
-id: user
-name: user
 description: permissions
 secret_paths: ["**/.env", "~/.aws/credentials"]
 """

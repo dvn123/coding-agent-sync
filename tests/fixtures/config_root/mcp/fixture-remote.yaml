@@ -1,6 +1,3 @@
-schema: coding-agents/v1
-kind: mcp-server
-id: fixture-remote
 description: Neutral remote fixture server.
 only: [codex, opencode]
 url: https://mcp.example.test/mcp

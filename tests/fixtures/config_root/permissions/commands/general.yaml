@@ -1,19 +1,10 @@
-schema: coding-agents/v1
-kind: permission-rules
-id: fixture-commands
-name: Fixture commands
-description: Neutral fixture command permissions.
 options:
   fixture-tool:
     - -C
 allow:
-  - [fixture-tool, status]
+  - fixture-tool status
 ask:
-  - command: fixture-tool
-    subcommand: publish
-    tail:
-      - --public
+  - prefix: fixture-tool publish
+    tail: --public
 deny:
-  - command: fixture-tool
-    subcommand: remove
-    exact: true
+  - exact: fixture-tool remove

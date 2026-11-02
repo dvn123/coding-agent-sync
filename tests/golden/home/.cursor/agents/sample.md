@@ -1,5 +1,5 @@
 ---
-name: fixture-agent
+name: sample
 description: Neutral fixture agent.
 readonly: true
 ---

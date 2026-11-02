@@ -91,17 +91,16 @@ patches.local/*.yaml
 target-config/<target>/raw/*
 ```
 
-All Markdown and permission sources use `schema: coding-agents/v1`. A source
-shares only portable intent. Each source may instead use a strict typed native
-block, or an explicitly unvalidated raw native block, under
-`targets.<claude|cursor|codex|opencode>`. Lossy portable projections require a
-reasoned `targets.<target>.omit` acknowledgement. Raw target files live under
+A source's directory gives its kind and its file name gives its name, so a
+source carries no schema, kind, or id header. A source shares only portable
+intent. Each source may instead use a strict typed native block, or an
+explicitly unvalidated raw native block, under
+`targets.<claude|cursor|codex|opencode>`. A lossy portable projection requires
+listing the field in `targets.<target>.omit`. Raw target files live under
 `target-config/<target>/raw/` and remain visibly unvalidated.
 
-Native patches use
-`schema: coding-agents/patch/v1`; files under `patches.local/` must have mode
-`0600`. The CLI consumes plain YAML patches and does not render templates.
-Local permission fragments use the normal `permission-rules` schema and merge
+Files under `patches.local/` must have mode `0600`. The CLI consumes plain
+YAML patches and does not render templates. Local permission fragments merge
 with committed fragments before validation.
 See [the source schema](docs/source-format.md) and the
 [target references](docs/targets/) for the supported fields and lowering

@@ -50,11 +50,18 @@ CASES = (
         evidence_kind=EvidenceKind.INSTALLED_STATIC,
     ),
     Case(
-        "cursor-desktop.agent-effort",
+        "cursor-desktop.agent-fields",
         "cursor-desktop",
         "targets/test_cursor_desktop_loading.py",
         expected=Support.UNSUPPORTED,
-        surfaces=("cursor-desktop.agent-effort",),
+        surfaces=("cursor-desktop.agent-fields",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
+        "cursor-desktop.tool-defaults",
+        "cursor-desktop",
+        "targets/test_cursor_desktop_permissions.py",
+        surfaces=("cursor-desktop.tool-defaults",),
         evidence_kind=EvidenceKind.INSTALLED_STATIC,
     ),
     Case(
@@ -225,6 +232,13 @@ CASES = (
         "targets/test_codex_rules.py",
         surfaces=("codex.instructions",),
         evidence_kind=EvidenceKind.COMPILER_E2E,
+    ),
+    Case(
+        "codex.agent-tool-gates",
+        "codex",
+        "targets/test_codex_rules.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("codex.agent-tool-gates",),
     ),
     Case(
         "codex.agents",
@@ -743,6 +757,7 @@ SURFACES = (
             "tool-gates",
             "unmatched-ask",
             "agent-background",
+            "agent-tool-gates",
             "profiles",
             "workspace-ask",
             "apps-connectors",
@@ -802,8 +817,9 @@ SURFACES = (
         SurfaceManagement.UNMANAGED,
         (
             "skill-execution",
-            "agent-effort",
+            "agent-fields",
             "permission-channels",
+            "tool-defaults",
             "commands",
             "custom-modes",
             "sandbox",

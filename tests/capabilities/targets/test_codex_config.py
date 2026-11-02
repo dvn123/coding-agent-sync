@@ -480,10 +480,6 @@ def test_codex_root_write_profile_keeps_its_deny_entries(runtime: Runtime) -> No
 
 
 COMPILED_POLICY = """\
-schema: coding-agents/v1
-kind: permission-policy
-id: probe
-name: probe
 description: Compiled permission profile probe.
 secret_paths: ['**/.probe-secret', '~/vault/key']
 workspace:
@@ -492,7 +488,7 @@ workspace:
 targets:
   cursor:
     omit:
-      workspace: probe
+      - workspace
 """
 
 
