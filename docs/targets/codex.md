@@ -150,6 +150,12 @@ selected by `default_permissions`:
   from the request (the `codex.config` probe pins both modes); any other `ask`
   or `deny` has no channel and needs `omit: [tools]`.
 
+`targets.codex.native.default_permissions` on the policy selects a built-in
+profile instead (`:read-only`, `:workspace`, or `:danger-full-access`).
+`coding-agents` stays defined for a session to switch to, but its `deny` entries
+do not bind in a session that starts on a built-in profile, so
+`:danger-full-access` leaves a secret path readable by commands.
+
 The profile carries no network settings: set
 `/permissions/coding-agents/network/enabled` in the `codex` patch. Legacy
 `sandbox_mode` and `sandbox_workspace_write` keys do not apply while a profile

@@ -193,8 +193,11 @@ def permission_files(
     tools: dict[str, str] | None = None,
     workspace: dict[str, Any] | None = None,
     unmatched: str | None = None,
+    targets: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     policy_extra: dict[str, Any] = {}
+    if targets is not None:
+        policy_extra["targets"] = targets
     if tools is not None:
         policy_extra["tools"] = tools
     if workspace is not None:
@@ -1886,6 +1889,26 @@ class PermissionProjectionTests(SyncCase):
             claude["permissions"]["additionalDirectories"], ["~/Developer"]
         )
         self.assertIn("Read(~/.ssh/**)", claude["permissions"]["deny"])
+
+    def test_codex_policy_selects_a_built_in_profile(self) -> None:
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root,
+            allow=[["git", "status"]],
+            secret_paths=["~/.aws/credentials"],
+            targets={
+                "codex": {"native": {"default_permissions": ":danger-full-access"}}
+            },
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        codex = tomllib.loads((home / ".codex/config.toml").read_text())
+        self.assertEqual(codex["default_permissions"], ":danger-full-access")
+        self.assertEqual(
+            codex["permissions"]["coding-agents"]["filesystem"],
+            {str(home / ".aws/credentials"): "deny"},
+        )
 
     def test_denied_paths_reach_every_anchor_each_target_checks(self) -> None:
         """Claude anchors a bare pattern at the cwd, so `**/x` goes root
