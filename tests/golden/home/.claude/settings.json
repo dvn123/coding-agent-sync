@@ -6,7 +6,8 @@
       "Bash(fixture-tool -C* status)",
       "Read(**)",
       "WebFetch(*)",
-      "mcp__fixture-local__inspect"
+      "mcp__fixture-local__inspect",
+      "mcp__fixture-optional__lookup"
     ],
     "ask": [
       "Bash(fixture-tool publish --public *)",

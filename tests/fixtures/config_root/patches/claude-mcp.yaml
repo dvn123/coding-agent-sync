@@ -1,2 +1,3 @@
 set:
   /fixture/claude_mcp: true
+  /mcpServers/fixture-optional/headers/Authorization: Bearer ${FIXTURE_TOKEN}

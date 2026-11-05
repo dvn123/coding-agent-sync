@@ -578,7 +578,10 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 "codex", root / "config.toml", ("mcp_servers", server.id, key), value
             )
             for server, fields in servers
-            for key, value in fields.items()
+            for key, value in {
+                **fields,
+                **({} if server.enabled else {"enabled": False}),
+            }.items()
         ),
         *_mcp_tool_values(servers, root / "config.toml"),
     ]

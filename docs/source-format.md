@@ -303,6 +303,16 @@ targets:
 | Cursor | an allow joins `mcpAllowlist` as `<id>:<tool>` in `permissions.json`; an unlisted tool asks; a deny needs `tools` in `targets.cursor.omit` |
 | OpenCode | `{action: <id>_<tool>, resource: "*", effect}` after the policy's rules in `permissions` |
 
+`enabled: false` registers a server that starts off, for a session to turn on.
+Its `tools` decisions still lower, so that session keeps them.
+
+| Target | Off by default | On for one session |
+| --- | --- | --- |
+| Claude | not in `.claude.json`; `<home>/.claude/mcp/<id>.json` holds its `mcpServers/<id>` entry, with any `claude-mcp` patch operation inside that entry applied there, and the compiler deletes `mcpServers/<id>` from `.claude.json` | `claude --mcp-config ~/.claude/mcp/<id>.json` |
+| Codex | `mcp_servers/<id>/enabled = false` | `codex -c mcp_servers.<id>.enabled=true` |
+| Cursor | unsupported: the on/off state is per project, outside `mcp.json`; needs `enabled` in `targets.cursor.omit`, and the server stays on | the MCP toggle in Cursor, saved for that project |
+| OpenCode | `mcp/servers/<id>/disabled: true` | the MCP servers dialog, space on the server |
+
 The compiler owns only these leaf pointers, so a patch keeps the settings
 beside them: server default approval modes, enablement, and OAuth. A value a
 patch already wrote is taken over when it matches; one that differs is

@@ -684,6 +684,21 @@ class RejectedSourceTests(SyncCase):
                     },
                     r"tools is unsupported on cursor: .* targets\.cursor",
                 ),
+                (
+                    "disabled mcp server without a cursor omit",
+                    {"mcp/browser.yaml": "command: browser-mcp\nenabled: false\n"},
+                    r"enabled is unsupported on cursor: .* targets\.cursor",
+                ),
+                (
+                    "claude-mcp patch overwriting a disabled server's command",
+                    {
+                        "mcp/browser.yaml": "only: [claude]\ncommand: browser-mcp\n"
+                        "enabled: false\n",
+                        "patches/claude-mcp.yaml": "set:\n"
+                        "  /mcpServers/browser/command: other-mcp\n",
+                    },
+                    "Overlapping native pointers: /mcpServers/browser/command",
+                ),
                 *(
                     (
                         f"{patch} patch overwriting a generated mcp command",
@@ -708,6 +723,56 @@ class RejectedSourceTests(SyncCase):
 
                     with self.assertRaisesRegex(error, pattern):
                         run_sync(config_root=config_root, home=home)
+
+    def test_disabling_a_server_moves_its_claude_entry_to_an_opt_in_file(self) -> None:
+        """Claude has no user-level off switch, so a disabled server leaves
+        `.claude.json` for a `--mcp-config` file, taking its patched fields."""
+        config_root, home = self.new_roots()
+        server = "only: [claude]\nurl: https://example.test/mcp\n"
+        write_files(
+            config_root,
+            {
+                "mcp/remote.yaml": server,
+                "patches/claude-mcp.yaml": "set:\n"
+                "  /mcpServers/remote/headers/X-Key: ${KEY}\n",
+            },
+        )
+        opt_in = home / ".claude/mcp/remote.json"
+
+        def registered() -> dict[str, Any]:
+            return json.loads((home / ".claude.json").read_text()).get("mcpServers", {})
+
+        run_sync(config_root=config_root, home=home)
+        self.assertEqual(
+            registered()["remote"],
+            {
+                "type": "http",
+                "url": "https://example.test/mcp",
+                "headers": {"X-Key": "${KEY}"},
+            },
+        )
+        self.assertFalse(opt_in.exists())
+
+        write(config_root / "mcp/remote.yaml", server + "enabled: false\n")
+        run_sync(config_root=config_root, home=home)
+        self.assertNotIn("remote", registered())
+        self.assertEqual(
+            json.loads(opt_in.read_text()),
+            {
+                "mcpServers": {
+                    "remote": {
+                        "type": "http",
+                        "url": "https://example.test/mcp",
+                        "headers": {"X-Key": "${KEY}"},
+                    }
+                }
+            },
+        )
+
+        write(config_root / "mcp/remote.yaml", server)
+        run_sync(config_root=config_root, home=home)
+        self.assertIn("remote", registered())
+        self.assertFalse(opt_in.exists())
 
     def test_patch_cannot_contribute_command_permissions(self) -> None:
         """Command decisions have one writer, so the patch route is closed."""

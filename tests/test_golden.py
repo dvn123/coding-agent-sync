@@ -57,6 +57,8 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.claude/CLAUDE.md",
             "home/.claude/agents/.coding-agents-managed.json",
             "home/.claude/agents/sample.md",
+            "home/.claude/mcp/.coding-agents-managed.json",
+            "home/.claude/mcp/fixture-optional.json",
             "home/.claude/rules/.coding-agents-managed.json",
             "home/.claude/rules/always.md",
             "home/.claude/rules/scoped.md",

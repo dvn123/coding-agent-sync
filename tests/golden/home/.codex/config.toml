@@ -25,6 +25,13 @@ approval_mode = "approve"
 [mcp_servers.fixture-local.tools.submit]
 approval_mode = "prompt"
 
+[mcp_servers.fixture-optional]
+url = "https://optional.example.test/mcp"
+enabled = false
+
+[mcp_servers.fixture-optional.tools.lookup]
+approval_mode = "approve"
+
 [mcp_servers.fixture-remote]
 url = "https://mcp.example.test/mcp"
 
