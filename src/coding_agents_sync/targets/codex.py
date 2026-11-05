@@ -50,6 +50,14 @@ class CodexRuleNative(StrictModel):
     rules: list[CodexPrefixRule] = Field(default_factory=list)
 
 
+class CodexPermissionNative(StrictModel):
+    # BUILT_IN_PERMISSION_PROFILE_* in codex-rs/protocol/src/models.rs. Unset
+    # selects the compiled profile, which stays defined either way.
+    default_permissions: (
+        Literal[":read-only", ":workspace", ":danger-full-access"] | None
+    ) = None
+
+
 class CodexSkillInterface(StrictModel):
     display_name: str | None = None
     short_description: str | None = None
@@ -352,9 +360,11 @@ PROFILE = "coding-agents"
 
 
 def _permission_profile(
-    permissions: PermissionSource, home: Path, config: Path
+    permissions: PermissionSource, selected: str, home: Path, config: Path
 ) -> list[NativeValue]:
-    """Select a permissions profile that extends Codex's `:workspace` sandbox.
+    """Define a permissions profile that extends Codex's `:workspace` sandbox,
+    and select `selected`, which is that profile unless the source names a
+    built-in one.
 
     The profile inherits the workspace filesystem rules, denies reads of the
     secret paths and denied directories, and lets the allowed directories be
@@ -388,7 +398,7 @@ def _permission_profile(
     }
     profile = ("permissions", PROFILE)
     values = [
-        NativeValue("codex", config, ("default_permissions",), PROFILE),
+        NativeValue("codex", config, ("default_permissions",), selected),
         NativeValue(
             "codex", config, (*profile, "description"), permissions.description
         ),
@@ -535,9 +545,14 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.append(
                 Diagnostic("warning", "using unvalidated raw target fields", agent.path)
             )
+    selected_profile = PROFILE
     if permissions := sources.permissions:
-        _, issues = resolve("codex", [permissions])
+        resolved_permissions, issues = resolve(
+            "codex", [permissions], CodexPermissionNative, raw=False
+        )
         diagnostics.extend(issues)
+        for resolved in resolved_permissions:
+            selected_profile = resolved.native.default_permissions or PROFILE
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
     # no registration for them.
     servers, issues = mcp_servers(sources, "codex")
@@ -547,7 +562,9 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
     )
     native_values = [
         *(
-            _permission_profile(sources.permissions, ctx.home, root / "config.toml")
+            _permission_profile(
+                sources.permissions, selected_profile, ctx.home, root / "config.toml"
+            )
             if sources.permissions
             else []
         ),
