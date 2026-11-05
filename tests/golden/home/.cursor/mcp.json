@@ -8,6 +8,9 @@
       "env": {
         "FIXTURE_MODE": "neutral"
       }
+    },
+    "fixture-optional": {
+      "url": "https://optional.example.test/mcp"
     }
   },
   "fixture": {

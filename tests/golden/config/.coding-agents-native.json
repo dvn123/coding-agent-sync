@@ -16,6 +16,7 @@
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
+        "sha256:<hash>",
         "sha256:<hash>"
       ]
     },
@@ -142,6 +143,21 @@
     },
     {
       "target": "codex",
+      "pointer": "/mcp_servers/fixture-optional/enabled",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-optional/tools/lookup/approval_mode",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/mcp_servers/fixture-optional/url",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
       "pointer": "/mcp_servers/fixture-remote/url",
       "hash": "sha256:<hash>"
     },
@@ -176,6 +192,7 @@
       "target": "cursor-desktop",
       "pointer": "/mcpAllowlist",
       "items": [
+        "sha256:<hash>",
         "sha256:<hash>"
       ]
     },
@@ -207,6 +224,11 @@
       "hash": "sha256:<hash>"
     },
     {
+      "target": "cursor-mcp",
+      "pointer": "/mcpServers/fixture-optional/url",
+      "hash": "sha256:<hash>"
+    },
+    {
       "target": "opencode",
       "pointer": "/instructions",
       "items": [
@@ -233,6 +255,21 @@
     },
     {
       "target": "opencode",
+      "pointer": "/mcp/servers/fixture-optional/disabled",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-optional/type",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/mcp/servers/fixture-optional/url",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
       "pointer": "/mcp/servers/fixture-remote/type",
       "hash": "sha256:<hash>"
     },
@@ -245,6 +282,7 @@
       "target": "opencode",
       "pointer": "/permissions",
       "items": [
+        "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "fixture-optional": {
+      "type": "http",
+      "url": "https://optional.example.test/mcp",
+      "headers": {
+        "Authorization": "Bearer ${FIXTURE_TOKEN}"
+      }
+    }
+  }
+}

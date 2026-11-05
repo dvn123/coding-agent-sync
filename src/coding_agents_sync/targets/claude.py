@@ -1,3 +1,4 @@
+import json
 import re
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -13,8 +14,18 @@ from pydantic import (
 
 from ..ir import resolve
 from ..models import SyncContext
+from ..output.patches import (
+    Operation,
+    Patch,
+    PatchError,
+    apply_operations,
+    contributes_to_generated,
+    display_pointer,
+    touches,
+)
 from ..output.plan import (
     Diagnostic,
+    NativePatch,
     NativeValue,
     OwnedFile,
     OwnedTree,
@@ -25,6 +36,7 @@ from ..sources import (
     AgentSource,
     AgentTool,
     Decision,
+    McpServerSource,
     PermissionSource,
     PermissionTool,
     SourceBundle,
@@ -308,12 +320,91 @@ def _permission_values(
     return tuple(values)
 
 
+def _claude_server(fields: Mapping[str, Any]) -> dict[str, Any]:
+    return {"type": "http" if "url" in fields else "stdio", **fields}
+
+
+def _optional_servers(
+    patch: NativePatch,
+    servers: list[tuple[McpServerSource, dict[str, Any]]],
+    root: Path,
+) -> tuple[NativePatch, list[OwnedFile], list[Diagnostic]]:
+    """Each disabled server as `<root>/mcp/<id>.json`, which a session loads
+    with `claude --mcp-config`; Claude Code has no user-level off switch, only
+    a per-project one.
+
+    The file keeps the `mcpServers/<id>` shape of `.claude.json`, so a
+    `claude-mcp` patch operation inside that entry, such as an auth header,
+    applies to the file instead.
+    """
+    ids = {server.id for server, _ in servers}
+
+    def owner(pointer: tuple[str, ...]) -> str | None:
+        match pointer:
+            case ("mcpServers", server_id, _, *_) if server_id in ids:
+                return server_id
+            case _:
+                return None
+
+    routed: dict[str, list[Operation]] = {server_id: [] for server_id in ids}
+    kept: list[Operation] = []
+    for operation in patch.operations:
+        server_id = owner(operation.pointer)
+        (kept if server_id is None else routed[server_id]).append(operation)
+    files: list[OwnedFile] = []
+    diagnostics: list[Diagnostic] = []
+    for server, fields in servers:
+        entry = _claude_server(fields)
+        document: dict[str, Any] = {"mcpServers": {server.id: entry}}
+        operations = tuple(routed[server.id])
+        # The rule the writer applies to `.claude.json` (`writer._validate_plan`).
+        overlapping = sorted(
+            display_pointer(operation.pointer)
+            for operation in operations
+            for key, value in entry.items()
+            if touches(operation.pointer, pointer := ("mcpServers", server.id, key))
+            and not contributes_to_generated(operation, pointer, value)
+        )
+        if overlapping:
+            diagnostics.append(
+                Diagnostic(
+                    "error",
+                    f"Overlapping native pointers: {', '.join(overlapping)}",
+                    patch.source,
+                )
+            )
+            continue
+        try:
+            apply_operations(document, Patch(operations))
+        except PatchError as exc:
+            diagnostics.append(Diagnostic("error", str(exc), patch.source))
+            continue
+        files.append(
+            OwnedFile(
+                root / "mcp" / f"{server.id}.json",
+                (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode(),
+                root / "mcp",
+            )
+        )
+    # Deleting the whole entry also clears what a patch wrote there while the
+    # server was registered, which would otherwise be left as a broken stub.
+    kept.extend(
+        Operation("delete", ("mcpServers", server_id)) for server_id in sorted(ids)
+    )
+    return (
+        NativePatch(patch.target, patch.path, tuple(kept), patch.source),
+        files,
+        diagnostics,
+    )
+
+
 def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     root = ctx.claude
     sources = with_skill_scripts(sources, "claude", root, ctx.home)
     files: list[OwnedFile] = []
     trees = declared_trees(
-        root, (("rules", "file"), ("skills", "dir"), ("agents", "file"))
+        root,
+        (("rules", "file"), ("skills", "dir"), ("agents", "file"), ("mcp", "file")),
     )
     diagnostics: list[Diagnostic] = []
     globals_, issues = resolve("claude", sources.globals[:1])
@@ -439,8 +530,11 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     servers, issues = mcp_servers(sources, "claude")
     diagnostics.extend(issues)
     mcp_rules: dict[Decision, list[str]] = {"allow": [], "ask": [], "deny": []}
+    # A disabled server's rules stay, so a session that loads it keeps them.
     for server, tool, decision in mcp_tool_decisions(servers):
         mcp_rules[decision].append(f"mcp__{server}__{tool}")
+    registered = [(server, fields) for server, fields in servers if server.enabled]
+    optional = [(server, fields) for server, fields in servers if not server.enabled]
     permission_values = (
         *(
             NativeValue("claude", root / "settings.json", pointer, value)
@@ -453,11 +547,8 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 ("mcpServers", server.id, key),
                 value,
             )
-            for server, fields in servers
-            for key, value in {
-                "type": "http" if "url" in fields else "stdio",
-                **fields,
-            }.items()
+            for server, fields in registered
+            for key, value in _claude_server(fields).items()
         ),
     )
     patches = []
@@ -468,6 +559,10 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         patch, issues = native_patch(
             config_root=ctx.config_root, target=target, path=path, patch_name=patch_name
         )
+        if target == "claude-mcp" and optional:
+            patch, optional_files, issues_ = _optional_servers(patch, optional, root)
+            files.extend(optional_files)
+            diagnostics.extend(issues_)
         patches.append(patch)
         diagnostics.extend(issues)
     raw, raw_tree, issues = raw_files(

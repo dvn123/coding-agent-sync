@@ -154,6 +154,11 @@
       "action": "fixture-local_erase",
       "resource": "*",
       "effect": "deny"
+    },
+    {
+      "action": "fixture-optional_lookup",
+      "resource": "*",
+      "effect": "allow"
     }
   ],
   "mcp": {
@@ -167,6 +172,11 @@
         "environment": {
           "FIXTURE_MODE": "neutral"
         }
+      },
+      "fixture-optional": {
+        "type": "remote",
+        "url": "https://optional.example.test/mcp",
+        "disabled": true
       },
       "fixture-remote": {
         "type": "remote",

@@ -324,6 +324,14 @@ CASES = (
         surfaces=("cursor-agent.file-permissions",),
     ),
     Case(
+        "cursor-agent.mcp-enablement",
+        "cursor-agent",
+        "targets/test_cursor_contract_permissions.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("cursor-agent.mcp-enablement",),
+        evidence_kind=EvidenceKind.INSTALLED_STATIC,
+    ),
+    Case(
         "cursor-agent.agents-user",
         "cursor-agent",
         "targets/test_cursor_agents_loading.py",
@@ -794,6 +802,7 @@ SURFACES = (
             "mcp-runtime",
             "mcp-oauth",
             "mcp-allowlist",
+            "mcp-enablement",
         ),
     ),
     *_surfaces(

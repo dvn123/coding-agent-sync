@@ -466,7 +466,11 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         *(
             NativeValue("opencode", config, ("mcp", "servers", server.id, key), value)
             for server, fields in servers
-            for key, value in _opencode_server(fields).items()
+            for key, value in {
+                **_opencode_server(fields),
+                # `enabled` is the legacy `mcp/<id>` key; `mcp/servers` ignores it.
+                **({} if server.enabled else {"disabled": True}),
+            }.items()
         ),
         *(
             (NativeValue("opencode", config, ("instructions",), [rules_glob]),)

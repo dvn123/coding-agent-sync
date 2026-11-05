@@ -191,6 +191,15 @@ LIMITATIONS = (
         probe="cursor-desktop.permission-channels",
     ),
     Limitation(
+        "cursor",
+        McpServerSource,
+        "enabled",
+        "Cursor keeps a server's on/off state per project, outside mcp.json, so "
+        "a user-level server cannot start off.",
+        lambda server: not server.enabled,
+        probe="cursor-agent.mcp-enablement",
+    ),
+    Limitation(
         "opencode",
         AgentSource,
         "background",

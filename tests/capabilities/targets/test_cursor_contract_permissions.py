@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,22 @@ def test_cursor_agent_declares_user_and_project_mcp_configuration_paths() -> Non
 
     assert ".cursor/mcp.json" in help
     assert "~/.cursor/mcp.json" in help
+
+
+@pytest.mark.capability_case("cursor-agent.mcp-enablement")
+@pytest.mark.capability_live
+def test_cursor_agent_keeps_mcp_enablement_only_per_project() -> None:
+    """The on/off state lives in one `mcp-disabled.json` beside the project's
+    approvals, not in `mcp.json`. A second disabled path, or an `enabled` or
+    `disabled` server field, would be the user-level channel `enabled` lacks."""
+    bundle = local_bundle()
+
+    assert re.search(
+        r'approvalPath:[\w$]+\(\)\.join\([\w$]+,"mcp-approvals\.json"\),'
+        r"disabledPath:[\w$]+\([\w$]+\)",
+        bundle,
+    )
+    assert bundle.count('"mcp-disabled.json"') == 1
 
 
 @pytest.mark.capability_case("cursor-agent.hooks")

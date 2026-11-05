@@ -498,7 +498,8 @@ class McpServerSource(StrictModel):
 
     A local server has `command` with optional `args` and `env`; a remote one
     has `url`. `tools` decides single tools by exact name; an undecided tool
-    follows the target's own default.
+    follows the target's own default. `enabled: false` keeps the server off
+    until a session turns it on.
     """
 
     path: Path
@@ -508,6 +509,7 @@ class McpServerSource(StrictModel):
     args: tuple[str, ...] = ()
     env: dict[str, str] = Field(default_factory=dict)
     url: NonEmpty | None = None
+    enabled: bool = True
     tools: dict[McpName, Decision] = Field(default_factory=dict)
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
 

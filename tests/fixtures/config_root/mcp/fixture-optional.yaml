@@ -1,0 +1,9 @@
+description: Neutral remote fixture server that starts off.
+url: https://optional.example.test/mcp
+enabled: false
+tools:
+  lookup: allow
+targets:
+  cursor:
+    omit:
+      - enabled
