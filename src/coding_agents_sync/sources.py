@@ -20,7 +20,7 @@ from pydantic import (
 
 from .io import load_yaml, split_frontmatter
 
-type ToolName = Literal["claude", "cursor", "opencode", "codex"]
+type ToolName = Literal["claude", "cursor", "opencode", "codex", "pi"]
 TOOL_NAMES: frozenset[str] = frozenset(get_args(ToolName.__value__))
 RESERVED_RULE_STEMS: frozenset[str] = frozenset({"coding-agents-global"})
 
@@ -461,6 +461,7 @@ class ModelPolicyProfile(StrictModel):
     claude: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
     cursor: CursorModelPolicyTarget = Field(default_factory=CursorModelPolicyTarget)
     opencode: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
+    pi: ModelPolicyTarget = Field(default_factory=ModelPolicyTarget)
     codex: CodexModelPolicyTarget | None = None
 
 

@@ -10,6 +10,7 @@ from ..sources import SkillSource, SourceBundle
 from .codex import codex_skill
 from .cursor import cursor_skill
 from .opencode import opencode_skill
+from .pi import pi_skill
 from .support import declared_trees, markdown, shared_skill, shared_skills_root
 
 type SkillLowering = Callable[
@@ -20,6 +21,7 @@ READERS: tuple[tuple[str, SkillLowering], ...] = (
     ("Codex", codex_skill),
     ("Cursor", cursor_skill),
     ("OpenCode", opencode_skill),
+    ("Pi", pi_skill),
 )
 SKILL_FILE = Path("SKILL.md")
 
@@ -36,7 +38,7 @@ def _merge(
     """One tree carrying every reader's frontmatter and files.
 
     Each reader ignores the frontmatter keys and files it does not know, so
-    the union serves all three; a key they need to differ cannot be shared,
+    the union serves all of them; a key they need to differ cannot be shared,
     and the skill must be narrowed with `only`. Other files are the bundled
     ones, which only Codex rewrites (its `agents/openai.yaml`); Codex comes
     first, so its copy wins.
@@ -77,7 +79,7 @@ def _merge(
 
 
 def compile_shared_skills(ctx: SyncContext, sources: SourceBundle) -> Plan:
-    """Skills Codex, Cursor, and OpenCode all receive, once in `~/.agents/skills`."""
+    """Skills every shared reader receives, once in `~/.agents/skills`."""
     root = shared_skills_root(ctx.home)
     trees = declared_trees(root.parent, (("skills", "dir"),))
     diagnostics: list[Diagnostic] = []

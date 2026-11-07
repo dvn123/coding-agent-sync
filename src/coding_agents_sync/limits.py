@@ -207,6 +207,28 @@ LIMITATIONS = (
         lambda agent: agent.background,
         probe="opencode.agent-background",
     ),
+    Limitation(
+        "pi",
+        CommandSource,
+        "execution",
+        "Pi prompt templates expand into the current session; they cannot "
+        "name an agent or run as a subtask.",
+        _delegated,
+        probe="pi.prompt-execution",
+    ),
+    Limitation(
+        "pi",
+        PermissionSource,
+        "tools",
+        "Pi has no built-in web tools, so a webfetch or websearch decision "
+        "other than allow has nothing to gate.",
+        lambda permissions: any(
+            decision != "allow"
+            for tool, decision in permissions.tools.items()
+            if tool in {"webfetch", "websearch"}
+        ),
+        probe="pi.web-tools",
+    ),
 )
 
 

@@ -82,7 +82,7 @@ empty file is an empty source.
 `model-policy.yaml` is a strict compiler input. It names a `default` profile and defines
 named target profiles; a profile without a `model` makes the agent inherit
 the invoking session's model. Each profile may set only `model` and `effort` for
-`claude`, `opencode`, and optionally `codex`, and only `model` for `cursor`,
+`claude`, `opencode`, `pi`, and optionally `codex`, and only `model` for `cursor`,
 whose model slugs carry the effort (`claude-sonnet-5-5-medium`). Codex effort
 values are model-defined strings; the other profiles use the portable effort
 vocabulary.
@@ -95,7 +95,7 @@ marker so it follows the parent conversation rather than Claude's model-order
 fallback.
 
 `only` is an optional list of target names (`claude`, `cursor`, `codex`,
-`opencode`). Absent or empty means every target that supports the kind receives
+`opencode`, `pi`). Absent or empty means every target that supports the kind receives
 the artifact. A non-empty list restricts emission to those targets: compilers
 skip emit and omit checks for every other target, and any `targets.<name>`
 block outside the list is an error. Prefer `only` when guidance is
@@ -109,8 +109,8 @@ The compiler projects a canonical field only where its semantics match, and
 a field that changes behavior needs an omission where a target cannot carry
 it: agent `background` on Codex and OpenCode, agent `effort` on Cursor. Fields
 that only describe or narrow an artifact are dropped silently where a target
-has no counterpart: skill `license` and `paths` (Codex and OpenCode offer the
-skill everywhere), and agent `color` on Codex and Cursor. Codex projects every
+has no counterpart: skill `license` and `paths` (Codex, OpenCode, and Pi offer
+the skill everywhere), and agent `color` on Codex, Cursor, and Pi. Codex projects every
 portable effort, including `max`.
 Cursor projects allows to the allowlist its Desktop app and CLI share, and
 a generated hook carries the asks and denies. Codex projects ask and deny rules as
@@ -126,11 +126,11 @@ those surface omissions.
 targets whose native behavior is equivalent. Do not substitute a similar field
 from another target for one of these values.
 
-Codex, Cursor, and OpenCode all read `<home>/.agents/skills`, Cursor even with
-its third-party extensibility off, so a skill all three receive is written
+Codex, Cursor, OpenCode, and Pi all read `<home>/.agents/skills`, Cursor even
+with its third-party extensibility off, so a skill all four receive is written
 there once. Its `SKILL.md` carries every reader's frontmatter, since each
 ignores keys it does not know, and Codex's `agents/openai.yaml` beside it. A
-skill whose `only` leaves out any of the three is written to each receiving
+skill whose `only` leaves out any of the four is written to each receiving
 target's own skills directory instead, and so is a command, since OpenCode
 serves commands natively. Readers that need a frontmatter key to differ, such
 as a target-native `description`, cannot share a copy: the compiler rejects
@@ -141,7 +141,8 @@ the skill until `only` splits it. Claude reads only `<home>/.claude/skills`.
 `execution.agent` asks Claude and OpenCode to invoke a named subagent.
 `execution.subtask: true` asks each to run the command as an isolated subtask.
 Codex and Cursor receive a command as a skill the model cannot invoke by
-itself, and require `omit: [execution]` for either field. A command and a skill
+itself, and Pi as a prompt template; all three require `omit: [execution]` for
+either field. A command and a skill
 of the same name are rejected on every target that serves commands as skills.
 Prefer `only: [claude, opencode]` when delegation matters more than reaching
 the other hosts.
@@ -155,7 +156,8 @@ and `color` are portable only as described above.
 file-writing tool), `webfetch`, `websearch`, and `delegate` (spawning another
 agent). Claude adds the matching tools to `disallowedTools` ahead of any
 native ones, and OpenCode adds a deny rule per entry ahead of its native
-`permissions`. Cursor carries `edit` as `readonly: true`, which also blocks
+`permissions`. Pi lowers `shell` and `edit` into the agent's `permission:` map
+and needs nothing for the rest, as the Pi target reference describes. Cursor carries `edit` as `readonly: true`, which also blocks
 other write operations, and Codex carries `shell` as `features.shell_tool =
 false`; each still applies what it can and needs `omit: [deny]` for the rest,
 because a Cursor agent lists only the tools it may use and a Codex role keeps
@@ -187,7 +189,7 @@ provider, so unknown keys there are passthrough by design.
 
 `unmatched` is the decision for a shell command no rule matches: `ask`, the
 default, or `allow`. It lands only where the guard rules still outrank it:
-OpenCode's `*` bash entry, which every rule is written after, Claude's bare
+OpenCode's and Pi's `*` bash entry, which every rule is written after, Claude's bare
 `Bash` allow, which every deny outranks. Cursor and Codex each need an omit
 for `unmatched: allow`: Cursor's shared allowlist has no deny channel to keep
 the guards binding, and Codex gates an unmatched command by sandbox. There is no `deny`
@@ -204,10 +206,12 @@ reference describes.
 has no file channel for any tool: its file tools run unasked in the workspace,
 which `read`, `edit`, and `write` set to `allow` match, and any other decision
 or any web tool decision needs `omit: [tools]`
-(`cursor-desktop.tool-defaults`). So `edit` and `write` fold onto a single
-gate everywhere they project: Claude's Edit rules cover every file-editing
-tool, and OpenCode's write tool asks for its `edit` permission. A split
-decision narrows to the stricter side with a warning. `workspace.allow`,
+(`cursor-desktop.tool-defaults`). Pi gates `write` apart from `edit` and
+takes each as written, but has no web tool, so a web decision other than
+`allow` needs `omit: [tools]` there (`pi.web-tools`). On Claude and OpenCode
+`edit` and `write` fold onto a single gate: Claude's Edit rules cover every
+file-editing tool, and OpenCode's write tool asks for its `edit` permission. A
+split decision narrows to the stricter side there with a warning. `workspace.allow`,
 `.ask`, and `.deny` contain `/`-absolute or `~/` roots; `workspace.unmatched`
 (`ask`, the default, or `allow`) decides every other directory outside the
 project, and file tools honour it only where `tools` allows them. A denied
@@ -243,7 +247,8 @@ a leading or trailing space in it anchors the match to a token boundary:
 `' -T'` matches `curl -T f` but not `-H Content-Type`. A deny rule
 may carry a one-line `reason`, what the agent should run instead; it is not a
 predicate. Claude delivers it through the shell-unwrap hook, OpenCode through
-the shell-unwrap plugin, and Codex as the forbidden rule's `justification`.
+the shell-unwrap plugin, Pi through the permission system's deny `reason`, and
+Codex as the forbidden rule's `justification`.
 
 ```yaml
 options:
@@ -295,6 +300,7 @@ targets:
 | Codex | the fields under `mcp_servers/<id>` in `config.toml` |
 | Cursor | the fields under `mcpServers/<id>` in `<home>/.cursor/mcp.json` |
 | OpenCode | `mcp/servers/<id>` as `type: local` with one `command` array and `environment`, or `type: remote` with `url` |
+| Pi | the fields under `mcpServers/<id>` in `<home>/.pi/agent/mcp.json`, plus the source `description` |
 
 | Target | `tools` lowering |
 | --- | --- |
@@ -302,6 +308,7 @@ targets:
 | Codex | `mcp_servers/<id>/tools/<tool>/approval_mode` as `approve` or `prompt`; a deny joins `mcp_servers/<id>/disabled_tools`, which hides the tool |
 | Cursor | an allow joins `mcpAllowlist` as `<id>:<tool>` in `permissions.json`; an unlisted tool asks; a deny needs `tools` in `targets.cursor.omit` |
 | OpenCode | `{action: <id>_<tool>, resource: "*", effect}` after the policy's rules in `permissions` |
+| Pi | `<id>:<tool>` in the permission system's `permission/mcp` map; a deny also hides the tool |
 
 `enabled: false` registers a server that starts off, for a session to turn on.
 Its `tools` decisions still lower, so that session keeps them.
@@ -312,6 +319,7 @@ Its `tools` decisions still lower, so that session keeps them.
 | Codex | `mcp_servers/<id>/enabled = false` | `codex -c mcp_servers.<id>.enabled=true` |
 | Cursor | unsupported: the on/off state is per project, outside `mcp.json`; needs `enabled` in `targets.cursor.omit`, and the server stays on | the MCP toggle in Cursor, saved for that project |
 | OpenCode | `mcp/servers/<id>/disabled: true` | the MCP servers dialog, space on the server |
+| Pi | `mcpServers/<id>/enabled: false` | `/mcp`, which saves the choice to `mcp.json` |
 
 The compiler owns only these leaf pointers, so a patch keeps the settings
 beside them: server default approval modes, enablement, and OAuth. A value a
@@ -321,8 +329,8 @@ through the target's environment interpolation or native login.
 
 ## Target blocks
 
-`targets` is a mapping whose only keys are `claude`, `cursor`, `codex`, and
-`opencode`. A target block has exactly these optional mappings:
+`targets` is a mapping whose only keys are `claude`, `cursor`, `codex`,
+`opencode`, and `pi`. A target block has exactly these optional mappings:
 
 ```yaml
 targets:
@@ -363,6 +371,7 @@ Target compilers own their native schemas. The supported typed fields are:
 | Cursor | Rules: `description`, `globs`, `alwaysApply`; `globs` requires `alwaysApply: false`. Skills and commands: `name`, `description`, `license`, `paths`, `disable-model-invocation`, `metadata`. Agents: `model`, `readonly`, `tools`. |
 | Codex / ChatGPT Desktop | Rules: `rules` containing `pattern` (a token may list alternatives), `decision`, and optional `justification`. Skills and commands: `name`, `description`, `license`, `metadata`, `allowed-tools`, `openai` (typed UI, policy and dependencies). Agents: `name`, `description`, `developer_instructions`, `model`, `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`, `features`, `skills`, `nickname_candidates`, `personality`, `service_tier`. See the target reference for nested fields. |
 | OpenCode | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `name`, `description`, `agent`, `subagent`, `model`. Agents: `description`, `model`, `request`, `mode`, `hidden`, `color`, `steps`, `disabled`, `permissions`. |
+| Pi | Skills: `name`, `description`, `license`, `metadata`, `compatibility`. Commands: `description`, `argument-hint`. Agents: `description`, `display_name`, `tools`, `model`, `thinking`, `max_turns`, `prompt_mode`, `inherit_context`, `run_in_background`, `enabled`, `locked`, `permission`. |
 
 The table is intentionally concrete, not a target extension API. Each target
 is compiled for its latest release only; the compiler carries no version
@@ -385,6 +394,7 @@ surface. Current native-pointer exclusions are:
 | Cursor | `<home>/.cursor` | `cli-config.json`, `permissions.json`, `settings.json`, `mcp.json` |
 | Codex | `<home>/.codex` | `config.toml`, `rules/coding-agents.rules` |
 | OpenCode V1 | `<home>/.config/opencode` | `opencode.json` |
+| Pi | `<home>/.pi/agent` | `settings.json`, `mcp.json`, `extensions/pi-permission-system/config.json` |
 
 Use a raw file when a complete target-native artifact cannot be represented by
 typed fields. It produces an explicit warning, not an implicit compatibility
@@ -407,6 +417,9 @@ be mode `0600`. The named patch surfaces are:
 | `cursor-hooks` | `<home>/.cursor/hooks.json` |
 | `codex` | `<home>/.codex/config.toml` |
 | `opencode` | `<home>/.config/opencode/opencode.json` |
+| `pi-settings` | `<home>/.pi/agent/settings.json` |
+| `pi-mcp` | `<home>/.pi/agent/mcp.json` |
+| `pi-permissions` | `<home>/.pi/agent/extensions/pi-permission-system/config.json` |
 
 Patches operate on named JSON/TOML pointers and preserve unnamed native
 fields. A patch cannot overlap a portable file or a raw file. It may

@@ -130,8 +130,8 @@ def with_skill_scripts(
     )
 
 
-# Codex, Cursor, and OpenCode all read `~/.agents/skills`; Claude does not.
-SHARED_SKILL_READERS = ("codex", "cursor", "opencode")
+# Codex, Cursor, OpenCode, and Pi all read `~/.agents/skills`; Claude does not.
+SHARED_SKILL_READERS = ("codex", "cursor", "opencode", "pi")
 
 
 def shared_skills_root(home: Path) -> Path:

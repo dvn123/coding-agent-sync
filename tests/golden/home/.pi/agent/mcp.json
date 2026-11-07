@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "fixture-local": {
+      "command": "fixture-mcp",
+      "args": [
+        "--stdio"
+      ],
+      "env": {
+        "FIXTURE_MODE": "neutral"
+      },
+      "description": "Neutral local fixture server."
+    },
+    "fixture-optional": {
+      "url": "https://optional.example.test/mcp",
+      "description": "Neutral remote fixture server that starts off.",
+      "enabled": false
+    }
+  }
+}

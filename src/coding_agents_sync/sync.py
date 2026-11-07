@@ -22,6 +22,7 @@ from .targets import (
     compile_codex,
     compile_cursor,
     compile_opencode,
+    compile_pi,
     compile_shared_skills,
 )
 
@@ -58,6 +59,7 @@ def run_sync(*, config_root: Path, home: Path, check: bool = False) -> tuple[Pat
         compile_cursor(ctx, sources),
         compile_opencode(ctx, sources),
         compile_codex(ctx, sources),
+        compile_pi(ctx, sources),
         compile_shared_skills(ctx, sources),
     )
     for diagnostic in plan.diagnostics:

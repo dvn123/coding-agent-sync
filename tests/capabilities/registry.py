@@ -13,6 +13,7 @@ TARGETS = {
         ("codex", "codex", "update"),
         ("cursor-agent", "cursor-agent", "update"),
         ("opencode", "opencode", "upgrade"),
+        ("pi", "pi", "update"),
     )
 }
 TARGETS["cursor-desktop"] = Target("cursor-desktop", "", None)
@@ -694,6 +695,27 @@ CASES = (
         ),
         evidence_kind=EvidenceKind.COMPILER_E2E,
     ),
+    Case(
+        "pi.loading",
+        "pi",
+        "targets/test_pi_loading.py",
+        surfaces=("pi.instructions", "pi.skills", "pi.commands"),
+        evidence_kind=EvidenceKind.COMPILER_E2E,
+    ),
+    Case(
+        "pi.prompt-execution",
+        "pi",
+        "targets/test_pi_loading.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("pi.prompt-execution",),
+    ),
+    Case(
+        "pi.web-tools",
+        "pi",
+        "targets/test_pi_loading.py",
+        expected=Support.UNSUPPORTED,
+        surfaces=("pi.tools",),
+    ),
 )
 
 
@@ -937,6 +959,32 @@ SURFACES = (
             "mcp-oauth",
             "custom-tools",
             "custom-themes",
+        ),
+    ),
+    *_surfaces(
+        "pi",
+        SurfaceManagement.GENERATED,
+        (
+            "instructions",
+            "skills",
+            "commands",
+            "agents",
+            "permissions",
+            "mcp",
+        ),
+    ),
+    *_surfaces("pi", SurfaceManagement.PATCH_ONLY, ("settings",)),
+    *_surfaces(
+        "pi",
+        SurfaceManagement.UNMANAGED,
+        (
+            "prompt-execution",
+            "tools",
+            "extensions",
+            "themes",
+            "keybindings",
+            "models",
+            "system-prompt",
         ),
     ),
 )

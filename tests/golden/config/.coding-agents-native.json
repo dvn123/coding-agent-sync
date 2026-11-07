@@ -311,6 +311,113 @@
         "sha256:<hash>",
         "sha256:<hash>"
       ]
+    },
+    {
+      "target": "pi",
+      "pointer": "/packages",
+      "items": [
+        "sha256:<hash>",
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-local/args",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-local/command",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-local/description",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-local/env",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-optional/description",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-optional/enabled",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-mcp",
+      "pointer": "/mcpServers/fixture-optional/url",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/*",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/bash",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/edit",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/external_directory",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/find",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/grep",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/ls",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/mcp",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/path",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/read",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/permission/write",
+      "hash": "sha256:<hash>"
+    },
+    {
+      "target": "pi-permissions",
+      "pointer": "/piInfrastructureReadPaths",
+      "items": [
+        "sha256:<hash>"
+      ]
     }
   ]
 }

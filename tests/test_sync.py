@@ -67,7 +67,7 @@ def existing(home: Path, paths: Iterable[str]) -> list[str]:
     return [path for path in paths if (home / path).exists()]
 
 
-TARGET_NAMES = ("claude", "cursor", "codex", "opencode")
+TARGET_NAMES = ("claude", "cursor", "codex", "opencode", "pi")
 
 
 def owed_omits(source: Any, blocks: dict[str, dict[str, Any]]) -> None:
@@ -242,6 +242,7 @@ def model_policy_doc(
                         "effort": "xhigh",
                     },
                     "cursor": {"model": "gpt-5.6-luna"},
+                    "pi": {"model": "anthropic/claude-sonnet-5", "effort": "xhigh"},
                 },
                 "inherit": {},
             },
@@ -973,6 +974,13 @@ class ModelPolicyTests(SyncCase):
         )
         codex = tomllib.loads((home / ".codex/agents/reviewer.toml").read_text())
         self.assertEqual(codex["features"], {"shell_tool": False})
+        # The subagents package strips its own tool from every child, so
+        # `delegate` needs no entry.
+        pi = frontmatter(home / ".pi/agent/agents/reviewer.md")
+        self.assertEqual(
+            pi["permission"], {"bash": "deny", "edit": "deny", "write": "deny"}
+        )
+        self.assertIn("mcp__*", pi["tools"])
 
     def test_model_policy_lowers_named_agents_without_touching_codex(self) -> None:
         """Native tool policy beside a model policy stays as written."""
@@ -1041,6 +1049,13 @@ class ModelPolicyTests(SyncCase):
             "---\nname: cheap\nmodel: gpt-5.6-luna\n---\n\nCheap body\n",
         )
         self.assertNotIn("model:", (home / ".cursor/agents/open.md").read_text())
+        pi_cheap = frontmatter(home / ".pi/agent/agents/cheap.md")
+        pi_open = frontmatter(home / ".pi/agent/agents/open.md")
+        self.assertEqual(
+            (pi_cheap["model"], pi_cheap["thinking"]),
+            ("anthropic/claude-sonnet-5", "xhigh"),
+        )
+        self.assertFalse({"model", "thinking"} & set(pi_open))
 
     def test_cursor_agent_lowers_to_desktop_line_frontmatter(self) -> None:
         config_root, home = self.new_roots()
@@ -3334,6 +3349,138 @@ class NativePreservationTests(SyncCase):
         self.assertEqual(cursor["editor"], {"fontSize": 12})
         self.assertNotIn("ai", cursor)
         self.assertFalse(cursor["telemetry"])
+
+
+class PiTargetTests(SyncCase):
+    def pi_permissions(self, home: Path) -> Any:
+        return load_json(home / ".pi/agent/extensions/pi-permission-system/config.json")
+
+    def test_policy_lowers_to_the_permission_systems_surfaces(self) -> None:
+        """Each map is ordered for last-match-wins; Pi gates `write` apart from
+        `edit`, and a deny keeps its reason."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root,
+            allow=[["git", "status"]],
+            ask=[["rmdir"]],
+            deny=[{"prefix": "git push", "tail": ["--force"], "reason": "lease it"}],
+            wrappers=["env", "command"],
+            secret_names=["EXAMPLE_TOKEN"],
+            secret_paths=["**/.env"],
+            tools={"read": "allow", "edit": "allow", "write": "ask"},
+            workspace={"allow": ["~/Developer"], "deny": ["~/.ssh"]},
+        )
+        write(config_root / "skills" / "shared" / "SKILL.md", "---\n---\nbody\n")
+        write(
+            config_root / "mcp" / "browser.yaml",
+            "command: browser-mcp\ndescription: A browser.\ntools:\n  click: ask\n",
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        config = self.pi_permissions(home)
+        permission = config["permission"]
+        bash = permission["bash"]
+        self.assertEqual(list(bash)[0], "*")
+        self.assertEqual(bash["*"], "ask")
+        self.assertEqual(bash["git status *"], "allow")
+        # The permission system raises a command behind `env` to at least
+        # ask itself; it does not know `command`, which keeps its copies.
+        self.assertFalse([pattern for pattern in bash if pattern.startswith("env ")])
+        self.assertEqual(bash["command * rmdir *"], "ask")
+        self.assertEqual(
+            bash["git push --force *"], {"action": "deny", "reason": "lease it"}
+        )
+        self.assertEqual(list(bash)[-1], "*EXAMPLE_TOKEN*")
+        self.assertEqual(
+            {tool: permission[tool] for tool in ("read", "grep", "edit", "write")},
+            {"read": "allow", "grep": "allow", "edit": "allow", "write": "ask"},
+        )
+        self.assertEqual(
+            permission["path"],
+            {"*": "allow", "**/.env": "deny", "~/.ssh/**": "deny"},
+        )
+        self.assertEqual(
+            permission["external_directory"],
+            {
+                "*": "ask",
+                "~/Developer": "allow",
+                "~/Developer/*": "allow",
+                "~/.ssh": "deny",
+                "~/.ssh/*": "deny",
+            },
+        )
+        self.assertEqual(permission["mcp"], {"browser:click": "ask"})
+        self.assertEqual(config["piInfrastructureReadPaths"], ["~/.agents/skills"])
+        self.assertEqual(
+            load_json(home / ".pi/agent/mcp.json")["mcpServers"]["browser"],
+            {"command": "browser-mcp", "description": "A browser."},
+        )
+        self.assertEqual(
+            load_json(home / ".pi/agent/settings.json")["packages"],
+            ["npm:@gotgenes/pi-permission-system@42.0.0"],
+        )
+
+    def test_permission_system_installs_only_when_something_needs_it(self) -> None:
+        """An agent deny alone installs it, with a permissive base so the
+        extension's ask default changes nothing else."""
+        config_root, home = self.new_roots()
+        write(config_root / "global" / "AGENTS.md", "Global\n")
+        write(config_root / "rules" / "style.md", "Rule\n")
+
+        run_sync(config_root=config_root, home=home)
+
+        self.assertEqual((home / ".pi/agent/AGENTS.md").read_text(), "Global\n\nRule\n")
+        self.assertFalse((home / ".pi/agent/settings.json").exists())
+
+        write(
+            config_root / "agents" / "reader.md",
+            source_doc("agent", "Read\n", extra={"deny": ["shell"]}),
+        )
+        run_sync(config_root=config_root, home=home)
+
+        self.assertEqual(
+            self.pi_permissions(home)["permission"],
+            {"*": "allow", "bash": {"*": "allow"}},
+        )
+        self.assertEqual(
+            load_json(home / ".pi/agent/settings.json")["packages"],
+            [
+                "npm:@gotgenes/pi-permission-system@42.0.0",
+                "npm:@gotgenes/pi-subagents@25.0.5",
+            ],
+        )
+
+    def test_a_patch_cannot_write_command_policy(self) -> None:
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[["git", "status"]])
+        write(
+            config_root / "patches" / "pi-permissions.yaml",
+            "set:\n  /permission/bash/rm *: allow\n",
+        )
+
+        with self.assertRaisesRegex(PatchError, "cannot touch /permission/bash"):
+            run_sync(config_root=config_root, home=home)
+
+    def test_a_command_becomes_a_prompt_template(self) -> None:
+        config_root, home = self.new_roots()
+        write(
+            config_root / "commands" / "review.md",
+            source_doc(
+                "command",
+                "Review $ARGUMENTS\n",
+                description="Review a change",
+                extra={"pi:argument-hint": "[focus]"},
+            ),
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        self.assertEqual(
+            (home / ".pi/agent/prompts/review.md").read_text(),
+            "---\ndescription: Review a change\nargument-hint: '[focus]'\n---\n\n"
+            "Review $ARGUMENTS\n",
+        )
 
 
 if __name__ == "__main__":

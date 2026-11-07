@@ -22,3 +22,7 @@ class SyncContext:
     @property
     def opencode(self) -> Path:
         return self.home / ".config" / "opencode"
+
+    @property
+    def pi(self) -> Path:
+        return self.home / ".pi" / "agent"

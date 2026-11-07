@@ -2,7 +2,7 @@
 
 Coding Agents Sync is an installable Python CLI that compiles one external
 Markdown and YAML configuration tree into user-level configuration for Claude
-Code, ChatGPT Desktop / Codex, Cursor, and OpenCode. It preserves target-native fields, writes
+Code, ChatGPT Desktop / Codex, Cursor, OpenCode, and Pi. It preserves target-native fields, writes
 only declared outputs, and refuses to replace modified managed content.
 
 This repository contains the compiler, target knowledge, documentation, and
@@ -97,7 +97,7 @@ A source's directory gives its kind and its file name gives its name, so a
 source carries no schema, kind, or id header. A source shares only portable
 intent. Each source may instead use a strict typed native block, or an
 explicitly unvalidated raw native block, under
-`targets.<claude|cursor|codex|opencode>`. A lossy portable projection requires
+`targets.<claude|cursor|codex|opencode|pi>`. A lossy portable projection requires
 listing the field in `targets.<target>.omit`. Raw target files live under
 `target-config/<target>/raw/` and remain visibly unvalidated.
 
@@ -132,7 +132,12 @@ Generated targets remain rooted below `home`:
 .codex/
 .cursor/
 .config/opencode/
+.pi/agent/
 ```
+
+Pi has no permission system or named agents of its own. When the source needs
+either, the compiler adds two pinned Pi packages to `.pi/agent/settings.json`;
+see [the Pi target reference](docs/targets/pi.md).
 
 ## Development
 

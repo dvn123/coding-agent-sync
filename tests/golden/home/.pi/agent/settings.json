@@ -1,0 +1,6 @@
+{
+  "packages": [
+    "npm:@gotgenes/pi-permission-system@42.0.0",
+    "npm:@gotgenes/pi-subagents@25.0.5"
+  ]
+}

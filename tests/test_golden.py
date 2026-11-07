@@ -109,6 +109,15 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.cursor/settings.json",
             "home/.cursor/skills/.coding-agents-managed.json",
             "home/.cursorignore",
+            "home/.pi/agent/.coding-agents-managed.json",
+            "home/.pi/agent/AGENTS.md",
+            "home/.pi/agent/agents/.coding-agents-managed.json",
+            "home/.pi/agent/agents/sample.md",
+            "home/.pi/agent/extensions/pi-permission-system/config.json",
+            "home/.pi/agent/mcp.json",
+            "home/.pi/agent/prompts/.coding-agents-managed.json",
+            "home/.pi/agent/settings.json",
+            "home/.pi/agent/skills/.coding-agents-managed.json",
         ]
     )
     for name, text in outputs.items():

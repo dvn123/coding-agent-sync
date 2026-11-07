@@ -26,3 +26,6 @@ targets:
       - tools
       - workspace
       - secret_names
+  pi:
+    omit:
+      - tools

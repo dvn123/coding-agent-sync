@@ -1,0 +1,43 @@
+{
+  "permission": {
+    "*": "allow",
+    "bash": {
+      "*": "ask",
+      "fixture-tool status *": "allow",
+      "fixture-tool -C* status *": "allow",
+      "fixture-tool publish --public *": "ask",
+      "fixture-tool publish * --public *": "ask",
+      "fixture-tool -C* publish --public *": "ask",
+      "fixture-tool -C* publish * --public *": "ask",
+      "fixture-tool remove": "deny",
+      "fixture-tool -C* remove": "deny",
+      "*FIXTURE_TOKEN*": "deny"
+    },
+    "read": "allow",
+    "grep": "allow",
+    "find": "allow",
+    "ls": "allow",
+    "edit": "ask",
+    "write": "deny",
+    "path": {
+      "*": "allow",
+      "**/.env": "deny"
+    },
+    "external_directory": {
+      "*": "ask",
+      "~/fixture-shared": "allow",
+      "~/fixture-shared/*": "allow",
+      "/tmp/fixture-review": "ask",
+      "/tmp/fixture-review/*": "ask"
+    },
+    "mcp": {
+      "fixture-local:inspect": "allow",
+      "fixture-local:submit": "ask",
+      "fixture-local:erase": "deny",
+      "fixture-optional:lookup": "allow"
+    }
+  },
+  "piInfrastructureReadPaths": [
+    "~/.agents/skills"
+  ]
+}
