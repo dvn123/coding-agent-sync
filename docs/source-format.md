@@ -112,9 +112,8 @@ that only describe or narrow an artifact are dropped silently where a target
 has no counterpart: skill `license` and `paths` (Codex and OpenCode offer the
 skill everywhere), and agent `color` on Codex and Cursor. Codex projects every
 portable effort, including `max`.
-Cursor projects allows to the allowlist its Desktop app and CLI share and
-guards asks and denies by withholding the allows they narrow, so a guarded
-command prompts there. Codex projects ask and deny rules as
+Cursor projects allows to the allowlist its Desktop app and CLI share, and
+a generated hook carries the asks and denies. Codex projects ask and deny rules as
 `prompt` and `forbidden` prefix rules and leaves allows to its sandbox, so it
 owes no command omission. Commands and agents that intentionally never
 reach Cursor or Codex can set `only: [claude, opencode]` instead of repeating
@@ -195,8 +194,8 @@ the guards binding, and Codex gates an unmatched command by sandbox. There is no
 value: a blanket command denial is not a policy any target can run under.
 Declared `wrappers` get wrapped copies of every ask and deny rule, never a
 blanket allow, so a wrapped allowed command falls to `unmatched`; a target
-that peels a wrapper itself gets no copies for it, and Cursor, which guards
-by withholding allows, gets none. Claude strips a program
+that peels a wrapper itself gets no copies for it, and Cursor's hook peels
+them as Claude's does. Claude strips a program
 path itself, and OpenCode's bundled plugin does, as the OpenCode target
 reference describes.
 
@@ -234,16 +233,17 @@ a `~/` command under its `$HOME/` spelling, and a subcommand token holding a
 `NAME=value` tokens (`git: [GIT_EDITOR=true]`) that agents type in front of it
 and that change nothing a rule decides; those two targets land the command's
 rules behind each one too, except where the target strips assignments itself:
-Claude before an ask or deny, OpenCode's unwrap plugin before a deny. A value is one literal shell word, quoted as
-typed (`IFS=$'\t'`), with no whitespace or glob character, because a wildcard
+Claude before an ask or deny, OpenCode's shell-unwrap plugin before a deny. A
+value is one literal shell word, quoted as typed (`IFS=$'\t'`), with no
+whitespace or glob character, because a wildcard
 would span into the command; Cursor and Codex receive nothing, so such a command
 falls to their default. Like `options`, a command's `assignments` have one
 home. A `text` predicate matches as a substring anywhere after the command, so
 a leading or trailing space in it anchors the match to a token boundary:
 `' -T'` matches `curl -T f` but not `-H Content-Type`. A deny rule
 may carry a one-line `reason`, what the agent should run instead; it is not a
-predicate. OpenCode delivers it through the opencode-unwrap plugin and Codex as
-the forbidden rule's `justification`.
+predicate. Claude delivers it through the shell-unwrap hook, OpenCode through
+the shell-unwrap plugin, and Codex as the forbidden rule's `justification`.
 
 ```yaml
 options:
@@ -404,6 +404,7 @@ be mode `0600`. The named patch surfaces are:
 | `cursor-permissions` | `<home>/.cursor/permissions.json` |
 | `cursor-settings` | `<home>/.cursor/settings.json` |
 | `cursor-mcp` | `<home>/.cursor/mcp.json` |
+| `cursor-hooks` | `<home>/.cursor/hooks.json` |
 | `codex` | `<home>/.codex/config.toml` |
 | `opencode` | `<home>/.config/opencode/opencode.json` |
 

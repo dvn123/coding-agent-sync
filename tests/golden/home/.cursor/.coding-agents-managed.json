@@ -1,3 +1,6 @@
 {
-  "entries": {}
+  "entries": {
+    "hooks/shell-unwrap.js": "sha256:b995f84cd2194777af9a6de92293920cb8717d785d487e507c75bf427b2bb080",
+    "hooks/shell-unwrap.json": "sha256:fa48ae081e91275a0d3bd11e076f504c2eee942b61a629799cf3c7297c62ec6f"
+  }
 }

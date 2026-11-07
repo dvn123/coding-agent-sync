@@ -165,11 +165,15 @@ def prune_stale_entries(
     previous: Manifest,
     current: set[str],
     mode: Literal["dir", "file"],
+    released: frozenset[Path] = frozenset(),
 ) -> None:
+    """Remove each previously managed entry the plan no longer has. A
+    `released` path changed owner, such as a raw file that became a native
+    pointer surface, so it leaves the manifest and stays."""
     stale = previous.keys() - current
     for name in stale:
         target = _managed_path(target_root, name)
-        if target.is_symlink():
+        if target.is_symlink() or target in released:
             continue
         actual = entry_hash(target, mode)
         if actual is not None and actual != previous[name]:
@@ -184,11 +188,18 @@ def prune_stale_entries(
 
 
 def sync_manifested_entries(
-    target_root: Path, current: set[str], mode: Literal["dir", "file"]
+    target_root: Path,
+    current: set[str],
+    mode: Literal["dir", "file"],
+    released: frozenset[Path] = frozenset(),
 ) -> None:
     previous = load_manifest(target_root / MANAGED_MANIFEST)
     prune_stale_entries(
-        target_root=target_root, previous=previous, current=current, mode=mode
+        target_root=target_root,
+        previous=previous,
+        current=current,
+        mode=mode,
+        released=released,
     )
     entries: Manifest = {}
     for name in current:

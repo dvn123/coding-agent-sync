@@ -1,3 +1,5 @@
+import json
+import shlex
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -19,15 +21,22 @@ from ..output.plan import (
     Plan,
 )
 from ..sources import (
-    CommandPermission,
     McpServerSource,
+    PermissionSource,
     SkillSource,
     SourceBundle,
     StrictModel,
     describe_rule,
     resolve_model_policy,
 )
-from .permissions import cursor_shell_variants, denied_paths
+from .claude import shell_entries as claude_shell_entries
+from .permissions import (
+    bucket_patterns,
+    cursor_shell_variants,
+    denied_paths,
+    deny_reasons,
+    secret_name_variants,
+)
 from .support import (
     collision_error,
     declared_trees,
@@ -127,63 +136,21 @@ def _ignore_pattern(path: str) -> str | None:
 INTERPRETER_COMMANDS = frozenset({"bash", "eval", "sh", "zsh"})
 
 
-def _prefixes(
-    rule: CommandPermission, allowed: CommandPermission, options: tuple[str, ...]
-) -> bool:
-    if rule.command != allowed.command or allowed.exact:
-        # An exact allow admits nothing beyond its subcommand, so no
-        # non-narrowing ask can overlap it.
-        return False
-    if rule.subcommand[: len(allowed.subcommand)] == allowed.subcommand:
-        return True
-    # An ask may embed the allow's leading-option vocabulary: with `-C`
-    # declared, `git -C foo status` ends with `status` and rides the
-    # emitted option-hole head `git:-C * status`.
-    return bool(
-        allowed.subcommand
-        and rule.subcommand
-        and rule.subcommand[0] in options
-        and rule.subcommand[-len(allowed.subcommand) :] == allowed.subcommand
-    )
-
-
-def _rides_options(
-    ask: CommandPermission, allowed: CommandPermission, options: tuple[str, ...]
-) -> bool:
-    """The allow's option-hole heads can carry the ask's gated variant.
-
-    With `--profile` declared, an allow whose subcommand ends with the ask's
-    behind option tokens emits heads like `prog:--profile * status *`, which
-    the gated variant `prog --profile prod status --flag` rides even though
-    the ask never names the option.
-    """
-    if allowed.exact or len(allowed.subcommand) <= len(ask.subcommand):
-        return False
-    lead = allowed.subcommand[: len(allowed.subcommand) - len(ask.subcommand)]
-    return allowed.subcommand[len(lead) :] == ask.subcommand and all(
-        token in options for token in lead
-    )
-
-
 def _terminal_allowlist(
     sources: SourceBundle,
 ) -> tuple[list[str], tuple[Diagnostic, ...]]:
     """Lower allows to Desktop's `terminalAllowlist`, which the CLI also reads.
 
-    Cursor's shared allowlist has no deny channel, so every allow an ask or a
-    deny narrows or overlaps leaves it, and the guarded command prompts. Wrapped
-    spellings (`timeout 30 git status`) are not listed and prompt too.
+    The allowlist has no deny channel; shell-unwrap's hook carries the asks and
+    denies (`_unwrap_hook`), so every allow lands as written. Wrapped
+    spellings (`timeout 30 git status`) are not listed and prompt.
     """
     if not (permissions := sources.permissions):
         return [], ()
     commands = permissions.commands
-    diagnostics: list[Diagnostic] = []
     # An allowlisted interpreter carries its payload as an argument, so
     # Shell(sh) allows everything the interpreter runs. Never project one.
-    allowed_rules = tuple(
-        rule for rule in commands.allow if rule.command not in INTERPRETER_COMMANDS
-    )
-    diagnostics.extend(
+    diagnostics = tuple(
         Diagnostic(
             "warning",
             f"omitted allow {describe_rule(rule)}: "
@@ -192,42 +159,78 @@ def _terminal_allowlist(
         for rule in commands.allow
         if rule.command in INTERPRETER_COMMANDS
     )
-
-    def collides(guard: CommandPermission, allowed: CommandPermission) -> bool:
-        options = commands.option_tokens(guard.command)
-        return (
-            guard.narrows(allowed)
-            or _prefixes(guard, allowed, options)
-            or _rides_options(guard, allowed, options)
-        )
-
-    guards = (*commands.ask, *commands.deny)
-    # A guard that shares an allow's subcommand prefix without provably
-    # narrowing it still withholds the allow, with a warning.
-    diagnostics.extend(
-        Diagnostic(
-            "warning",
-            f"guarded overlap {describe_rule(guard)}: the guard shares an "
-            "allow's subcommand prefix but does not provably narrow it",
-        )
-        for guard in guards
-        if not any(guard.narrows(allowed) for allowed in allowed_rules)
-        and any(
-            _prefixes(guard, allowed, commands.option_tokens(guard.command))
-            for allowed in allowed_rules
-        )
-    )
     allowlist = list(
         dict.fromkeys(
             pattern
-            for rule in allowed_rules
-            if not any(collides(guard, rule) for guard in guards)
+            for rule in commands.allow
+            if rule.command not in INTERPRETER_COMMANDS
             for pattern in cursor_shell_variants(
                 rule, commands.option_tokens(rule.command)
             )
         )
     )
-    return allowlist, tuple(diagnostics)
+    return allowlist, diagnostics
+
+
+# Cursor's allowlists cannot ask or deny. shell-unwrap's Cursor bundle, a
+# `beforeShellExecution` hook in the user `hooks.json` that Desktop and the CLI
+# both load, denies or asks for any command inside a call that a guard
+# matches, peeled as on Claude, and leaves the rest to the allowlist. It reads
+# Claude's `Bash(...)` patterns and asks when it cannot run, so the guards
+# fail closed. Desktop can refuse user-local plugins, so it is not one.
+UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "cursor.js"
+UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
+UNWRAP_TIMEOUT_SECONDS = 10
+# Desktop starts from the Dock without the login shell's PATH.
+BUN_PATH = (
+    "$HOME/.bun/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin"
+)
+UNWRAP_UNAVAILABLE = {
+    "permission": "ask",
+    "user_message": "shell-unwrap could not run, so its guards cannot be checked",
+}
+
+
+def _json(value: object) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _unwrap_hook(
+    root: Path, home: Path, permissions: PermissionSource
+) -> tuple[list[OwnedFile], list[NativeValue]]:
+    """The hook and its rules, or nothing when no command is asked or denied."""
+    buckets = bucket_patterns(claude_shell_entries(permissions))
+    deny = [*buckets["deny"], *secret_name_variants(permissions.secret_names)]
+    if not (deny or buckets["ask"]):
+        return [], []
+    script = root / UNWRAP_HOOK_PATH
+    located = (
+        f'"$HOME"/{shlex.quote(script.relative_to(home).as_posix())}'
+        if script.is_relative_to(home)
+        else shlex.quote(script.as_posix())
+    )
+    fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
+    body = f'PATH="{BUN_PATH}:$PATH" bun {located} 2>/dev/null || printf %s {fallback}'
+    hook = {
+        "command": f"/bin/sh -c {shlex.quote(body)}",
+        "timeout": UNWRAP_TIMEOUT_SECONDS,
+        "failClosed": True,
+    }
+    rules = {
+        "permissions": {
+            "ask": [f"Bash({pattern})" for pattern in buckets["ask"]],
+            "deny": [f"Bash({pattern})" for pattern in deny],
+        },
+        "reasons": deny_reasons(permissions, claude_shell_entries),
+    }
+    hooks = root / "hooks.json"
+    return [
+        OwnedFile(script, UNWRAP_HOOK.read_bytes(), root, structured=False),
+        OwnedFile(script.with_suffix(".json"), _json(rules), root),
+    ], [
+        NativeValue("cursor-hooks", hooks, ("version",), 1),
+        NativeValue("cursor-hooks", hooks, ("hooks", "beforeShellExecution"), [hook]),
+    ]
 
 
 def _permission_values(
@@ -236,7 +239,7 @@ def _permission_values(
     path: Path,
 ) -> tuple[tuple[NativeValue, ...], tuple[Diagnostic, ...]]:
     """Lower allows to Desktop's allowlists. An unlisted command or MCP tool
-    asks; Desktop has no deny list."""
+    asks; Desktop has no deny list, so the hook plugin carries shell guards."""
     terminal, diagnostics = _terminal_allowlist(sources)
     mcp = [
         f"{server}:{tool}"
@@ -376,9 +379,12 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 structured=False,
             )
         )
+    hook_values: list[NativeValue] = []
     if permissions := sources.permissions:
         _, issues = resolve("cursor", [permissions])
         diagnostics.extend(issues)
+        hook_files, hook_values = _unwrap_hook(root, ctx.home, permissions)
+        files.extend(hook_files)
         if ignored := [
             pattern
             for path in denied_paths(permissions)
@@ -398,6 +404,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
     diagnostics.extend(permission_diagnostics)
     native_values = (
         *native_values,
+        *hook_values,
         *(
             NativeValue(
                 "cursor-mcp", root / "mcp.json", ("mcpServers", server.id, key), value
@@ -412,6 +419,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
         ("cursor-desktop", root / "permissions.json", "cursor-permissions"),
         ("cursor", root / "settings.json", "cursor-settings"),
         ("cursor-mcp", root / "mcp.json", "cursor-mcp"),
+        ("cursor-hooks", root / "hooks.json", "cursor-hooks"),
     ):
         patch, issues = native_patch(
             config_root=ctx.config_root, target=target, path=path, patch_name=name
@@ -428,6 +436,7 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
             Path("permissions.json"),
             Path("settings.json"),
             Path("mcp.json"),
+            Path("hooks.json"),
         ),
     )
     return Plan(

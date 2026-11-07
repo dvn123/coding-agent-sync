@@ -77,9 +77,9 @@ Command rules project to one surface: Desktop's `terminalAllowlist` and
 `approvalMode: allowlist` in `permissions.json`, merged with hand-authored
 native content under pointer ownership. Cursor CLI reads the same file (the
 `cursor-agent.permissions` probe pins it), so it gets the same allowlist and
-no generated `cli-config.json` shell entries. The CLI is second class: it has
-no hard deny of its own, so a guarded command prompts there as on Desktop,
-and `--force` approves it. Desktop stays on `allowlist` whatever the policy
+no generated `cli-config.json` shell entries. Both load the shell-unwrap hook
+plugin that carries the guards; `--force` approves its asks but not its
+denies (the `hook-denied-forced` scenario). Desktop stays on `allowlist` whatever the policy
 says, so `unmatched: allow` requires `unmatched` in `targets.cursor.omit`.
 Desktop's agent runs file tools unasked inside the workspace: a write asks
 only outside it, for a protected config file, or when `promptWorkspaceWrites`
@@ -99,12 +99,20 @@ in a file, and a subagent approves both itself.
 - An allow whose command is an interpreter (`sh`, `bash`, `zsh`, `eval`)
   never projects: `sh` would allow every payload the interpreter runs. The
   rule is skipped with a warning.
-- The allowlist has no deny channel, so asks and denies guard by withholding:
-  every allow an ask or deny narrows, prefix-overlaps, or whose option-hole
-  heads can carry the guarded variant leaves the allowlist, and the guarded
-  command prompts. A guard that overlaps an allow without provably narrowing
-  it withholds it too, with a warning. A standalone ask or deny leaves nothing
-  to emit, since an unlisted command already prompts.
+- The allowlist has no deny channel, so every allow lands as written and a
+  `beforeShellExecution` hook carries the asks and denies. It is shell-unwrap's
+  Cursor bundle at `<home>/.cursor/hooks/shell-unwrap.js`, registered in the
+  user `hooks.json` that Desktop and the CLI both load, beside
+  `shell-unwrap.json`: Claude's `Bash(...)` ask and deny patterns and the deny
+  reasons. It is not a local plugin, because Desktop skips user-local plugins
+  when a team turns off `allowUserLocalPluginImports`. It parses each call, peels every command inside it as
+  the Claude hook does, and denies or asks when any spelling matches. Cursor
+  ignores an `allow` from the hook, so it answers `{}` otherwise and the
+  allowlist decides. It asks when it cannot parse the command or bun cannot
+  run, and the hook is `failClosed`, so the guards never silently lapse.
+  Desktop runs `beforeShellExecution` before every shell call
+  (`runPreExecutionHooks` in `cursor-agent-exec`): `deny` refuses and `ask`
+  prompts.
 - Wrapped spellings are not listed: `timeout 30 git status` prompts. A bare
   wrapper entry would allow any payload the wrapper carries, a `*` hole after
   the wrapper swallows a whole command, and one entry per wrapper and rule
@@ -114,24 +122,19 @@ in a file, and a subagent approves both itself.
   `is_background`, and `block_until_ms`. A Cursor-only rule that steers the
   agent to those forms keeps wrapped commands rare without any entries.
 
-A `beforeShellExecution` hook can answer `deny` or `ask`, but its `allow`
-falls through to the ordinary approval flow, so a hook cannot replace the
-allowlist; it could only add a hard deny, which needs a script rather than
-configuration.
+Other hooks are not generated. The `cursor-hooks` patch adds them to
+`<home>/.cursor/hooks.json`, extending the generated `beforeShellExecution`
+list or setting other events; their scripts are raw files below `raw/`.
 
-Hooks are not generated. `hooks.json` and its hook scripts are delivered as
-raw files: `target-config/cursor/raw/hooks.json` mirrors to
-`<home>/.cursor/hooks.json`, where the CLI and Desktop load user hooks, and
-scripts sit beside it or anywhere else below `raw/`.
-
-Patches target `cli-config.json`, `permissions.json`, `settings.json`, and
-`mcp.json` through the corresponding `cursor-*` patch names. A source's MCP
+Patches target `cli-config.json`, `permissions.json`, `settings.json`,
+`mcp.json`, and `hooks.json` through the corresponding `cursor-*` patch
+names. A source's MCP
 tool allows land in Desktop's `mcpAllowlist`; CLI-only grants, such as an
 `Mcp(<server>:get_*)` glob, live in the `cursor-cli-config` patch. They may
 contribute to a generated pointer where the contribution does not clash; in
 particular, a Cursor Desktop patch cannot contribute to the terminal
 allowlist. Raw files below
-`target-config/cursor/raw/` mirror below `<home>/.cursor`; those four native
+`target-config/cursor/raw/` mirror below `<home>/.cursor`; those five native
 pointer files are reserved.
 
 The rules, skills, and agents roots use portable manifests, and unrelated

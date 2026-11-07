@@ -2,6 +2,13 @@
   "entries": [
     {
       "target": "claude",
+      "pointer": "/hooks/PreToolUse",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "claude",
       "pointer": "/permissions/additionalDirectories",
       "items": [
         "sha256:<hash>"
@@ -41,29 +48,6 @@
       "target": "claude",
       "pointer": "/permissions/deny",
       "items": [
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
@@ -205,6 +189,18 @@
         "sha256:<hash>",
         "sha256:<hash>"
       ]
+    },
+    {
+      "target": "cursor-hooks",
+      "pointer": "/hooks/beforeShellExecution",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "cursor-hooks",
+      "pointer": "/version",
+      "hash": "sha256:<hash>"
     },
     {
       "target": "cursor-mcp",

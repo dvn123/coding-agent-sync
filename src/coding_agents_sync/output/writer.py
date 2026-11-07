@@ -235,8 +235,21 @@ def _validate_plan(plan: Plan) -> None:
                 )
 
 
+def _native_paths(plan: Plan) -> frozenset[Path]:
+    """Files the plan writes native values into. A manifest entry for one of
+    them is released, not pruned: the file changed owner, as a raw
+    `hooks.json` does when it becomes a native pointer surface."""
+    return frozenset(
+        (
+            *(value.path for value in plan.native_values),
+            *(patch.path for patch in plan.native_patches if patch.operations),
+        )
+    )
+
+
 def preflight_plan(plan: Plan) -> None:
     _validate_plan(plan)
+    native = _native_paths(plan)
     producers: dict[Path, OwnedFile | OwnedTree] = {
         **{file.path: file for file in plan.files},
         **{tree.root: tree for tree in _generated_trees(plan)},
@@ -276,6 +289,8 @@ def preflight_plan(plan: Plan) -> None:
                     f"Refusing to claim unmanifested generated {mode}: {target}"
                 )
         for name, expected in previous.items():
+            if name not in current and root / name in native:
+                continue
             actual = entry_hash(root / name, mode)
             if actual is not None and actual not in {expected, desired.get(name)}:
                 raise ManagedEntryConflict(
@@ -323,5 +338,6 @@ def write_plan(plan: Plan) -> None:
 
 
 def publish_plan_manifests(plan: Plan) -> None:
+    native = _native_paths(plan)
     for (root, mode), current in _managed_groups(plan).items():
-        sync_manifested_entries(root, current, mode)
+        sync_manifested_entries(root, current, mode, native)

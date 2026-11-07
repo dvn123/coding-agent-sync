@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "/bin/sh -c 'PATH=\"$HOME/.bun/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH\" bun \"$HOME\"/.cursor/hooks/shell-unwrap.js 2>/dev/null || printf %s '\"'\"'{\"permission\": \"ask\", \"user_message\": \"shell-unwrap could not run, so its guards cannot be checked\"}'\"'\"''",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ]
+  }
+}

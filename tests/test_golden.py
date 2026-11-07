@@ -17,6 +17,7 @@ from coding_agents_sync import run_sync
 FIXTURE_ROOT = Path(__file__).parent / "fixtures/config_root"
 GOLDEN = Path(__file__).parent / "golden"
 HASH = re.compile(r"sha256:[0-9a-f]{64}")
+VENDORED = "<vendored shell-unwrap bundle>\n"
 
 
 def compiled_tree(tmp_path: Path) -> dict[str, str]:
@@ -31,8 +32,12 @@ def compiled_tree(tmp_path: Path) -> dict[str, str]:
     outputs["config/.coding-agents-native.json"] = (
         config_root / ".coding-agents-native.json"
     )
+    # The vendored shell-unwrap bundles are copied byte for byte, which
+    # `test_sync` checks; the golden tree pins only where they land.
     texts = {
-        name: path.read_text().replace(str(tmp_path), "<tmp>")
+        name: VENDORED
+        if name.endswith("/shell-unwrap.js")
+        else path.read_text().replace(str(tmp_path), "<tmp>")
         for name, path in sorted(outputs.items())
     }
     # Hashes of values that hold the temporary path change on every run; the
@@ -57,6 +62,7 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.claude/CLAUDE.md",
             "home/.claude/agents/.coding-agents-managed.json",
             "home/.claude/agents/sample.md",
+            "home/.claude/hooks/shell-unwrap.js",
             "home/.claude/mcp/.coding-agents-managed.json",
             "home/.claude/mcp/fixture-optional.json",
             "home/.claude/rules/.coding-agents-managed.json",
@@ -82,7 +88,7 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.config/opencode/commands/.coding-agents-managed.json",
             "home/.config/opencode/commands/sample.md",
             "home/.config/opencode/opencode.json",
-            "home/.config/opencode/plugins/opencode-unwrap.js",
+            "home/.config/opencode/plugins/shell-unwrap.js",
             "home/.config/opencode/rules/.coding-agents-managed.json",
             "home/.config/opencode/rules/always.md",
             "home/.config/opencode/rules/scoped.md",
@@ -91,6 +97,9 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.cursor/agents/.coding-agents-managed.json",
             "home/.cursor/agents/sample.md",
             "home/.cursor/cli-config.json",
+            "home/.cursor/hooks.json",
+            "home/.cursor/hooks/shell-unwrap.js",
+            "home/.cursor/hooks/shell-unwrap.json",
             "home/.cursor/mcp.json",
             "home/.cursor/permissions.json",
             "home/.cursor/rules/.coding-agents-managed.json",

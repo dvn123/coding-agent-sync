@@ -300,6 +300,12 @@ CASES = (
         surfaces=("cursor-agent.permissions",),
     ),
     Case(
+        "cursor-agent.unwrap",
+        "cursor-agent",
+        "targets/test_cursor_unwrap.py",
+        surfaces=("cursor-agent.permissions",),
+    ),
+    Case(
         "cursor-agent.ignore",
         "cursor-agent",
         "targets/test_cursor_ignore.py",
