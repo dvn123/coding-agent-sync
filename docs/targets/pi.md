@@ -77,7 +77,9 @@ substitutions and subshells, against `bash`. It strips leading assignments
 before matching, so guards get no assignment copies. It decides a command
 behind `time`, `timeout`, `nice`, `stdbuf`, or `setsid` with literal, known
 options as the command it runs, and raises one behind `env`, `xargs`, `nohup`,
-`sudo`, `doas`, `flock`, `parallel`, or `watch` to at least `ask`. Guards get
+`sudo`, `doas`, `flock`, `parallel`, or `watch`, or inside an inline shell
+payload (`bash -c`, `eval`), to at least `ask`. Pi therefore needs no
+shell-unwrap bundle. Guards get
 no copies behind those wrappers, so a denied command behind `env` prompts
 instead of being denied; copies behind them would multiply the `bash` map
 about fifteenfold. It does not know `command`, `builtin`, or `exec`, so a
@@ -107,13 +109,17 @@ at Pi's default, `codemode`; a `pi-mcp` patch may set it per server.
 | `pi-settings` | `<home>/.pi/agent/settings.json` |
 | `pi-mcp` | `<home>/.pi/agent/mcp.json` |
 | `pi-permissions` | `<home>/.pi/agent/extensions/pi-permission-system/config.json` |
+| `pi-autoformat` | `<home>/.pi/agent/extensions/pi-autoformat/config.json` |
 
 Pi writes `settings.json` and `mcp.json` itself, and the permission system
 writes its runtime switches into its config, so the compiler owns pointers, not
 files. A `pi-permissions` patch may set runtime switches such as
 `promptNotifications` and other surfaces, but never `/permission/bash`, since
-command policy has one writer. Raw files below `target-config/pi/raw/` mirror
-below `<home>/.pi/agent`; the three patch surfaces are reserved.
+command policy has one writer. The compiler generates nothing for
+`pi-autoformat`: a `pi-settings` patch that extends `/packages` installs the
+package, and the `pi-autoformat` patch configures its formatters. Raw files
+below `target-config/pi/raw/` mirror below `<home>/.pi/agent`; the four patch
+surfaces are reserved.
 
 ## Updating the packages
 

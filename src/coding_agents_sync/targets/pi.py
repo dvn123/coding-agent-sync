@@ -61,6 +61,9 @@ from .support import (
 PERMISSION_PACKAGE = "npm:@gotgenes/pi-permission-system@42.0.0"
 SUBAGENTS_PACKAGE = "npm:@gotgenes/pi-subagents@25.0.5"
 PERMISSION_CONFIG = Path("extensions") / "pi-permission-system" / "config.json"
+# pi-autoformat's config gets no generated values; a pi-settings patch installs
+# the package and a pi-autoformat patch configures it.
+AUTOFORMAT_CONFIG = Path("extensions") / "pi-autoformat" / "config.json"
 THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
 PROMPT_MODES = frozenset({"append", "replace"})
 
@@ -279,13 +282,12 @@ def _pi_server(server: McpServerSource, fields: dict[str, Any]) -> dict[str, Any
     }
 
 
-def _validate_patches(patches: list[NativePatch]) -> None:
-    for patch in patches:
-        for operation in patch.operations:
-            # Command policy has one writer.
-            if touches(operation.pointer, ("permission", "bash")):
-                pointer = display_pointer(operation.pointer)
-                raise PatchError(f"pi-permissions patch cannot touch {pointer}")
+def _validate_permission_patch(patch: NativePatch) -> None:
+    for operation in patch.operations:
+        # Command policy has one writer.
+        if touches(operation.pointer, ("permission", "bash")):
+            pointer = display_pointer(operation.pointer)
+            raise PatchError(f"pi-permissions patch cannot touch {pointer}")
 
 
 def compile_pi(ctx: SyncContext, sources: SourceBundle) -> Plan:
@@ -294,6 +296,7 @@ def compile_pi(ctx: SyncContext, sources: SourceBundle) -> Plan:
     settings = root / "settings.json"
     mcp_config = root / "mcp.json"
     permission_config = root / PERMISSION_CONFIG
+    autoformat_config = root / AUTOFORMAT_CONFIG
     files: list[OwnedFile] = []
     trees = declared_trees(
         root, (("skills", "dir"), ("prompts", "file"), ("agents", "file"))
@@ -432,18 +435,24 @@ def compile_pi(ctx: SyncContext, sources: SourceBundle) -> Plan:
         ("pi", settings, "pi-settings"),
         ("pi-mcp", mcp_config, "pi-mcp"),
         ("pi-permissions", permission_config, "pi-permissions"),
+        ("pi-autoformat", autoformat_config, "pi-autoformat"),
     ):
         patch, issues = native_patch(
             config_root=ctx.config_root, target=target, path=path, patch_name=name
         )
         diagnostics.extend(issues)
         patches.append(patch)
-    _validate_patches(patches[2:])
+    _validate_permission_patch(patches[2])
     raw, raw_tree, raw_issues = raw_files(
         config_root=ctx.config_root,
         target="pi",
         root=root,
-        excluded=(Path("settings.json"), Path("mcp.json"), PERMISSION_CONFIG),
+        excluded=(
+            Path("settings.json"),
+            Path("mcp.json"),
+            PERMISSION_CONFIG,
+            AUTOFORMAT_CONFIG,
+        ),
     )
     return Plan(
         tuple((*files, *raw)),

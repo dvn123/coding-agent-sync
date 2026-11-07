@@ -973,7 +973,7 @@ SURFACES = (
             "mcp",
         ),
     ),
-    *_surfaces("pi", SurfaceManagement.PATCH_ONLY, ("settings",)),
+    *_surfaces("pi", SurfaceManagement.PATCH_ONLY, ("settings", "autoformat")),
     *_surfaces(
         "pi",
         SurfaceManagement.UNMANAGED,

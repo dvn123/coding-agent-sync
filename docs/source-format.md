@@ -394,7 +394,7 @@ surface. Current native-pointer exclusions are:
 | Cursor | `<home>/.cursor` | `cli-config.json`, `permissions.json`, `settings.json`, `mcp.json` |
 | Codex | `<home>/.codex` | `config.toml`, `rules/coding-agents.rules` |
 | OpenCode V1 | `<home>/.config/opencode` | `opencode.json` |
-| Pi | `<home>/.pi/agent` | `settings.json`, `mcp.json`, `extensions/pi-permission-system/config.json` |
+| Pi | `<home>/.pi/agent` | `settings.json`, `mcp.json`, `extensions/pi-permission-system/config.json`, `extensions/pi-autoformat/config.json` |
 
 Use a raw file when a complete target-native artifact cannot be represented by
 typed fields. It produces an explicit warning, not an implicit compatibility
@@ -420,6 +420,7 @@ be mode `0600`. The named patch surfaces are:
 | `pi-settings` | `<home>/.pi/agent/settings.json` |
 | `pi-mcp` | `<home>/.pi/agent/mcp.json` |
 | `pi-permissions` | `<home>/.pi/agent/extensions/pi-permission-system/config.json` |
+| `pi-autoformat` | `<home>/.pi/agent/extensions/pi-autoformat/config.json` |
 
 Patches operate on named JSON/TOML pointers and preserve unnamed native
 fields. A patch cannot overlap a portable file or a raw file. It may

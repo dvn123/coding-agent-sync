@@ -3462,6 +3462,32 @@ class PiTargetTests(SyncCase):
         with self.assertRaisesRegex(PatchError, "cannot touch /permission/bash"):
             run_sync(config_root=config_root, home=home)
 
+    def test_patches_install_and_configure_autoformat(self) -> None:
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[["git", "status"]])
+        write(
+            config_root / "patches" / "pi-settings.yaml",
+            "extend:\n  /packages: ['npm:@gotgenes/pi-autoformat@5.1.11']\n",
+        )
+        write(
+            config_root / "patches" / "pi-autoformat.yaml",
+            "replace:\n  /chains: {.toml: [{fallback: [taplo]}]}\n",
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        self.assertEqual(
+            load_json(home / ".pi/agent/settings.json")["packages"],
+            [
+                "npm:@gotgenes/pi-permission-system@42.0.0",
+                "npm:@gotgenes/pi-autoformat@5.1.11",
+            ],
+        )
+        self.assertEqual(
+            load_json(home / ".pi/agent/extensions/pi-autoformat/config.json"),
+            {"chains": {".toml": [{"fallback": ["taplo"]}]}},
+        )
+
     def test_a_command_becomes_a_prompt_template(self) -> None:
         config_root, home = self.new_roots()
         write(
