@@ -1,7 +1,10 @@
 import itertools
+import json
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from pathlib import Path
 
+from ..output.plan import OwnedFile
 from ..sources import (
     WINDOWS_DRIVE,
     CommandPermission,
@@ -42,15 +45,6 @@ CLAUDE_PEELED_PREFIXES = frozenset(
         ),
         "xargs ",
     }
-)
-# Claude cannot see past a leading redirect (`2>&1 rm -rf x`), so a command
-# that starts with one is denied outright whenever a deny exists. Models do not
-# write that shape, so this beats copying every deny behind every redirect.
-CLAUDE_OPAQUE_COMMANDS = (
-    "<*",
-    ">*",
-    "&>*",
-    *(f"{fd}{operator}*" for fd in range(10) for operator in "<>"),
 )
 # Claude's file permission checks only consult Edit rules, and an Edit rule
 # covers every file-editing tool, so `write` folds onto the same pattern as
@@ -363,6 +357,45 @@ def bucket_entries(
                             (bucket, origin, pattern)
                             for pattern in lower(rule, options, prefix)
                         )
+
+
+def deny_reasons(
+    permissions: PermissionSource,
+    entries: Callable[[PermissionSource], Iterable[tuple[str, str, str]]],
+) -> dict[str, str]:
+    """Each pattern `entries` emits for a deny rule that carries a reason, to
+    that reason."""
+    commands = permissions.commands
+    reasons: dict[str, str] = {}
+    for rule in commands.deny:
+        if rule.reason is None:
+            continue
+        alone = permissions.model_copy(
+            update={
+                "commands": commands.model_copy(
+                    update={"allow": (), "ask": (), "deny": (rule,)}
+                )
+            }
+        )
+        for _bucket, _origin, pattern in entries(alone):
+            reasons.setdefault(pattern, rule.reason)
+    return reasons
+
+
+# shell-unwrap's plugin and hook read deny reasons from the target's root.
+UNWRAP_REASONS = Path("shell-unwrap.json")
+
+
+def unwrap_reasons_file(
+    root: Path,
+    permissions: PermissionSource,
+    entries: Callable[[PermissionSource], Iterable[tuple[str, str, str]]],
+) -> list[OwnedFile]:
+    """The reasons file, or nothing when no deny carries a reason."""
+    if not (reasons := deny_reasons(permissions, entries)):
+        return []
+    text = json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n"
+    return [OwnedFile(root / UNWRAP_REASONS, text.encode(), root)]
 
 
 def _glob(pattern: str) -> re.Pattern[str]:

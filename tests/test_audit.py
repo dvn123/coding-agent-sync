@@ -1,8 +1,5 @@
-import json
-from pathlib import Path
-
 import pytest
-from capabilities.audit import ClaudeRules, OpenCodeRules, unwrap_spellings
+from capabilities.audit import ClaudeRules, OpenCodeRules
 
 # The live `deny-reach` scenarios in test_claude_permissions, replayed against
 # the model: a bare deny with everything else allowed.
@@ -50,21 +47,15 @@ def test_claude_model_matches_live_deny_reach(command: str, denied: bool) -> Non
     assert (rules.verdict(command) == "deny") is denied
 
 
-# The opencode-unwrap plugin's golden table (its `test/spellings.json`), copied
-# with each vendored bundle: the port must peel every command to exactly the
-# plugin's spellings.
-SPELLINGS = json.loads(
-    (Path(__file__).parent / "fixtures/opencode-unwrap/spellings.json").read_text()
-)
+def test_claude_model_adds_the_hook_deny() -> None:
+    rules = ClaudeRules({"allow": ["Bash"], "deny": ["Bash(probe *)"]})
+    assert rules.verdict("xargs -n 1 probe arg") == "allow"
+    assert rules.decision("xargs -n 1 probe arg") == "deny"
+    assert rules.decision("echo probe arg") == "allow"
 
 
-@pytest.mark.parametrize(("command", "expected"), SPELLINGS.items())
-def test_unwrap_port_peels_exactly_like_the_plugin(
-    command: str, expected: list[str]
-) -> None:
-    assert unwrap_spellings(command) == expected
-
-
+# The peel itself is pinned by shell-unwrap's own tests; the model asks the
+# vendored bundle for it.
 def test_opencode_model_carries_over_only_a_peeled_deny() -> None:
     rules = OpenCodeRules([("*", "allow"), ("git push *", "ask"), ("rm *", "deny")])
     assert rules.decision("timeout 30 rm -rf x") == "deny"

@@ -1,6 +1,6 @@
 """Compiled OpenCode shell denies hold through wrappers.
 
-The compiler emits each deny bare and installs the bundled opencode-unwrap
+The compiler emits each deny bare and installs the bundled shell-unwrap
 plugin, which denies a command when the rules deny it with its assignments,
 program path, or wrappers peeled. This runs OpenCode on exactly what
 `run_sync` writes; the same home without the plugin is the control.
@@ -102,7 +102,7 @@ def build(
     rules: str,
 ) -> Runtime:
     opencode, sandbox = require_command("opencode"), require_command("sandbox-exec")
-    paths = Paths.create(tmp_path_factory.mktemp("opencode-unwrap").resolve())
+    paths = Paths.create(tmp_path_factory.mktemp("shell-unwrap").resolve())
     recorder_dir = paths.root / "recorder"
     recorder_dir.mkdir()
     for name in (RECORDER, TOOL):

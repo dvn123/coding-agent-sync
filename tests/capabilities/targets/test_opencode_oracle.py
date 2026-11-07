@@ -1,7 +1,7 @@
 """The audit's OpenCode model agrees with OpenCode on a real policy.
 
 `audit.py decisions` predicts every probe command from a model of
-OpenCode's matcher and the opencode-unwrap plugin. This compiles the policy
+OpenCode's matcher and the shell-unwrap plugin. This compiles the policy
 under `CODING_AGENTS_AUDIT_ROOT` with `unmatched: allow`, runs a seeded
 sample of probes through OpenCode with that ruleset and the plugin, and
 requires every observed decision to equal the prediction. The sample favours
@@ -106,7 +106,7 @@ def runtime(
     config.write_text(json.dumps(base | {"permissions": value.value}))
     plugins = paths.config / "opencode" / "plugins"
     plugins.mkdir(parents=True)
-    shutil.copy(opencode.UNWRAP_PLUGIN, plugins / opencode.UNWRAP_PLUGIN.name)
+    shutil.copy(opencode.UNWRAP_PLUGIN, plugins / opencode.UNWRAP_PLUGIN_NAME)
     # An empty PATH keeps every allowed probe from finding its program.
     env = environment(paths, config, str(paths.bin))
     value_runtime = Runtime(

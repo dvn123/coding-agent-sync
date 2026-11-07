@@ -1,6 +1,5 @@
 import fnmatch
 import functools
-import json
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
@@ -43,6 +42,7 @@ from .permissions import (
     glob_variants,
     opencode_paths,
     secret_name_variants,
+    unwrap_reasons_file,
     wrapper_prefixes,
 )
 from .support import (
@@ -169,12 +169,13 @@ def opencode_skill(
     return (skill_tree(skill, root, meta),), [*diagnostics, *issues]
 
 
-# OpenCode matches a shell rule against a command's raw text. The bundled
-# opencode-unwrap plugin denies a command when the rules deny it with its
+# OpenCode matches a shell rule against a command's raw text. shell-unwrap's
+# bundled OpenCode plugin denies a command when the rules deny it with its
 # assignments, program path, or these wrappers peeled, so deny copies behind
 # them are dead. It carries over only a deny, so asks keep their copies, as
 # does a declared wrapper outside this list.
-UNWRAP_PLUGIN = Path(__file__).with_name("opencode-unwrap.js")
+UNWRAP_PLUGIN = Path(__file__).with_name("shell-unwrap") / "opencode.js"
+UNWRAP_PLUGIN_NAME = "shell-unwrap.js"
 UNWRAP_PEELED = frozenset(
     prefix
     for wrapper in (
@@ -204,30 +205,6 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
         UNWRAP_PEELED,
         peels_ask=False,
     )
-
-
-# The plugin reads deny reasons from beside its directory, keyed by the exact
-# resource of the rule that decided the command.
-UNWRAP_REASONS = Path("opencode-unwrap.json")
-
-
-def deny_reasons(permissions: PermissionSource) -> dict[str, str]:
-    """Each emitted deny pattern of a rule that carries a reason, to that reason."""
-    commands = permissions.commands
-    reasons: dict[str, str] = {}
-    for rule in commands.deny:
-        if rule.reason is None:
-            continue
-        alone = permissions.model_copy(
-            update={
-                "commands": commands.model_copy(
-                    update={"allow": (), "ask": (), "deny": (rule,)}
-                )
-            }
-        )
-        for _bucket, _origin, pattern in shell_entries(alone):
-            reasons.setdefault(pattern, rule.reason)
-    return reasons
 
 
 def _opencode_server(fields: dict[str, Any]) -> dict[str, Any]:
@@ -445,19 +422,10 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         files.append(
             OwnedFile(
-                root / "plugins" / UNWRAP_PLUGIN.name, UNWRAP_PLUGIN.read_bytes(), root
+                root / "plugins" / UNWRAP_PLUGIN_NAME, UNWRAP_PLUGIN.read_bytes(), root
             )
         )
-    if reasons := deny_reasons(permissions) if permissions else {}:
-        files.append(
-            OwnedFile(
-                root / UNWRAP_REASONS,
-                (
-                    json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n"
-                ).encode(),
-                root,
-            )
-        )
+        files.extend(unwrap_reasons_file(root, permissions, shell_entries))
     rules_glob = f"~/{(root / 'rules').relative_to(ctx.home).as_posix()}/*.md"
     servers, issues = mcp_servers(sources, "opencode")
     diagnostics.extend(issues)

@@ -36,11 +36,45 @@ CHAIN_ALLOW_PATTERN = f"{RECORDER} ok*"
 DENIAL_TEXT = "Permission denied: "
 RECORDER_ARGUMENT = re.compile(rf"{RECORDER} ([\w-]+)")
 
-# Every chain pairs an allowed segment with a denied one and repeats the
-# operator with both segments allowed, so a refusal is attributable to
-# segmentation rather than to the operator itself. `||` short-circuits, so its
-# control only reaches the left segment.
-CHAINS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+# The rules every shell scenario runs under. Order alone decides: a broad deny,
+# then a narrower option-tolerant allow (PROBE A2), then guards.
+SHELL_RULES = {
+    "*": "allow",
+    f"{RECORDER} *": "deny",
+    ALLOWED_COMMAND: "allow",
+    CHAIN_ALLOW_PATTERN: "allow",
+    **dict.fromkeys(("sh -c *", "bash -c *", "eval *"), "allow"),
+    f"{OPTC} *": "deny",
+    f"{OPTC} -C * status *": "allow",
+    f"{OPTC} * -c *": "deny",
+    f"{OPTC} * push *": "deny",
+}
+
+# Each shell scenario: the command, whether OpenCode completes or denies it,
+# and the recorder markers that must exist afterwards; every other marker the
+# command names must not. Every chain pairs an allowed segment with a denied
+# one and repeats the operator with both segments allowed, so a refusal is
+# attributable to segmentation rather than to the operator itself. `||`
+# short-circuits, so its control only reaches the left segment.
+SHELL: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "allowed": (ALLOWED_COMMAND, "completed", ("allowed",)),
+    "denied-bash": (DENIED_COMMAND, "denied", ()),
+    "near-prefix": (NEAR_PREFIX_COMMAND, "completed", ("near-prefix",)),
+    # A wrapped command is one node headed by the wrapper, so the inner
+    # `blackbox-recorder *` deny never applies and it runs.
+    "wrapped": (WRAPPED_COMMAND, "completed", ("wrapped",)),
+    "probe-opt-plain": (f"{OPTC} -C /tmp status optplain", "completed", ("optplain",)),
+    "probe-opt-broad": (f"{OPTC} other optbroad", "denied", ()),
+    "probe-opt-smuggle-flag": (
+        f"{OPTC} -C /tmp -c core.pager=evil status optflag",
+        "denied",
+        (),
+    ),
+    "probe-opt-smuggle-sub": (
+        f"{OPTC} -C /tmp push origin status optsub",
+        "denied",
+        (),
+    ),
     "chain-and": (f"{RECORDER} ok-and && {RECORDER} no-and", "denied", ()),
     "chain-and-allowed": (
         f"{RECORDER} ok-and-a && {RECORDER} ok-and-b",
@@ -169,19 +203,7 @@ def runtime(
     stub = recorded_server(request, state.respond)
     config = paths.root / "opencode.json"
     permission = {
-        "bash": {
-            "*": "allow",
-            f"{RECORDER} *": "deny",
-            ALLOWED_COMMAND: "allow",
-            CHAIN_ALLOW_PATTERN: "allow",
-            **dict.fromkeys(("sh -c *", "bash -c *", "eval *"), "allow"),
-            # PROBE A2: broad deny, then a narrower option-tolerant allow,
-            # then guards. Order alone must decide all three.
-            f"{OPTC} *": "deny",
-            f"{OPTC} -C * status *": "allow",
-            f"{OPTC} * -c *": "deny",
-            f"{OPTC} * push *": "deny",
-        },
+        "bash": SHELL_RULES,
         # A file inside the session directory is checked by its relative path,
         # and `**/` compiles to a regex that needs a `/`, so `**/.env*` alone
         # lets the root `.env` through; the bare spelling covers it.
@@ -280,42 +302,6 @@ def denied(result: ToolResult, permission: str) -> bool:
 
 def observe(runtime: Runtime, name: str) -> CheckResult:
     scenarios = {
-        "allowed": (
-            "shell",
-            {"command": ALLOWED_COMMAND},
-        ),
-        "denied-bash": (
-            "shell",
-            {"command": DENIED_COMMAND},
-        ),
-        "near-prefix": (
-            "shell",
-            {"command": NEAR_PREFIX_COMMAND},
-        ),
-        "wrapped": (
-            "shell",
-            {"command": WRAPPED_COMMAND},
-        ),
-        "probe-opt-plain": (
-            "shell",
-            {"command": f"{OPTC} -C /tmp status optplain"},
-        ),
-        "probe-opt-broad": (
-            "shell",
-            {"command": f"{OPTC} other optbroad"},
-        ),
-        "probe-opt-smuggle-flag": (
-            "shell",
-            {
-                "command": f"{OPTC} -C /tmp -c core.pager=evil status optflag",
-            },
-        ),
-        "probe-opt-smuggle-sub": (
-            "shell",
-            {
-                "command": f"{OPTC} -C /tmp push origin status optsub",
-            },
-        ),
         "denied-read": ("read", {"path": str(runtime.secret)}),
         "allowed-read": ("read", {"path": str(runtime.example)}),
         "denied-edit": (
@@ -343,8 +329,8 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             {"path": str(runtime.external_allowed)},
         ),
     } | {
-        chain: ("shell", {"command": command})
-        for chain, (command, _, _) in CHAINS.items()
+        shell: ("shell", {"command": command})
+        for shell, (command, _, _) in SHELL.items()
     }
     if name == "allowed-edit":
         runtime.example.write_text("EXAMPLE=allowed\n")
@@ -352,13 +338,12 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
     assert result.process_returncode == 0, f"{name}: OpenCode exited nonzero"
     observation = result.observation
     completed = observation is not None and observation.status == "completed"
-    if (chain := CHAINS.get(name)) is not None:
-        command, outcome, executed = chain
-        ran = frozenset(
-            argument
-            for argument in RECORDER_ARGUMENT.findall(command)
-            if (runtime.recorder_dir / argument).exists()
-        )
+    if (shell := SHELL.get(name)) is not None:
+        command, outcome, executed = shell
+        named = {*RECORDER_ARGUMENT.findall(command), *executed}
+        if command.startswith(OPTC):
+            named.add(command.split()[-1])
+        ran = frozenset(m for m in named if (runtime.recorder_dir / m).exists())
         return CheckResult(
             {
                 f"{name}-outcome": completed
@@ -369,46 +354,6 @@ def observe(runtime: Runtime, name: str) -> CheckResult:
             f"{observation} ran={sorted(ran)}",
         )
     checks = {
-        "allowed": {
-            "allowed-completed": completed,
-            "allowed-executed": (runtime.recorder_dir / "allowed").exists(),
-        },
-        "denied-bash": {
-            "denied-bash": denied(result, "shell"),
-            "denied-not-executed": not (runtime.recorder_dir / "denied").exists(),
-        },
-        "near-prefix": {
-            "near-prefix-completed": completed,
-            "near-prefix-executed": (runtime.recorder_dir / "near-prefix").exists(),
-        },
-        # A wrapped command is one node headed by the wrapper, so the inner
-        # `blackbox-recorder *` deny never applies and it runs.
-        "wrapped": {
-            "wrapped-completed": completed,
-            "wrapped-executed": (runtime.recorder_dir / "wrapped").exists(),
-        },
-        "probe-opt-plain": {
-            "probe-opt-plain-completed": completed,
-            "probe-opt-plain-executed": (runtime.recorder_dir / "optplain").exists(),
-        },
-        "probe-opt-broad": {
-            "probe-opt-broad-denied": denied(result, "shell"),
-            "probe-opt-broad-not-executed": not (
-                runtime.recorder_dir / "optbroad"
-            ).exists(),
-        },
-        "probe-opt-smuggle-flag": {
-            "probe-opt-smuggle-flag-denied": denied(result, "shell"),
-            "probe-opt-smuggle-flag-not-executed": not (
-                runtime.recorder_dir / "optflag"
-            ).exists(),
-        },
-        "probe-opt-smuggle-sub": {
-            "probe-opt-smuggle-sub-denied": denied(result, "shell"),
-            "probe-opt-smuggle-sub-not-executed": not (
-                runtime.recorder_dir / "optsub"
-            ).exists(),
-        },
         "denied-read": {"denied-read": denied(result, "read")},
         "allowed-read": {"allowed-read": completed},
         "denied-edit": {
@@ -431,22 +376,6 @@ observation = cached_scenario_fixture(observe)
 
 
 EXPECTATIONS = (
-    ("allowed", "allowed-completed"),
-    ("allowed", "allowed-executed"),
-    ("denied-bash", "denied-bash"),
-    ("denied-bash", "denied-not-executed"),
-    ("near-prefix", "near-prefix-completed"),
-    ("near-prefix", "near-prefix-executed"),
-    ("wrapped", "wrapped-completed"),
-    ("wrapped", "wrapped-executed"),
-    ("probe-opt-plain", "probe-opt-plain-completed"),
-    ("probe-opt-plain", "probe-opt-plain-executed"),
-    ("probe-opt-broad", "probe-opt-broad-denied"),
-    ("probe-opt-broad", "probe-opt-broad-not-executed"),
-    ("probe-opt-smuggle-flag", "probe-opt-smuggle-flag-denied"),
-    ("probe-opt-smuggle-flag", "probe-opt-smuggle-flag-not-executed"),
-    ("probe-opt-smuggle-sub", "probe-opt-smuggle-sub-denied"),
-    ("probe-opt-smuggle-sub", "probe-opt-smuggle-sub-not-executed"),
     ("denied-read", "denied-read"),
     ("allowed-read", "allowed-read"),
     ("denied-edit", "denied-edit"),
@@ -456,8 +385,8 @@ EXPECTATIONS = (
     ("denied-external", "denied-external"),
     ("allowed-external", "allowed-external"),
     *(
-        (chain, f"{chain}-{check}")
-        for chain in CHAINS
+        (shell, f"{shell}-{check}")
+        for shell in SHELL
         for check in ("outcome", "markers")
     ),
 )

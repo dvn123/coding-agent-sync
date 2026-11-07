@@ -136,7 +136,8 @@ Generated targets remain rooted below `home`:
 
 ## Development
 
-The project requires Python 3.14 and uses uv:
+The project requires Python 3.14 and uses uv. Its tests and the permission
+audit also need Bun, which runs the vendored shell-unwrap bundles:
 
 ```sh
 uv sync --locked

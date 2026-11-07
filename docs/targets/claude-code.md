@@ -10,6 +10,7 @@
 | Command | `<home>/.claude/skills/<source-stem>/SKILL.md`; Claude merged commands into skills, so a command may not share a skill's name |
 | Agent | `<home>/.claude/agents/<source-file>.md` |
 | Permissions | owned pointers in `<home>/.claude/settings.json` |
+| Permission hook | `<home>/.claude/hooks/shell-unwrap.js`, its `hooks/PreToolUse` entry, and `<home>/.claude/shell-unwrap.json` for deny reasons |
 
 Global and rule bodies are Markdown-only. Skills, commands, and agents use
 canonical values plus strict `targets.claude.native` frontmatter. Unknown
@@ -43,16 +44,36 @@ and `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, and
 bare `xargs`. So `/usr/bin/git push -f` and `/usr/bin/env rm -rf x` need no
 copies, and neither do those wrappers; `xargs` with options still does. An
 allow strips only the assignments Claude lists as safe, so a declared
-`assignments` token lands in front of allow rules alone. Claude
-does not look past a leading redirect (`2>&1 rm -rf x`), so whenever the
-policy has a deny, every command of that shape is denied outright. The
-`deny-reach`, `ask-reach`, `allow-assign`, and `compiled-guard` live scenarios
+`assignments` token lands in front of allow rules alone. Claude also
+looks past a leading redirect (`2>&1 rm -rf x`), so that shape needs no
+copies either. The `deny-reach`, `ask-reach`, `allow-assign`, and `compiled-guard` live scenarios
 pin this. The compiler targets the latest Claude Code release and the copy the
 Claude app bundles for its Code tab (under
 `~/Library/Application Support/Claude/claude-code/`), which can trail the CLI;
 put that copy first on `PATH` to probe it. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
+
+Claude matches an allow rule only against a flat command, so a loop, a command
+substitution, a subshell, a `cd` chain, or a wrapper with options (`env -u`,
+`timeout -k`, `/usr/bin/time -p`, `xargs -n1`) prompts even when every program
+in it is allowed, and it never shows the model a deny rule's `reason`. Whenever
+it emits permissions, the compiler installs shell-unwrap's Claude bundle
+(source: <https://github.com/dvn123/opencode-unwrap>, vendored as
+`targets/shell-unwrap/claude.js`) as a `Bash` PreToolUse hook, run by Bun with
+tree-sitter's bash grammar embedded. The hook reads the deployed `permissions`
+and the reasons file, which maps every pattern a reasoned deny emits to its
+reason, and judges each command node with the same peel as the OpenCode
+target's shell-unwrap plugin: it denies the command when any peeled spelling of
+a node matches a deny, in the plugin's words and with the rule's reason, and
+allows it when every node reaches an allow through transparent wrappers alone.
+Claude still evaluates its deny and ask rules after a hook allow, so the hook
+removes prompts and never lifts a guard. It stays silent,
+leaving Claude's own flow, on anything it does not model: file redirects, `tee`,
+`find` actions, `fd -x`, `cd` outside the working directories or beside `git`,
+shell variable assignments, function definitions, dynamic program names, parse
+errors, and any failure, Bun's absence included. shell-unwrap's own tests pin
+its decisions; `tests/test_sync.py` runs the deployed hook once.
 
 `patches/claude-settings.yaml` targets `<home>/.claude/settings.json` and
 `patches/claude-mcp.yaml` targets `<home>/.claude.json`. Local counterparts

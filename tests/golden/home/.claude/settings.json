@@ -25,29 +25,6 @@
     "deny": [
       "Bash(fixture-tool remove)",
       "Bash(fixture-tool -C* remove)",
-      "Bash(<*)",
-      "Bash(>*)",
-      "Bash(&>*)",
-      "Bash(0<*)",
-      "Bash(0>*)",
-      "Bash(1<*)",
-      "Bash(1>*)",
-      "Bash(2<*)",
-      "Bash(2>*)",
-      "Bash(3<*)",
-      "Bash(3>*)",
-      "Bash(4<*)",
-      "Bash(4>*)",
-      "Bash(5<*)",
-      "Bash(5>*)",
-      "Bash(6<*)",
-      "Bash(6>*)",
-      "Bash(7<*)",
-      "Bash(7>*)",
-      "Bash(8<*)",
-      "Bash(8>*)",
-      "Bash(9<*)",
-      "Bash(9>*)",
       "Bash(*FIXTURE_TOKEN*)",
       "Read(//**/.env)",
       "Edit(//**/.env)",
@@ -67,6 +44,20 @@
         }
       ]
     }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun <tmp>/home/.claude/hooks/shell-unwrap.js 2>/dev/null || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   },
   "fixture": {
     "claude": true

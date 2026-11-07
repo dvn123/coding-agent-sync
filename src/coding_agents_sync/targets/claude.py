@@ -1,5 +1,6 @@
 import json
 import re
+import shlex
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,6 @@ from ..sources import (
     resolve_model_policy,
 )
 from .permissions import (
-    CLAUDE_OPAQUE_COMMANDS,
     CLAUDE_PEELED_PREFIXES,
     CLAUDE_TOOL_PATTERNS,
     bucket_entries,
@@ -56,6 +56,7 @@ from .permissions import (
     literal_directories,
     secret_name_variants,
     tool_patterns,
+    unwrap_reasons_file,
 )
 from .support import (
     collision_error,
@@ -243,6 +244,32 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
     return bucket_entries(permissions, glob_variants, CLAUDE_PEELED_PREFIXES)
 
 
+# Claude matches an allow only against a flat command and never shows the model
+# a deny rule's reason. The bundled PreToolUse hook allows a command when every
+# command inside it matches an allow, and denies one with the reason of the
+# deny it matches; Claude still applies its own deny and ask rules after a hook
+# allow. It is shell-unwrap's Claude bundle, run by Bun with tree-sitter's
+# WASM embedded; failing that, it stays silent, which leaves the command to
+# Claude.
+UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "claude.js"
+UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
+UNWRAP_TIMEOUT_SECONDS = 10
+
+
+def _unwrap_hook(script: Path) -> dict[str, Any]:
+    command = f"bun {shlex.quote(script.as_posix())} 2>/dev/null"
+    return {
+        "matcher": "Bash",
+        "hooks": [
+            {
+                "type": "command",
+                "command": f"{command} || true",
+                "timeout": UNWRAP_TIMEOUT_SECONDS,
+            }
+        ],
+    }
+
+
 def _permission_values(
     sources: SourceBundle,
     tools: Mapping[PermissionTool, Decision],
@@ -279,7 +306,6 @@ def _permission_values(
         f"Bash({pattern})"
         for pattern in (
             *buckets["deny"],
-            *(CLAUDE_OPAQUE_COMMANDS if buckets["deny"] else ()),
             *secret_name_variants(permissions.secret_names),
         )
     ] + [
@@ -522,11 +548,23 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
     folded = fold_edit_write(
         sources.permissions.tools if sources.permissions else {}, "Claude"
     )
+    hook_values: list[NativeValue] = []
     if permissions := sources.permissions:
         _, issues = resolve("claude", [permissions])
         diagnostics.extend(issues)
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
+        script = root / UNWRAP_HOOK_PATH
+        files.append(OwnedFile(script, UNWRAP_HOOK.read_bytes(), root))
+        files.extend(unwrap_reasons_file(root, permissions, shell_entries))
+        hook_values.append(
+            NativeValue(
+                "claude",
+                root / "settings.json",
+                ("hooks", "PreToolUse"),
+                [_unwrap_hook(script)],
+            )
+        )
     servers, issues = mcp_servers(sources, "claude")
     diagnostics.extend(issues)
     mcp_rules: dict[Decision, list[str]] = {"allow": [], "ask": [], "deny": []}
@@ -540,6 +578,7 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
             NativeValue("claude", root / "settings.json", pointer, value)
             for pointer, value in _permission_values(sources, folded[0], mcp_rules)
         ),
+        *hook_values,
         *(
             NativeValue(
                 "claude-mcp",

@@ -8,14 +8,18 @@ lowering can be shown to leave each target's decisions unchanged.
 The OpenCode model ports its `Wildcard.match` and last-match evaluation. The
 Claude model reproduces the matching the live `deny-reach` scenarios pin: the
 wildcard grammar, the peeling of assignments, program paths, and wrappers
-before deny and ask rules, and the retry behind a bare `xargs`.
+before deny and ask rules, and the retry behind a bare `xargs`. Both targets
+also run shell-unwrap, which denies a command when a deny matches a spelling
+its peel yields; the audit asks the vendored bundle for those spellings
+through Bun, so the peel exists once, in TypeScript.
 """
 
 import collections
 import json
 import re
+import shlex
+import subprocess
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Annotated
@@ -34,8 +38,6 @@ from coding_agents_sync.targets.permissions import fold_edit_write
 
 UNMATCHED = ("ask", "allow")
 BUCKETS = ("deny", "ask", "allow")
-ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
-REDIRECT = re.compile(r"(?:\d+|&)?(?:>>|>&|>\||<>|<&|>|<)(.*)", re.S)
 # Claude peels these before matching every rule, with the options each takes
 # a value for; `timeout` and `nice` also take a leading positional.
 CLAUDE_ALWAYS_PEELED = {
@@ -67,6 +69,7 @@ WRAPPER_SPELLINGS = {
     "stdbuf": ("stdbuf -oL",),
 }
 EXTRA_PREFIXES = ("FOO=1", "sudo", "> /dev/null", "2>&1")
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # Directories a probe runs a program from.
 PROGRAM_DIRECTORIES = (
     "/bin/",
@@ -122,6 +125,14 @@ def _peel(words: list[str], table: dict[str, set[str]]) -> list[str] | None:
     return words[index:]
 
 
+def _unquoted(word: str) -> str:
+    try:
+        parts = shlex.split(word)
+    except ValueError:
+        return word
+    return parts[0] if parts else word
+
+
 @cache
 def claude_candidates(command: str, *, deny: bool) -> set[str]:
     """Every spelling Claude tests a rule against, whitespace normalized."""
@@ -144,7 +155,7 @@ def claude_candidates(command: str, *, deny: bool) -> set[str]:
             and words[1] in ("-S", "--split-string")
         ):
             peeled = " ".join(words[2:]).strip("'\"").split()
-        elif deny and words and (head := _shell_words(words[0])[0][0]) != words[0]:
+        elif deny and words and (head := _unquoted(words[0])) != words[0]:
             # A quoted or escaped program name: `\rm`, `"rm"`.
             peeled = [head, *words[1:]]
         elif deny and words and words[0].startswith("/"):
@@ -158,201 +169,36 @@ def claude_candidates(command: str, *, deny: bool) -> set[str]:
     return found
 
 
-@dataclass(frozen=True)
-class _Wrapper:
-    values: frozenset[str] = frozenset()
-    positionals: int = 0
-    lookups: frozenset[str] = frozenset()
-    assignments: bool = False
+# shell-unwrap's peel, which its OpenCode plugin and Claude hook run over every
+# shell command. The Claude bundle exports it; one Bun process answers a batch.
+UNWRAP_BUNDLE = claude.UNWRAP_HOOK
+_SPELLINGS: dict[str, list[str]] = {}
 
 
-# A port of the opencode-unwrap plugin's `peel.ts`, which OpenCode runs over
-# every shell command; `test_audit` replays the plugin's own cases.
-UNWRAP_WRAPPERS = {
-    "builtin": _Wrapper(),
-    "command": _Wrapper(lookups=frozenset({"-v", "-V"})),
-    "doas": _Wrapper(frozenset({"-a", "-C", "-u"})),
-    "env": _Wrapper(
-        frozenset(
-            [
-                "-a",
-                "-C",
-                "-P",
-                "-S",
-                "-u",
-                "--argv0",
-                "--chdir",
-                "--split-string",
-                "--unset",
-            ]
-        ),
-        assignments=True,
-    ),
-    "exec": _Wrapper(frozenset({"-a"})),
-    "nice": _Wrapper(frozenset({"-n", "--adjustment"})),
-    "nocorrect": _Wrapper(),
-    "noglob": _Wrapper(),
-    "nohup": _Wrapper(),
-    "stdbuf": _Wrapper(frozenset({"-e", "-i", "-o", "--error", "--input", "--output"})),
-    "sudo": _Wrapper(
-        assignments=True,
-        values=frozenset(
-            [
-                "-C",
-                "-D",
-                "-g",
-                "-h",
-                "-p",
-                "-R",
-                "-r",
-                "-T",
-                "-t",
-                "-U",
-                "-u",
-                "--chdir",
-                "--chroot",
-                "--close-from",
-                "--command-timeout",
-                "--group",
-                "--host",
-                "--other-user",
-                "--prompt",
-                "--role",
-                "--type",
-                "--user",
-            ]
-        ),
-    ),
-    "time": _Wrapper(frozenset({"-f", "-o", "--format", "--output"})),
-    "timeout": _Wrapper(
-        frozenset({"-k", "--kill-after", "-s", "--signal"}), positionals=1
-    ),
-    "xargs": _Wrapper(
-        frozenset(
-            [
-                "-a",
-                "-d",
-                "-E",
-                "-I",
-                "-J",
-                "-L",
-                "-n",
-                "-P",
-                "-R",
-                "-S",
-                "-s",
-                "--arg-file",
-                "--delimiter",
-                "--max-args",
-                "--max-chars",
-                "--max-lines",
-                "--max-procs",
-                "--process-slot-var",
-            ]
-        )
-    ),
-}
-
-
-def _shell_words(text: str) -> list[tuple[str, int, int]]:
-    """`(value, start, end)` per word, honouring quotes and backslashes."""
-    found: list[tuple[str, int, int]] = []
-    index = 0
-    while index < len(text):
-        while index < len(text) and text[index].isspace():
-            index += 1
-        if index >= len(text):
-            break
-        start, value = index, ""
-        while index < len(text) and not text[index].isspace():
-            char = text[index]
-            if char == "'":
-                close = text.find("'", index + 1)
-                stop = len(text) if close == -1 else close
-                value += text[index + 1 : stop]
-                index = stop + 1
-            elif char == '"':
-                index += 1
-                while index < len(text) and text[index] != '"':
-                    if text[index] == "\\" and index + 1 < len(text):
-                        index += 1
-                    value += text[index]
-                    index += 1
-                index += 1
-            elif char == "\\" and index + 1 < len(text):
-                value += text[index + 1]
-                index += 2
-            else:
-                value += char
-                index += 1
-        found.append((value, start, min(index, len(text))))
-    return found
-
-
-def _wrapped(words: list[tuple[str, int, int]], wrapper: _Wrapper) -> int | None:
-    index, positionals = 1, wrapper.positionals
-    while index < len(words):
-        value = words[index][0]
-        if value == "--":
-            return index + 1 if index + 1 < len(words) else None
-        if value in wrapper.lookups:
-            return None
-        if value.startswith("-") and value != "-":
-            index += 2 if value in wrapper.values else 1
-        elif wrapper.assignments and ASSIGNMENT.match(value):
-            index += 1
-        elif positionals > 0:
-            positionals -= 1
-            index += 1
-        else:
-            return index
-    return None
-
-
-def _peel_once(text: str) -> list[str]:
-    words = _shell_words(text)
-    if not words:
-        return []
-    head, head_start, head_end = words[0]
-    raw = text[head_start:head_end]
-    if redirect := REDIRECT.match(raw):
-        rest = words[1 if redirect[1] else 2 :]
-        return [text[rest[0][1] :]] if rest else []
-    if ASSIGNMENT.match(head):
-        return [text[words[1][1] :]] if len(words) > 1 else []
-    found: list[str] = []
-    program = head[head.rfind("/") + 1 :]
-    if program and program != raw:
-        found.append(program + text[head_end:])
-    if wrapper := UNWRAP_WRAPPERS.get(program):
-        if (index := _wrapped(words, wrapper)) is not None:
-            found.append(text[words[index][1] :])
-        if program == "env":
-            split = next(
-                (
-                    i
-                    for i, word in enumerate(words)
-                    if word[0] in ("-S", "--split-string")
-                ),
-                -1,
-            )
-            if split > 0 and split + 1 < len(words):
-                value, _, end = words[split + 1]
-                found.append(value + text[end:])
-    return [spelling for spelling in (item.strip() for item in found) if spelling]
+def prime_spellings(commands: Iterable[str]) -> None:
+    """Fetch the peeled spellings of every command not yet known, in one call."""
+    missing = [c for c in dict.fromkeys(commands) if c not in _SPELLINGS]
+    if not missing:
+        return
+    script = (
+        f"const {{ spellings }} = await import({json.dumps(str(UNWRAP_BUNDLE))});"
+        "const commands = await Bun.stdin.json();"
+        "process.stdout.write(JSON.stringify(commands.map((c) => spellings(c))));"
+    )
+    result = subprocess.run(
+        ["bun", "-e", script],
+        input=json.dumps(missing),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    _SPELLINGS.update(zip(missing, json.loads(result.stdout), strict=True))
 
 
 def unwrap_spellings(command: str) -> list[str]:
-    """Every distinct peeled spelling of `command`, excluding itself."""
-    original = command.strip()
-    seen, pending = {original: None}, [original]
-    while pending:
-        for spelling in _peel_once(pending.pop()):
-            if spelling not in seen:
-                seen[spelling] = None
-                pending.append(spelling)
-    del seen[original]
-    return list(seen)
+    if command not in _SPELLINGS:
+        prime_spellings([command])
+    return _SPELLINGS[command]
 
 
 # Commands
@@ -466,7 +312,7 @@ def _judges(sources: SourceBundle) -> dict[str, Callable[[str], str]]:
         config = compiled(_with_unmatched(sources, unmatched))
         claude_permissions, shell_rules = config["claude"], config["opencode"]
         assert isinstance(claude_permissions, dict) and isinstance(shell_rules, list)
-        judges[f"claude/{unmatched}"] = ClaudeRules(claude_permissions).verdict
+        judges[f"claude/{unmatched}"] = ClaudeRules(claude_permissions).decision
         judges[f"opencode/{unmatched}"] = OpenCodeRules(shell_rules).decision
     return judges
 
@@ -477,6 +323,7 @@ def decisions(
     sources = load_sources(config_root)
     assert sources.permissions is not None
     probes = list(dict.fromkeys([*probe_commands(sources.permissions), *extra]))
+    prime_spellings(probes)
     return {
         view: {probe: judge(probe) for probe in probes}
         for view, judge in _judges(sources).items()
@@ -494,6 +341,7 @@ def redundant(config_root: Path) -> list[str]:
     permissions = sources.permissions
     assert permissions is not None
     commands = permissions.commands
+    prime_spellings(probe_commands(permissions))
     full = _judges(sources)
     found = []
     for bucket, rules in commands.buckets:
@@ -590,6 +438,18 @@ class ClaudeRules:
                     return bucket
         return "unmatched"
 
+    def decision(self, command: str) -> str:
+        """The verdict, or deny when a deny rule matches a spelling
+        shell-unwrap's Claude hook peels from the command."""
+        verdict = self.verdict(command)
+        if verdict != "deny" and any(
+            claude_match(pattern, spelling)
+            for spelling in unwrap_spellings(command)
+            for pattern in self.index["deny"].lookup((spelling,))
+        ):
+            return "deny"
+        return verdict
+
 
 class OpenCodeRules:
     def __init__(self, rules: Sequence[tuple[str, str]]) -> None:
@@ -615,7 +475,7 @@ class OpenCodeRules:
 
     def decision(self, command: str) -> str:
         """The native effect, or deny when the rules deny a spelling the
-        opencode-unwrap plugin peels from the command."""
+        shell-unwrap plugin peels from the command."""
         effect = self.native(command)
         if effect != "deny" and any(
             self.native(spelling) == "deny" for spelling in unwrap_spellings(command)

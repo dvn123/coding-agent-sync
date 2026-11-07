@@ -135,14 +135,52 @@ function wrapped(list, wrapper) {
   return;
 }
 var TRANSPARENT = {
+  builtin: [],
+  command: [],
+  env: ["-i", "--ignore-environment", "-u", "--unset"],
   nice: ["-n", "--adjustment"],
-  nohup: [],
-  noglob: [],
   nocorrect: [],
+  noglob: [],
+  nohup: [],
+  stdbuf: ["-e", "-i", "-o", "--error", "--input", "--output"],
   time: ["-p"],
-  timeout: ["-k", "--kill-after", "-s", "--signal", "--foreground", "--preserve-status", "-v", "--verbose"]
+  timeout: ["-k", "--kill-after", "-s", "--signal", "--foreground", "--preserve-status", "-v", "--verbose"],
+  xargs: [
+    "-0",
+    "-d",
+    "-E",
+    "-I",
+    "-J",
+    "-L",
+    "-n",
+    "-P",
+    "-r",
+    "-s",
+    "-t",
+    "-x",
+    "--delimiter",
+    "--exit",
+    "--max-args",
+    "--max-chars",
+    "--max-lines",
+    "--max-procs",
+    "--no-run-if-empty",
+    "--null",
+    "--verbose"
+  ]
 };
 var SYSTEM_DIRS = ["", "/bin/", "/usr/bin/"];
+var XARGS_INPUT = "<xargs-input>";
+var XARGS_REPLACE = ["-I", "-J", "--replace"];
+function permitted(value, options) {
+  if (value === "--")
+    return true;
+  if (!value.startsWith("-"))
+    return !ASSIGNMENT.test(value);
+  if (options.includes(value.split("=")[0]))
+    return true;
+  return !value.startsWith("--") && value.length > 2 && options.includes(value.slice(0, 2));
+}
 function transparent(command) {
   const text = command.trim();
   const list = words(text);
@@ -156,8 +194,12 @@ function transparent(command) {
   const index = wrapped(list, WRAPPERS[program]);
   if (index === undefined)
     return;
-  const safe = list.slice(1, index).every(({ value }) => !value.startsWith("-") || value === "--" || options.includes(value.split("=")[0]));
-  return safe ? text.slice(list[index].start).trim() : undefined;
+  const before = list.slice(1, index);
+  if (!before.every(({ value }) => permitted(value, options)))
+    return;
+  const inner = text.slice(list[index].start).trim();
+  const replaces = before.some(({ value }) => XARGS_REPLACE.some((flag) => value.split("=")[0].startsWith(flag)));
+  return program === "xargs" && !replaces ? `${inner} ${XARGS_INPUT}` : inner;
 }
 function peelOnce(text) {
   const list = words(text);
@@ -227,6 +269,16 @@ function evaluate(rules, action, resource) {
 }
 
 // src/review.ts
+async function readReasons(path) {
+  try {
+    const reasons = (await Bun.file(path).json())?.reasons;
+    if (!reasons || typeof reasons !== "object")
+      return {};
+    return Object.fromEntries(Object.entries(reasons).filter(([, reason]) => typeof reason === "string"));
+  } catch {
+    return {};
+  }
+}
 async function review(event, rules, reasons = {}) {
   if (event.action !== "shell" || event.effect === "deny")
     return;
@@ -238,7 +290,7 @@ async function review(event, rules, reasons = {}) {
     loaded = await rules();
   } catch (cause) {
     event.effect = "deny";
-    event.message = `opencode-unwrap could not load the shell rules: ${cause instanceof Error ? cause.message : cause}`;
+    event.message = `shell-unwrap could not load the shell rules: ${cause instanceof Error ? cause.message : cause}`;
     return;
   }
   const denied = peeled.find((spelling) => evaluate(loaded, "shell", spelling) === "deny");
@@ -275,22 +327,11 @@ function denial(command, reason) {
   return `\`${command}\` is denied by the shell rules` + (reason ? `: ${reason}` : "");
 }
 
-// src/index.ts
-async function loadReasons() {
-  try {
-    const document = await Bun.file(`${import.meta.dir}/../opencode-unwrap.json`).json();
-    const reasons = document?.reasons;
-    if (!reasons || typeof reasons !== "object")
-      return {};
-    return Object.fromEntries(Object.entries(reasons).filter(([, reason]) => typeof reason === "string"));
-  } catch {
-    return {};
-  }
-}
+// src/opencode.ts
 var plugin = {
-  id: "opencode-unwrap",
+  id: "shell-unwrap",
   async setup(ctx) {
-    const reasons = await loadReasons();
+    const reasons = await readReasons(`${import.meta.dir}/../shell-unwrap.json`);
     async function rules(sessionID, agent) {
       const session = await ctx.session.get({ sessionID });
       const agentID = agent ?? session.agent;
@@ -314,7 +355,7 @@ var plugin = {
     });
   }
 };
-var src_default = plugin;
+var opencode_default = plugin;
 export {
-  src_default as default
+  opencode_default as default
 };

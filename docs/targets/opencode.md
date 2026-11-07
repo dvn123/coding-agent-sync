@@ -14,7 +14,7 @@ it has moved to one, and the rest still passes through that migration.
 | Command | `<home>/.config/opencode/commands/<source-file>.md` |
 | Agent | `<home>/.config/opencode/agents/<source-file>.md` |
 | Permissions | owned native `/permissions` rule list in `opencode.json` |
-| Permissions | `<home>/.config/opencode/plugins/opencode-unwrap.js`, the bundled wrapper plugin |
+| Permissions | `<home>/.config/opencode/plugins/shell-unwrap.js`, the bundled wrapper plugin |
 
 The compiler owns only its glob in `instructions`; other entries, hand-written
 or added with a patch `extend`, sit beside it. Rules have no
@@ -52,28 +52,30 @@ and ask. This requires OpenCode 2.0 or later: 1.x answered a denial with
 1.3 MB per denial against a real corpus. 2.0 answers with
 `Permission.BlockedError`, whose model-facing message names only the
 permission. A deny rule's `reason` lands in `<home>/.config/opencode/
-opencode-unwrap.json`, keyed by every pattern the rule emits, and the plugin
+shell-unwrap.json`, keyed by every pattern the rule emits, and the plugin
 names it on the denial; the file is removed when no deny carries a reason.
 
 OpenCode matches a shell rule against a command node's raw text, so a bare
 deny misses `timeout 30 rm`, `FOO=1 rm`, and `/bin/rm`. The compiler installs
-the opencode-unwrap plugin (source: <https://github.com/dvn123/opencode-unwrap>, vendored as
-`targets/opencode-unwrap.js`) whenever it emits permissions. The plugin
+shell-unwrap's OpenCode plugin (source: <https://github.com/dvn123/opencode-unwrap>,
+vendored as `targets/shell-unwrap/opencode.js`) whenever it emits permissions. The plugin
 hooks `permission.evaluate` and denies a command when the agent's and
 session's rules deny it with its assignments, program path, or wrappers
 peeled, so denies land bare, with no directory copies and no copies behind
 the wrappers the plugin peels. It carries over a deny, so ask rules and any
 declared wrapper it does not peel keep their copies. The one allow it carries
-is through transparent wrappers (`timeout`, `time -p`, `nice`, `nohup`,
-`noglob`, `nocorrect`) for a command that fell to the catch-all; the audit does
-not model that allow.
-The
-`opencode.unwrap` live scenarios run OpenCode on the compiled output; the
-opt-in oracle scenario checks the audit's model against OpenCode on a real
-policy. To update the plugin, run `bun run build` in its repository, copy
-`dist/opencode-unwrap.js` over the vendored file, and copy its
-`test/spellings.json` to `tests/fixtures/opencode-unwrap/`, which the audit's
-port must match exactly.
+is through transparent wrappers (`builtin`, `command`, `env -i`/`-u`, `nice`,
+`nocorrect`, `noglob`, `nohup`, `stdbuf`, `time -p`, `timeout`, `xargs`) for a
+command that fell to the catch-all; `xargs` carries only to a rule that takes
+one more argument. The audit does not model that allow. The peel exists once,
+in shell-unwrap's TypeScript: the Claude target's hook bundles the same code,
+and the audit asks the vendored Claude bundle for its spellings through Bun, so
+the compiler's tests need Bun. The `opencode.unwrap` live scenarios run
+OpenCode on the compiled output; the opt-in oracle scenario checks the audit's
+model against OpenCode on a real policy. To update both bundles, run
+`bun run check` in that repository, then copy
+`dist/opencode/shell-unwrap.js` to `targets/shell-unwrap/opencode.js` and
+`dist/claude/shell-unwrap.js` to `targets/shell-unwrap/claude.js`.
 
 File permissions are checked by path relative to the session directory for
 files inside it and by absolute path otherwise, and the matcher's `**/` needs

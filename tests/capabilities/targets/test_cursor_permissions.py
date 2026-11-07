@@ -255,6 +255,61 @@ SCENARIOS = {
 }
 
 
+CLI_CONFIG = {
+    "version": 1,
+    "approvalMode": "allowlist",
+    "permissions": {
+        "allow": [
+            f"Shell({ALLOWED})",
+            f"Shell({EXACT}:status)",
+            # One plain entry matches the bare command and any
+            # arguments, like the `prog:status` + `prog:status *`
+            # pair it replaces.
+            f"Shell({TRAILING} status)",
+            # Allowlisting an interpreter asks whether the engine
+            # inspects the payload it carries.
+            "Shell(sh)",
+            "Shell(eval)",
+            # PROBE: interior wildcard between two literal tokens.
+            f"Shell({OPT}:-C * status)",
+            f"Shell({OPT}:-C * status *)",
+            # PROBE: allowlisted wrapper head, control for the shim.
+            f"Shell({WRAP_OK})",
+            # PROBE B: multi-token literal sequence after a hole.
+            f"Shell({API}:api *)",
+            # PROBE G: only the trailing-star form, no bare form.
+            f"Shell({OPT2}:-C * status *)",
+            # A wrapper allow attached to its rule, with and
+            # without the wrapper's own arguments. Never a bare
+            # `Shell(twrap2)`, which would allow any payload.
+            f"Shell({WRAP2} {ALLOWED})",
+            f"Shell({WRAP2}:* {ALLOWED})",
+            f"Shell({WRAP2}:* {ALLOWED} *)",
+            # Allowlisted, then clawed back by the hook below.
+            f"Shell({HOOKED})",
+            # PROBE: exact-bare form, colon with an empty
+            # argstring.
+            f"Shell({BARE_EXACT}:)",
+        ],
+        "deny": [
+            f"Shell({DENIED})",
+            # PROBE P2c: interior wildcard in the DENY channel,
+            # i.e. can a guard claw back the greedy hole?
+            f"Shell({OPT}:* push *)",
+            f"Shell({OPT}:* -c *)",
+            f"Shell({API}:api * -X DELETE *)",
+            f"Shell({API}:api * -X DELETE)",
+        ],
+        # Undocumented soft-deny channel: forces a prompt for
+        # the matched command instead of blocking it outright.
+        "smartAllowlistDenylist": [f"Shell({SMART})"],
+    },
+}
+# The Desktop permissions file shares the CLI's permission provider, so
+# its terminalAllowlist is enforced by this runtime too.
+DESKTOP_CONFIG = {"approvalMode": "allowlist", "terminalAllowlist": [DESKTOP]}
+
+
 @pytest.fixture(scope="module")
 def runtime(
     request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
@@ -263,65 +318,8 @@ def runtime(
     paths = Paths.create(tmp_path_factory.mktemp("cursor-permissions").resolve())
     cursor = paths.root / "cursor"
     cursor.mkdir()
-    (cursor / "cli-config.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "approvalMode": "allowlist",
-                "permissions": {
-                    "allow": [
-                        f"Shell({ALLOWED})",
-                        f"Shell({EXACT}:status)",
-                        # One plain entry matches the bare command and any
-                        # arguments, like the `prog:status` + `prog:status *`
-                        # pair it replaces.
-                        f"Shell({TRAILING} status)",
-                        # Allowlisting an interpreter asks whether the engine
-                        # inspects the payload it carries.
-                        "Shell(sh)",
-                        "Shell(eval)",
-                        # PROBE: interior wildcard between two literal tokens.
-                        f"Shell({OPT}:-C * status)",
-                        f"Shell({OPT}:-C * status *)",
-                        # PROBE: allowlisted wrapper head, control for the shim.
-                        f"Shell({WRAP_OK})",
-                        # PROBE B: multi-token literal sequence after a hole.
-                        f"Shell({API}:api *)",
-                        # PROBE G: only the trailing-star form, no bare form.
-                        f"Shell({OPT2}:-C * status *)",
-                        # A wrapper allow attached to its rule, with and
-                        # without the wrapper's own arguments. Never a bare
-                        # `Shell(twrap2)`, which would allow any payload.
-                        f"Shell({WRAP2} {ALLOWED})",
-                        f"Shell({WRAP2}:* {ALLOWED})",
-                        f"Shell({WRAP2}:* {ALLOWED} *)",
-                        # Allowlisted, then clawed back by the hook below.
-                        f"Shell({HOOKED})",
-                        # PROBE: exact-bare form, colon with an empty
-                        # argstring.
-                        f"Shell({BARE_EXACT}:)",
-                    ],
-                    "deny": [
-                        f"Shell({DENIED})",
-                        # PROBE P2c: interior wildcard in the DENY channel,
-                        # i.e. can a guard claw back the greedy hole?
-                        f"Shell({OPT}:* push *)",
-                        f"Shell({OPT}:* -c *)",
-                        f"Shell({API}:api * -X DELETE *)",
-                        f"Shell({API}:api * -X DELETE)",
-                    ],
-                    # Undocumented soft-deny channel: forces a prompt for
-                    # the matched command instead of blocking it outright.
-                    "smartAllowlistDenylist": [f"Shell({SMART})"],
-                },
-            }
-        )
-    )
-    # The Desktop permissions file shares the CLI's permission provider, so
-    # its terminalAllowlist is enforced by this runtime too.
-    (cursor / "permissions.json").write_text(
-        json.dumps({"approvalMode": "allowlist", "terminalAllowlist": [DESKTOP]})
-    )
+    (cursor / "cli-config.json").write_text(json.dumps(CLI_CONFIG))
+    (cursor / "permissions.json").write_text(json.dumps(DESKTOP_CONFIG))
     hook = paths.bin / "shell-hook.sh"
     hook.write_text(
         "#!/bin/sh\n"

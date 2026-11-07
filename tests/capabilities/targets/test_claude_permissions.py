@@ -17,7 +17,6 @@ from capabilities.protocols.anthropic import AnthropicRequest, AnthropicResponde
 from capabilities.runtime import Seatbelt, loopback_seatbelt, run
 from capabilities.server import RecordedServer
 from capabilities.targets.claude import environment
-from coding_agents_sync.targets.permissions import CLAUDE_OPAQUE_COMMANDS
 
 COMMAND = "permission-blackbox-probe"
 UNLISTED_MARKER = "unlisted"
@@ -417,9 +416,10 @@ SCENARIOS = {
             ),
         )
     },
-    # The compiled guards: a command that starts with a redirect is denied, and
-    # the copies behind `xargs` options reach it run by path. A redirect
-    # elsewhere and another program run by path are not denied.
+    # The compiled guards: Claude looks past a leading redirect, so the plain
+    # deny reaches a command that starts with one, and the copies behind
+    # `xargs` options reach it run by path. A redirect elsewhere and another
+    # program run by path are not denied.
     **{
         f"compiled-guard-{name}": Scenario(
             "Bash",
@@ -434,7 +434,6 @@ SCENARIOS = {
                         f"xargs * {COMMAND}",
                         f"{OPT} push *",
                         f"{OPT} push",
-                        *CLAUDE_OPAQUE_COMMANDS,
                     )
                 ),
             },
@@ -607,8 +606,8 @@ EXPECTED = {
     # A deny peels assignments, `env` in every form, `sudo`, the resolved
     # wrappers, and a quoted or escaped program name, and retries itself behind
     # a bare `xargs`, and it strips an absolute program path first, so a
-    # wrapper run by path peels like a bare one. It does not skip `xargs`
-    # options or look past a leading redirect, which runs the denied command.
+    # wrapper run by path peels like a bare one, and it looks past a leading
+    # redirect. It does not skip `xargs` options, which runs the denied command.
     **{
         f"deny-reach-{name}": {"exit-zero": True, "denied": denied}
         for name, denied in (
@@ -628,8 +627,8 @@ EXPECTED = {
             ("nice", True),
             ("escaped", True),
             ("quoted", True),
-            ("redirect", False),
-            ("redirect-fd", False),
+            ("redirect", True),
+            ("redirect-fd", True),
             ("program-absolute", True),
             ("program-absolute-bare", True),
             ("program-absolute-system", True),
