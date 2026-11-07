@@ -1,0 +1,15 @@
+# pyproject.toml keeps uv's 4-space indent; other TOML keeps the 2 most of it uses.
+# Arrays never collapse, so taplo and `uv add` do not undo each other.
+# Golden files are compiler output and must match it byte for byte.
+exclude = ["tests/golden/**"]
+
+[formatting]
+column_width = 120
+indent_string = "  "
+array_auto_collapse = false
+
+[[rule]]
+include = ["**/pyproject.toml"]
+
+[rule.formatting]
+indent_string = "    "

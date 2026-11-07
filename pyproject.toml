@@ -5,20 +5,20 @@ description = "Deterministic compiler for portable coding-agent configuration"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "pydantic>=2.14.2",
-  "PyYAML>=6.0.2",
-  "tomlkit>=0.15.2",
-  "typer>=0.27.3",
+    "pydantic>=2.14.2",
+    "PyYAML>=6.0.2",
+    "tomlkit>=0.15.2",
+    "typer>=0.27.3",
 ]
 
 [dependency-groups]
 dev = [
-  "basedpyright>=1.40.2",
-  "inline-snapshot>=0.36.1",
-  "pytest>=9.2.0",
-  "pytest-httpserver>=1.2.0",
-  "ruff>=0.17.3",
-  "types-PyYAML>=6.0.12.20250915",
+    "basedpyright>=1.40.2",
+    "inline-snapshot>=0.36.1",
+    "pytest>=9.2.0",
+    "pytest-httpserver>=1.2.0",
+    "ruff>=0.17.3",
+    "types-PyYAML>=6.0.12.20250915",
 ]
 
 [project.scripts]
@@ -39,9 +39,9 @@ packages = ["src/coding_agents_sync"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-  "capability_case(id): installed coding-agent capability covered by a live test",
-  "capability_desktop: launches the Cursor Desktop GUI when explicitly enabled",
-  "capability_live: launches installed coding agents through isolated local services",
+    "capability_case(id): installed coding-agent capability covered by a live test",
+    "capability_desktop: launches the Cursor Desktop GUI when explicitly enabled",
+    "capability_live: launches installed coding agents through isolated local services",
 ]
 
 [tool.ruff]
