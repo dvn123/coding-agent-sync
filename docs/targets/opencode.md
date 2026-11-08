@@ -57,7 +57,7 @@ names it on the denial; the file is removed when no deny carries a reason.
 
 OpenCode matches a shell rule against a command node's raw text, so a bare
 deny misses `timeout 30 rm`, `FOO=1 rm`, and `/bin/rm`. The compiler installs
-shell-unwrap's OpenCode plugin (source: <https://github.com/dvn123/opencode-unwrap>,
+shell-unwrap's OpenCode plugin (source: <https://github.com/dvn123/shell-unwrap>,
 vendored as `targets/shell-unwrap/opencode.js`) whenever it emits permissions. The plugin
 hooks `permission.evaluate` and denies a command when the agent's and
 session's rules deny it with its assignments, program path, or wrappers

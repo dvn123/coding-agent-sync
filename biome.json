@@ -5,7 +5,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/tests/golden", "!**/tests/fixtures", "!src/coding_agents_sync/targets/opencode-unwrap.js"]
+    "includes": ["**", "!**/tests/golden", "!**/tests/fixtures", "!src/coding_agents_sync/targets/shell-unwrap"]
   },
   "formatter": {
     "indentStyle": "space",

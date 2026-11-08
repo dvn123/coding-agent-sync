@@ -59,7 +59,7 @@ substitution, a subshell, a `cd` chain, or a wrapper with options (`env -u`,
 `timeout -k`, `/usr/bin/time -p`, `xargs -n1`) prompts even when every program
 in it is allowed, and it never shows the model a deny rule's `reason`. Whenever
 it emits permissions, the compiler installs shell-unwrap's Claude bundle
-(source: <https://github.com/dvn123/opencode-unwrap>, vendored as
+(source: <https://github.com/dvn123/shell-unwrap>, vendored as
 `targets/shell-unwrap/claude.js`) as a `Bash` PreToolUse hook, run by Bun with
 tree-sitter's bash grammar embedded. The hook reads the deployed `permissions`
 and the reasons file, which maps every pattern a reasoned deny emits to its
