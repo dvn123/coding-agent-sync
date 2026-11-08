@@ -10,7 +10,7 @@
 | Command | `<home>/.claude/skills/<source-stem>/SKILL.md`; Claude merged commands into skills, so a command may not share a skill's name |
 | Agent | `<home>/.claude/agents/<source-file>.md` |
 | Permissions | owned pointers in `<home>/.claude/settings.json` |
-| Permission hook | `<home>/.claude/hooks/shell-unwrap.js`, its `hooks/PreToolUse` entry, and `<home>/.claude/shell-unwrap.json` for deny reasons |
+| Permission hook | `<home>/.claude/hooks/shell-unwrap`, its `hooks/PreToolUse` entry, and `<home>/.claude/shell-unwrap.json` for deny reasons |
 
 Global and rule bodies are Markdown-only. Skills, commands, and agents use
 canonical values plus strict `targets.claude.native` frontmatter. Unknown
@@ -63,29 +63,28 @@ substitution, a subshell, or a wrapper it does not peel (`env -i`, `env -u`,
 `time -p`, `xargs -n1`) prompts even when every program in it is allowed. Its
 deny rules already catch peeled spellings except behind `xargs` with options,
 and it never shows the model a deny rule's `reason`. Whenever
-it emits permissions, the compiler installs shell-unwrap's hook bundle
-(source: <https://github.com/dvn123/shell-unwrap>, vendored as
-`targets/shell-unwrap/hook.js` and shared with Cursor) as a `Bash` PreToolUse
-hook with the `claude` argument, run by Bun with
-tree-sitter's bash grammar embedded. The hook reads the deployed `permissions`
-and the reasons file, which maps every pattern a reasoned deny emits to its
-reason, and judges each command node with the same peel as the OpenCode
-target's shell-unwrap plugin: it denies the command when any peeled spelling of
-a node matches a deny, in the plugin's words and with the rule's reason, asks
-when one matches an ask, and allows it when every node reaches an allow through
-transparent wrappers and harmless assignments alone. Claude still evaluates its
-deny and ask rules after a hook allow, so the hook removes prompts and never
-lifts a guard. The compiler leaves `xargs` with options to the hook, so the
-hook asks when it cannot parse the command or fails, and the hook command
-prints an ask when Bun cannot run it. Bypass permissions mode still shows a
-hook's ask, so in that mode neither asks; denies still apply. Bun starts in
-the bundle's directory, since a mise `bun` shim exits in a project whose mise
-config is untrusted. For an allow it stays silent, leaving
-Claude's own flow, on anything it does not model: file redirects, `tee`,
-`find` actions, `fd -x`, `cd` outside the working directories or beside `git`,
-shell variable assignments, function definitions, and dynamic program names.
-shell-unwrap's own tests pin its decisions; `tests/test_sync.py` runs the
-deployed hook once.
+it emits permissions, the compiler installs shell-unwrap's hook (source:
+<https://github.com/dvn123/shell-unwrap>, its Go source and dependencies
+vendored in `targets/shell-unwrap/` and built at sync time, shared with Codex,
+Cursor, Pi and OpenCode) at `hooks/shell-unwrap` as a `Bash` PreToolUse hook
+with the `claude` argument. The hook reads the deployed `permissions` and the
+reasons file, which maps every pattern a reasoned deny emits to its reason.
+It denies the command when any peeled spelling of a command in it matches a
+deny, in the OpenCode plugin's words and with the rule's reason, and asks
+when one matches an ask. It then reads the command as zsh will run it, quoting
+removed and every run-time part (a variable, a substitution, a glob) as any
+text: it denies or asks when a guard matches every value, and allows only
+when an allow covers every value and no guard may match any; a redirect is
+judged by the Read and Edit rules. Claude still evaluates its deny and ask
+rules after a hook allow. The compiler leaves `xargs` with options to the
+hook, so the hook asks when it cannot parse the command or fails, and the hook
+command prints an ask when it cannot run. Bypass permissions mode still shows
+a hook's ask, so in that mode neither asks; denies still apply. It leaves to
+Claude, by printing nothing, what it cannot bound: a guard only some value
+may meet, zsh parameter flags, `tee`, `find` actions, `fd -x`, `cd` to a
+run-time or outside directory or beside `git`, function definitions, and
+dynamic program names. shell-unwrap's own tests and zsh oracle pin its
+decisions; `tests/test_sync.py` runs the deployed hook once.
 
 `patches/claude-settings.yaml` targets `<home>/.claude/settings.json` and
 `patches/claude-mcp.yaml` targets `<home>/.claude.json`. Local counterparts

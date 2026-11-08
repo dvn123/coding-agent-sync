@@ -36,13 +36,14 @@ from ..sources import (
 )
 from .claude import shell_entries as claude_shell_entries
 from .permissions import (
-    UNWRAP_HOOK,
+    UNWRAP_NAME,
     bucket_entries,
     bucket_patterns,
     denied_paths,
     deny_reasons,
     glob_variants,
     secret_name_variants,
+    unwrap_binary,
     unwrap_rules_file,
     wrapper_prefixes,
 )
@@ -220,9 +221,10 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
             yield entry
 
 
-# Pi runs extensions in Node; this one starts shell-unwrap's hook bundle, its
-# Codex host, on every `bash` call and blocks the call when the hook denies or
-# cannot run, so the guards fail closed. Pi discovers it by its directory.
+# Pi runs extensions in Node; this one starts shell-unwrap's hook binary
+# beside it as its Codex host on every `bash` call, and blocks the call when
+# the hook denies or cannot run, so the guards fail closed. Pi discovers it by
+# its directory.
 UNWRAP_EXTENSION = Path(__file__).with_name("shell-unwrap") / "pi.js"
 UNWRAP_ROOT = Path("extensions/shell-unwrap")
 
@@ -248,10 +250,11 @@ def _unwrap_extension(root: Path, permissions: PermissionSource) -> list[OwnedFi
             structured=False,
         ),
         OwnedFile(
-            directory / "shell-unwrap.js",
-            UNWRAP_HOOK.read_bytes(),
+            directory / UNWRAP_NAME,
+            unwrap_binary(),
             root,
             structured=False,
+            executable=True,
         ),
         rules,
     ]

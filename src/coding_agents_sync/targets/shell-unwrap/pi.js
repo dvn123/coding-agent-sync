@@ -2,13 +2,12 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-var HOOK = join(dirname(fileURLToPath(import.meta.url)), "shell-unwrap.js");
+var HOOK = join(dirname(fileURLToPath(import.meta.url)), process.platform === "win32" ? "shell-unwrap.exe" : "shell-unwrap");
 var TIMEOUT_MS = 1e4;
 var UNAVAILABLE = "shell-unwrap could not run, so its guards were not checked";
 function runHook(command, hook = HOOK) {
   return new Promise((resolve, reject) => {
-    const child = spawn("bun", [hook, "codex"], {
-      cwd: dirname(hook),
+    const child = spawn(hook, ["codex"], {
       stdio: ["pipe", "pipe", "ignore"],
       timeout: TIMEOUT_MS
     });

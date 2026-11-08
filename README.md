@@ -141,8 +141,10 @@ see [the Pi target reference](docs/targets/pi.md).
 
 ## Development
 
-The project requires Python 3.14 and uses uv. Its tests and the permission
-audit also need Bun, which runs the vendored shell-unwrap bundles:
+The project requires Python 3.14 and uses uv. Emitting permissions builds
+shell-unwrap's hook from the Go source vendored in `targets/shell-unwrap/`, so
+a sync that emits them, the tests, and the permission audit need Go 1.26 or
+later; the build runs offline and is cached by source and Go version:
 
 ```sh
 uv sync --locked

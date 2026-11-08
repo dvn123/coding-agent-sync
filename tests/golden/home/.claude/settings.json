@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "input=$(cat); printf %s \"$input\" | (cd <tmp>/home/.claude/hooks && bun shell-unwrap.js claude) 2>/dev/null || case $input in *'\"permission_mode\":\"bypassPermissions\"'*) ;; *) printf %s '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"shell-unwrap could not run, so its guards were not checked\"}}' ;; esac",
+            "command": "input=$(cat); printf %s \"$input\" | <tmp>/home/.claude/hooks/shell-unwrap claude 2>/dev/null || case $input in *'\"permission_mode\":\"bypassPermissions\"'*) ;; *) printf %s '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"shell-unwrap could not run, so its guards were not checked\"}}' ;; esac",
             "timeout": 10
           }
         ]

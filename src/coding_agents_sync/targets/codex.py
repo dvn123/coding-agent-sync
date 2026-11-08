@@ -27,10 +27,10 @@ from ..sources import (
 )
 from .claude import shell_entries as claude_shell_entries
 from .permissions import (
-    UNWRAP_HOOK,
     UNWRAP_HOOK_PATH,
     UNWRAP_TIMEOUT_SECONDS,
     literal_directories,
+    unwrap_binary,
     unwrap_command,
     unwrap_rules_file,
 )
@@ -342,10 +342,11 @@ def _command_rules(
 
 
 # Codex prefix rules miss a wrapped, bundled, or joined spelling and hold no
-# text rule. shell-unwrap's hook bundle, a `Bash` PreToolUse command, denies a
+# text rule. shell-unwrap's hook, a `Bash` PreToolUse command, denies a
 # command inside a call when any peeled spelling of it matches a deny, text
-# rules included. Codex rejects an ask from a PreToolUse hook, so asks stay
-# prefix rules. The hook denies when it cannot run, so the guards fail closed.
+# rules included, or when a deny matches every value zsh may run it with.
+# Codex rejects an ask from a PreToolUse hook, so asks stay prefix rules. The
+# hook denies when it cannot run, so the guards fail closed.
 # Codex runs it only once the user trusts it in `/hooks`. The deny stands in
 # for an ask, so with approval policy `never` a hook that cannot run passes.
 UNWRAP_UNAVAILABLE = {
@@ -373,9 +374,11 @@ def _unwrap_hook(
     )
     if rules is None:
         return [], []
-    directory = shlex.quote(script.parent.as_posix())
     command = unwrap_command(
-        directory, "codex", UNWRAP_UNAVAILABLE, silent_in_bypass=True
+        shlex.quote(script.as_posix()),
+        "codex",
+        UNWRAP_UNAVAILABLE,
+        silent_in_bypass=True,
     )
     hook = {
         "matcher": "Bash",
@@ -388,7 +391,7 @@ def _unwrap_hook(
         ],
     }
     return [
-        OwnedFile(script, UNWRAP_HOOK.read_bytes(), root, structured=False),
+        OwnedFile(script, unwrap_binary(), root, structured=False, executable=True),
         rules,
     ], [NativeValue("codex", root / "config.toml", ("hooks", "PreToolUse"), [hook])]
 

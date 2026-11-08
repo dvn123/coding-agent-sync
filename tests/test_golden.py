@@ -10,14 +10,28 @@ import re
 import shutil
 from pathlib import Path
 
+import pytest
 from inline_snapshot import external_file, snapshot
 
 from coding_agents_sync import run_sync
+from coding_agents_sync.targets import permissions
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures/config_root"
 GOLDEN = Path(__file__).parent / "golden"
 HASH = re.compile(r"sha256:[0-9a-f]{64}")
-VENDORED = "<vendored shell-unwrap bundle>\n"
+VENDORED = "<vendored shell-unwrap build>\n"
+
+
+@pytest.fixture(autouse=True)
+def placeholder_binary(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Install a placeholder for the shell-unwrap binary, whose bytes and so
+    manifest hashes depend on the Go that builds it; `test_sync` installs the
+    real one."""
+    binary = tmp_path_factory.mktemp("unwrap") / permissions.UNWRAP_NAME
+    binary.write_text(VENDORED)
+    monkeypatch.setattr(permissions, "unwrap_binary_path", lambda: binary)
 
 
 def compiled_tree(tmp_path: Path) -> dict[str, str]:
@@ -36,7 +50,9 @@ def compiled_tree(tmp_path: Path) -> dict[str, str]:
     # `test_sync` checks; the golden tree pins only where they land.
     texts = {
         name: VENDORED
-        if name.endswith(("/shell-unwrap.js", "/shell-unwrap/index.js"))
+        if name.endswith(
+            ("/shell-unwrap", "/shell-unwrap.js", "/shell-unwrap/index.js")
+        )
         else path.read_text().replace(str(tmp_path), "<tmp>")
         for name, path in sorted(outputs.items())
     }
@@ -62,7 +78,7 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.claude/CLAUDE.md",
             "home/.claude/agents/.coding-agents-managed.json",
             "home/.claude/agents/sample.md",
-            "home/.claude/hooks/shell-unwrap.js",
+            "home/.claude/hooks/shell-unwrap",
             "home/.claude/mcp/.coding-agents-managed.json",
             "home/.claude/mcp/fixture-optional.json",
             "home/.claude/rules/.coding-agents-managed.json",
@@ -77,7 +93,7 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.codex/agents/.coding-agents-managed.json",
             "home/.codex/agents/sample.toml",
             "home/.codex/config.toml",
-            "home/.codex/hooks/shell-unwrap.js",
+            "home/.codex/hooks/shell-unwrap",
             "home/.codex/hooks/shell-unwrap.json",
             "home/.codex/rules/.coding-agents-managed.json",
             "home/.codex/rules/coding-agents.rules",
@@ -94,13 +110,14 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.config/opencode/rules/.coding-agents-managed.json",
             "home/.config/opencode/rules/always.md",
             "home/.config/opencode/rules/scoped.md",
+            "home/.config/opencode/shell-unwrap",
             "home/.config/opencode/skills/.coding-agents-managed.json",
             "home/.cursor/.coding-agents-managed.json",
             "home/.cursor/agents/.coding-agents-managed.json",
             "home/.cursor/agents/sample.md",
             "home/.cursor/cli-config.json",
             "home/.cursor/hooks.json",
-            "home/.cursor/hooks/shell-unwrap.js",
+            "home/.cursor/hooks/shell-unwrap",
             "home/.cursor/hooks/shell-unwrap.json",
             "home/.cursor/mcp.json",
             "home/.cursor/permissions.json",
@@ -117,7 +134,7 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.pi/agent/agents/sample.md",
             "home/.pi/agent/extensions/pi-permission-system/config.json",
             "home/.pi/agent/extensions/shell-unwrap/index.js",
-            "home/.pi/agent/extensions/shell-unwrap/shell-unwrap.js",
+            "home/.pi/agent/extensions/shell-unwrap/shell-unwrap",
             "home/.pi/agent/extensions/shell-unwrap/shell-unwrap.json",
             "home/.pi/agent/mcp.json",
             "home/.pi/agent/prompts/.coding-agents-managed.json",

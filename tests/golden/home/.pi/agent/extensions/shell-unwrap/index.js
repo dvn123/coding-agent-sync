@@ -1,1 +1,1 @@
-<vendored shell-unwrap bundle>
+<vendored shell-unwrap build>

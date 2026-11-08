@@ -11,8 +11,8 @@ wildcard grammar, the peeling of assignments, program paths, and wrappers
 before deny and ask rules, and the retry behind a bare `xargs`. Both targets
 also run shell-unwrap, which denies a command when a deny matches a spelling
 its peel yields, and on Claude also asks when an ask does; the audit asks the
-vendored bundle for those spellings through Bun, so the peel exists once, in
-TypeScript.
+hook binary built from the vendored source for those spellings, so the peel
+exists once, in Go.
 """
 
 import collections
@@ -36,7 +36,7 @@ from coding_agents_sync.sources import (
     with_home_paths,
 )
 from coding_agents_sync.targets import claude, opencode
-from coding_agents_sync.targets.permissions import fold_edit_write
+from coding_agents_sync.targets.permissions import fold_edit_write, unwrap_binary_path
 
 UNMATCHED = ("ask", "allow")
 BUCKETS = ("deny", "ask", "allow")
@@ -172,8 +172,7 @@ def claude_candidates(command: str, *, deny: bool) -> set[str]:
 
 
 # shell-unwrap's peel, which its OpenCode plugin and Claude hook run over every
-# shell command. The hook bundle exports it; one Bun process answers a batch.
-UNWRAP_BUNDLE = claude.UNWRAP_HOOK
+# shell command. The hook binary prints it; one process answers a batch.
 _SPELLINGS: dict[str, list[str]] = {}
 
 
@@ -182,13 +181,8 @@ def prime_spellings(commands: Iterable[str]) -> None:
     missing = [c for c in dict.fromkeys(commands) if c not in _SPELLINGS]
     if not missing:
         return
-    script = (
-        f"const {{ spellings }} = await import({json.dumps(str(UNWRAP_BUNDLE))});"
-        "const commands = await Bun.stdin.json();"
-        "process.stdout.write(JSON.stringify(commands.map((c) => spellings(c))));"
-    )
     result = subprocess.run(
-        ["bun", "-e", script],
+        [str(unwrap_binary_path()), "spellings"],
         input=json.dumps(missing),
         capture_output=True,
         text=True,

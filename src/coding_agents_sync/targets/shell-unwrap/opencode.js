@@ -1,365 +1,17 @@
 // @bun
-// src/peel.ts
-var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
-var REDIRECT = /^(?:\d+|&)?(?:>>|>&|>\||<>|<&|>|<)(.*)$/s;
-var WRAPPERS = {
-  builtin: {},
-  command: { lookups: ["-v", "-V"] },
-  doas: { values: ["-a", "-C", "-u"] },
-  env: {
-    values: ["-a", "-C", "-P", "-S", "-u", "--argv0", "--chdir", "--split-string", "--unset"],
-    assignments: true
-  },
-  exec: { values: ["-a"] },
-  nice: { values: ["-n", "--adjustment"] },
-  nocorrect: {},
-  noglob: {},
-  nohup: {},
-  stdbuf: { values: ["-e", "-i", "-o", "--error", "--input", "--output"] },
-  sudo: {
-    assignments: true,
-    values: [
-      "-C",
-      "-D",
-      "-g",
-      "-h",
-      "-p",
-      "-R",
-      "-r",
-      "-T",
-      "-t",
-      "-U",
-      "-u",
-      "--chdir",
-      "--chroot",
-      "--close-from",
-      "--command-timeout",
-      "--group",
-      "--host",
-      "--other-user",
-      "--prompt",
-      "--role",
-      "--type",
-      "--user"
-    ]
-  },
-  time: { values: ["-f", "-o", "--format", "--output"] },
-  timeout: {
-    values: ["-k", "--kill-after", "-s", "--signal"],
-    positionals: 1
-  },
-  xargs: {
-    values: [
-      "-a",
-      "-d",
-      "-E",
-      "-I",
-      "-J",
-      "-L",
-      "-n",
-      "-P",
-      "-R",
-      "-S",
-      "-s",
-      "--arg-file",
-      "--delimiter",
-      "--max-args",
-      "--max-chars",
-      "--max-lines",
-      "--max-procs",
-      "--process-slot-var"
-    ]
-  }
-};
-function words(text) {
-  const found = [];
-  let index = 0;
-  while (index < text.length) {
-    while (index < text.length && /\s/.test(text[index]))
-      index++;
-    if (index >= text.length)
-      break;
-    const start = index;
-    let value = "";
-    while (index < text.length && !/\s/.test(text[index])) {
-      const char = text[index];
-      if (char === "'") {
-        const close = text.indexOf("'", index + 1);
-        const stop = close === -1 ? text.length : close;
-        value += text.slice(index + 1, stop);
-        index = stop + 1;
-      } else if (char === '"') {
-        index++;
-        while (index < text.length && text[index] !== '"') {
-          if (text[index] === "\\" && index + 1 < text.length)
-            index++;
-          value += text[index];
-          index++;
-        }
-        index++;
-      } else if (char === "\\" && index + 1 < text.length) {
-        value += text[index + 1];
-        index += 2;
-      } else {
-        value += char;
-        index++;
-      }
-    }
-    found.push({ value, start, end: Math.min(index, text.length) });
-  }
-  return found;
+// src/opencode.ts
+var BINARY = `${import.meta.dir}/../shell-unwrap${process.platform === "win32" ? ".exe" : ""}`;
+async function ask(binary, operation, request) {
+  const child = Bun.spawn([binary, "opencode", operation], {
+    stdin: new Blob([JSON.stringify(request)]),
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+  const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  if (code !== 0)
+    throw new Error(`shell-unwrap exited with ${code}`);
+  return JSON.parse(output);
 }
-function basename(program) {
-  return program.slice(program.lastIndexOf("/") + 1);
-}
-function wrapped(list, wrapper) {
-  let index = 1;
-  let positionals = wrapper.positionals ?? 0;
-  while (index < list.length) {
-    const value = list[index].value;
-    if (value === "--")
-      return index + 1 < list.length ? index + 1 : undefined;
-    if (wrapper.lookups?.includes(value))
-      return;
-    if (value.startsWith("-") && value !== "-") {
-      index += wrapper.values?.includes(value) ? 2 : 1;
-    } else if (wrapper.assignments && ASSIGNMENT.test(value)) {
-      index++;
-    } else if (positionals > 0) {
-      positionals--;
-      index++;
-    } else {
-      return index;
-    }
-  }
-  return;
-}
-var TRANSPARENT = {
-  builtin: [],
-  command: [],
-  env: ["-i", "--ignore-environment", "-u", "--unset"],
-  nice: ["-n", "--adjustment"],
-  nocorrect: [],
-  noglob: [],
-  nohup: [],
-  stdbuf: ["-e", "-i", "-o", "--error", "--input", "--output"],
-  time: ["-p"],
-  timeout: ["-k", "--kill-after", "-s", "--signal", "--foreground", "--preserve-status", "-v", "--verbose"],
-  xargs: [
-    "-0",
-    "-d",
-    "-E",
-    "-I",
-    "-J",
-    "-L",
-    "-n",
-    "-P",
-    "-r",
-    "-s",
-    "-t",
-    "-x",
-    "--delimiter",
-    "--exit",
-    "--max-args",
-    "--max-chars",
-    "--max-lines",
-    "--max-procs",
-    "--no-run-if-empty",
-    "--null",
-    "--verbose"
-  ]
-};
-var SYSTEM_DIRS = ["", "/bin/", "/usr/bin/"];
-var XARGS_INPUT = "<xargs-input>";
-var XARGS_REPLACE = ["-I", "-J", "--replace"];
-var HARMLESS_ASSIGNMENTS = new Set([
-  "GIT_EDITOR=true",
-  "PYTHONDONTWRITEBYTECODE=1",
-  "IFS=",
-  "IFS=,",
-  "IFS='|'",
-  "IFS=$'\\t'"
-]);
-var SAFE_NAMES = new Set([
-  "GOEXPERIMENT",
-  "GOOS",
-  "GOARCH",
-  "CGO_ENABLED",
-  "GO111MODULE",
-  "RUST_BACKTRACE",
-  "RUST_LOG",
-  "NODE_ENV",
-  "PYTHONUNBUFFERED",
-  "PYTHONDONTWRITEBYTECODE",
-  "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
-  "PYTEST_DEBUG",
-  "LANG",
-  "LANGUAGE",
-  "LC_ALL",
-  "LC_CTYPE",
-  "LC_TIME",
-  "CHARSET",
-  "TERM",
-  "COLORTERM",
-  "NO_COLOR",
-  "FORCE_COLOR",
-  "TZ",
-  "LS_COLORS",
-  "LSCOLORS",
-  "GREP_COLOR",
-  "GREP_COLORS",
-  "GCC_COLORS",
-  "TIME_STYLE",
-  "BLOCK_SIZE",
-  "BLOCKSIZE",
-  "COLUMNS",
-  "LINES",
-  "CLICOLOR",
-  "CLICOLOR_FORCE",
-  "CI",
-  "DEBIAN_FRONTEND",
-  "GIT_TERMINAL_PROMPT"
-]);
-var PLAIN_VALUE = /^[A-Za-z0-9_.,:\/@%+-]*$/;
-function harmless(assignment) {
-  if (HARMLESS_ASSIGNMENTS.has(assignment))
-    return true;
-  const [name, ...rest] = assignment.split("=");
-  return rest.length > 0 && SAFE_NAMES.has(name) && PLAIN_VALUE.test(rest.join("="));
-}
-function permitted(value, options) {
-  if (value === "--")
-    return true;
-  if (!value.startsWith("-"))
-    return !ASSIGNMENT.test(value);
-  if (options.includes(value.split("=")[0]))
-    return true;
-  return !value.startsWith("--") && value.length > 2 && options.includes(value.slice(0, 2));
-}
-function transparent(command) {
-  const text = command.trim();
-  const list = words(text);
-  const head = list[0];
-  if (!head)
-    return;
-  if (harmless(text.slice(head.start, head.end))) {
-    return list[1] ? text.slice(list[1].start).trim() : undefined;
-  }
-  if (text.slice(head.start, head.end) !== head.value)
-    return;
-  const program = basename(head.value);
-  const options = TRANSPARENT[program];
-  if (!options || !SYSTEM_DIRS.includes(head.value.slice(0, head.value.length - program.length)))
-    return;
-  const index = wrapped(list, WRAPPERS[program]);
-  if (index === undefined)
-    return;
-  const before = list.slice(1, index);
-  if (!before.every(({ value }) => permitted(value, options)))
-    return;
-  const inner = text.slice(list[index].start).trim();
-  const replaces = before.some(({ value }) => XARGS_REPLACE.some((flag) => value.split("=")[0].startsWith(flag)));
-  return program === "xargs" && !replaces ? `${inner} ${XARGS_INPUT}` : inner;
-}
-var MAX_BUNDLE = 4;
-function flagReadings(raw) {
-  const joined = /^(--?[A-Za-z0-9][A-Za-z0-9-]*)=(.+)$/s.exec(raw);
-  if (joined)
-    return [`${joined[1]} ${joined[2]}`, `${joined[1]} ${joined[2]}`];
-  if (!/^-[A-Za-z]./s.test(raw) || raw.startsWith("--"))
-    return;
-  const value = `${raw.slice(0, 2)} ${raw.slice(2)}`;
-  const valued = /[A-Z]/.test(raw.slice(2));
-  if (!/^-[A-Za-z]+$/.test(raw))
-    return [value, value];
-  if (raw.length - 1 > MAX_BUNDLE)
-    return valued ? [value, value] : undefined;
-  const split = [...raw.slice(1)].map((letter) => `-${letter}`).join(" ");
-  return [split, valued ? value : split];
-}
-function flagSpellings(text, list) {
-  const variants = [text, text];
-  for (const word of [...list.slice(1)].reverse()) {
-    const raw = text.slice(word.start, word.end);
-    const readings = raw === word.value ? flagReadings(raw) : undefined;
-    if (!readings)
-      continue;
-    for (const index of [0, 1]) {
-      variants[index] = variants[index].slice(0, word.start) + readings[index] + variants[index].slice(word.end);
-    }
-  }
-  return [...new Set(variants)].filter((variant) => variant !== text);
-}
-function peelOnce(text) {
-  const list = words(text);
-  const head = list[0];
-  if (!head)
-    return [];
-  const raw = text.slice(head.start, head.end);
-  const redirect = REDIRECT.exec(raw);
-  if (redirect) {
-    const next = list[redirect[1] ? 1 : 2];
-    return next ? [text.slice(next.start)] : [];
-  }
-  if (ASSIGNMENT.test(head.value))
-    return list[1] ? [text.slice(list[1].start)] : [];
-  const found = [];
-  const program = basename(head.value);
-  if (program && program !== raw)
-    found.push(program + text.slice(head.end));
-  const wrapper = WRAPPERS[program];
-  if (wrapper) {
-    const index = wrapped(list, wrapper);
-    if (index !== undefined)
-      found.push(text.slice(list[index].start));
-    if (program === "env") {
-      const split = list.findIndex((word) => word.value === "-S" || word.value === "--split-string");
-      const payload = split > 0 ? list[split + 1] : undefined;
-      if (payload)
-        found.push(payload.value + text.slice(payload.end));
-    }
-  } else if (program === raw) {
-    found.push(...flagSpellings(text, list));
-  }
-  return found.map((spelling) => spelling.trim()).filter(Boolean);
-}
-function spellings(command) {
-  const original = command.trim();
-  const seen = new Set([original]);
-  const pending = [original];
-  while (pending.length > 0) {
-    for (const spelling of peelOnce(pending.pop())) {
-      if (!seen.has(spelling)) {
-        seen.add(spelling);
-        pending.push(spelling);
-      }
-    }
-  }
-  seen.delete(original);
-  return [...seen];
-}
-
-// src/rules.ts
-var compiled = new Map;
-function match(input, pattern) {
-  let regex = compiled.get(pattern);
-  if (!regex) {
-    let escaped = pattern.replaceAll("\\", "/").replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-    if (escaped.endsWith(" .*"))
-      escaped = escaped.slice(0, -3) + "( .*)?";
-    regex = new RegExp("^" + escaped + "$", process.platform === "win32" ? "si" : "s");
-    compiled.set(pattern, regex);
-  }
-  return regex.test(input.replaceAll("\\", "/"));
-}
-function matching(rules, action, resource) {
-  return rules.findLast((rule) => match(action, rule.action) && match(resource, rule.resource));
-}
-function evaluate(rules, action, resource) {
-  return matching(rules, action, resource)?.effect ?? "ask";
-}
-
-// src/review.ts
 async function readReasons(path) {
   try {
     const reasons = (await Bun.file(path).json())?.reasons;
@@ -370,61 +22,38 @@ async function readReasons(path) {
     return {};
   }
 }
-async function review(event, rules, reasons = {}) {
+async function review(event, rules, reasons = {}, binary = BINARY) {
   if (event.action !== "shell" || event.effect === "deny")
     return;
-  const peeled = event.resources.flatMap(spellings);
-  if (peeled.length === 0)
-    return;
-  let loaded;
+  const request = { action: event.action, resources: event.resources, effect: event.effect, reasons };
+  let verdict;
   try {
-    loaded = await rules();
+    verdict = await ask(binary, "review", request);
+    if (verdict.needsRules) {
+      let loaded;
+      try {
+        loaded = await rules();
+      } catch (cause) {
+        event.effect = "deny";
+        event.message = `shell-unwrap could not load the shell rules: ${cause instanceof Error ? cause.message : cause}`;
+        return;
+      }
+      verdict = await ask(binary, "review", { ...request, rules: loaded });
+    }
   } catch (cause) {
     event.effect = "deny";
-    event.message = `shell-unwrap could not load the shell rules: ${cause instanceof Error ? cause.message : cause}`;
+    event.message = `shell-unwrap could not run: ${cause instanceof Error ? cause.message : cause}`;
     return;
   }
-  const denied = peeled.find((spelling) => evaluate(loaded, "shell", spelling) === "deny");
-  if (denied) {
-    event.effect = "deny";
-    event.message = denial(denied, because(loaded, denied, reasons));
-  } else if (event.effect === "allow" && peeled.some((spelling) => asked(loaded, spelling))) {
-    event.effect = "ask";
-  } else if (event.effect === "ask" && event.resources.every((resource) => passes(loaded, resource))) {
-    event.effect = "allow";
-  }
+  if (verdict.effect)
+    event.effect = verdict.effect;
+  if (verdict.message)
+    event.message = verdict.message;
 }
-function asked(rules, spelling) {
-  const rule = matching(rules, "shell", spelling);
-  return rule !== undefined && rule.resource !== "*" && rule.effect === "ask";
+async function explain(resources, rules, reasons, binary = BINARY) {
+  const { reason } = await ask(binary, "explain", { resources, rules, reasons });
+  return reason || undefined;
 }
-function passes(rules, command) {
-  if (evaluate(rules, "shell", command) === "allow")
-    return true;
-  for (let spelling = command;spelling !== undefined; spelling = transparent(spelling)) {
-    const rule = matching(rules, "shell", spelling);
-    if (rule && rule.resource !== "*")
-      return rule.effect === "allow";
-  }
-  return false;
-}
-function explain(resources, rules, reasons) {
-  for (const resource of resources) {
-    const reason = because(rules, resource, reasons);
-    if (reason)
-      return `\`${resource}\`: ${reason}`;
-  }
-  return;
-}
-function because(rules, resource, reasons) {
-  const rule = matching(rules, "shell", resource);
-  return rule?.effect === "deny" ? reasons[rule.resource] : undefined;
-}
-function denial(command, reason) {
-  return `\`${command}\` is denied by the shell rules` + (reason ? `: ${reason}` : "");
-}
-
-// src/opencode.ts
 var plugin = {
   id: "shell-unwrap",
   async setup(ctx) {
@@ -446,7 +75,9 @@ var plugin = {
       const blocked = event.error.error;
       if (blocked?._tag !== "Permission.BlockedError" || !blocked.rules || !blocked.resources)
         return;
-      const reason = explain(blocked.resources, blocked.rules, reasons);
+      const reason = await explain(blocked.resources, blocked.rules, reasons).catch(() => {
+        return;
+      });
       if (reason)
         blocked.reason = reason;
     });
@@ -454,5 +85,8 @@ var plugin = {
 };
 var opencode_default = plugin;
 export {
-  opencode_default as default
+  opencode_default as default,
+  explain,
+  readReasons,
+  review
 };

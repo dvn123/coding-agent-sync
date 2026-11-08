@@ -265,7 +265,9 @@ def preflight_plan(plan: Plan) -> None:
                 if producer is None:
                     raise ManagedEntryConflict(f"Missing generated {mode}: {target}")
                 if isinstance(producer, OwnedFile):
-                    write_bytes(stage / name, producer.content)
+                    write_bytes(
+                        stage / name, producer.content, executable=producer.executable
+                    )
                 else:
                     _write_owned_tree(producer, stage / name)
                 hash_ = entry_hash(stage / name, mode)
@@ -332,7 +334,7 @@ def plan_drift(plan: Plan) -> tuple[Path, ...]:
 
 def write_plan(plan: Plan) -> None:
     for file in plan.files:
-        write_bytes(file.path, file.content)
+        write_bytes(file.path, file.content, executable=file.executable)
     for tree in _generated_trees(plan):
         _write_owned_tree(tree)
 

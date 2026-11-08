@@ -1,7 +1,11 @@
+import functools
+import hashlib
 import itertools
 import json
+import os
 import re
 import shlex
+import subprocess
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -406,33 +410,97 @@ def unwrap_reasons_file(
     return [OwnedFile(root / UNWRAP_REASONS, text.encode(), root)]
 
 
-# shell-unwrap's hook bundle, run by Bun with tree-sitter's WASM embedded: the
-# Claude, Codex, and Cursor hooks by host argument. Pi's extension runs its
-# Codex host.
-UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
-UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
+# shell-unwrap's hook: one Go binary, the Claude, Codex, and Cursor hooks by
+# host argument, which Pi's extension runs as its Codex host and OpenCode's
+# plugin asks for its reviews. Its source and dependencies are vendored beside
+# this module, so it is reviewable and builds offline; it is built once per
+# source and Go version, and cached.
+UNWRAP_SOURCE = Path(__file__).with_name("shell-unwrap")
+UNWRAP_NAME = "shell-unwrap.exe" if os.name == "nt" else "shell-unwrap"
+UNWRAP_HOOK_PATH = Path("hooks") / UNWRAP_NAME
 UNWRAP_TIMEOUT_SECONDS = 10
 # Claude Code and Codex send hook input as compact JSON, and a quote inside a
 # string value is escaped, so only the field itself matches.
 UNWRAP_BYPASS = '"permission_mode":"bypassPermissions"'
+# Files beside the Go source that the binary is not built from.
+UNWRAP_SHIMS = frozenset({"opencode.js", "pi.js"})
+
+
+class UnwrapBuildError(RuntimeError):
+    """The shell-unwrap binary could not be built."""
+
+
+def _go(*args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "CGO_ENABLED": "0", "GOFLAGS": "-mod=vendor", "GOPROXY": "off"}
+    try:
+        return subprocess.run(
+            ["go", *args],
+            cwd=UNWRAP_SOURCE,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        raise UnwrapBuildError(
+            "shell-unwrap's hook builds with Go 1.26 or later; `go` is not on PATH"
+        ) from None
+    except subprocess.CalledProcessError as error:
+        raise UnwrapBuildError(
+            f"`go {' '.join(args)}` failed in {UNWRAP_SOURCE}:\n{error.stderr}"
+        ) from None
+
+
+@functools.cache
+def unwrap_binary_path() -> Path:
+    """The shell-unwrap binary for this machine, built from the vendored source
+    once per source and Go version."""
+    digest = hashlib.sha256(_go("env", "GOVERSION").stdout.encode())
+    for path in sorted(UNWRAP_SOURCE.rglob("*")):
+        relative = path.relative_to(UNWRAP_SOURCE)
+        if path.is_file() and relative.as_posix() not in UNWRAP_SHIMS:
+            digest.update(relative.as_posix().encode() + b"\0" + path.read_bytes())
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    binary = (
+        cache
+        / "coding-agents-sync/shell-unwrap"
+        / digest.hexdigest()[:16]
+        / UNWRAP_NAME
+    )
+    if not binary.is_file():
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        building = binary.with_name(f".{UNWRAP_NAME}.{os.getpid()}")
+        flags = "-s -w -buildid="
+        _go(
+            "build",
+            "-trimpath",
+            f"-ldflags={flags}",
+            "-o",
+            str(building),
+            "./cmd/shell-unwrap",
+        )
+        building.replace(binary)
+    return binary
+
+
+def unwrap_binary() -> bytes:
+    """The shell-unwrap binary's bytes, to install in a target."""
+    return unwrap_binary_path().read_bytes()
 
 
 def unwrap_command(
-    directory: str,
+    binary: str,
     host: str,
     fallback: Mapping[str, Any],
     *,
-    env: str = "",
     silent_in_bypass: bool = False,
 ) -> str:
-    """The shell command that runs the hook bundle in `directory`, a shell word.
+    """The shell command that runs the hook binary at `binary`, a shell word.
 
-    A hook runs in the session's working directory, where a project's untrusted
-    mise config makes the mise `bun` shim exit, so Bun starts from the bundle's
-    directory. When Bun cannot run, the command prints `fallback`, or, with
+    When it cannot run, the command prints `fallback`, or, with
     `silent_in_bypass`, nothing for an event in bypass permissions mode.
     """
-    run = f"(cd {directory} && {env}bun {UNWRAP_HOOK_PATH.name} {host}) 2>/dev/null"
+    run = f"{binary} {host} 2>/dev/null"
     printed = f"printf %s {shlex.quote(json.dumps(fallback))}"
     if not silent_in_bypass:
         return f"{run} || {printed}"

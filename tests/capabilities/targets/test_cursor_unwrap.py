@@ -2,12 +2,12 @@
 
 Cursor's allowlist has no deny or ask channel, so the compiler lists every
 allow and installs shell-unwrap's `beforeShellExecution` hook in `hooks.json`
-with the guards. This runs Cursor CLI on exactly what `run_sync` writes, with
-bun on `PATH` as on the machine the hook was compiled for.
+with the guards. This runs Cursor CLI on exactly what `run_sync` writes; the
+hook runs by its path, so a bare `PATH` serves.
 """
 
 import json
-import shutil
+import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +18,6 @@ from capabilities.harness import (
     Paths,
     cached_scenario_fixture,
     recorded_server,
-    require_command,
     require_containment,
     run_probe,
 )
@@ -76,7 +75,6 @@ def runtime(
     request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
 ) -> Runtime:
     executable, seatbelt = cursor_runtime()
-    bun = Path(require_command("bun")).resolve()
     paths = Paths.create(tmp_path_factory.mktemp("cursor-unwrap").resolve())
     marker = paths.root / f"{TOOL}.executed"
     recorder = paths.bin / TOOL
@@ -102,7 +100,7 @@ def runtime(
     env = environment(
         paths,
         cursor,
-        PATH=f"{paths.bin}:{bun.parent}:/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH=f"{paths.bin}:/usr/bin:/bin:/usr/sbin:/sbin",
     )
     value = Runtime(executable, seatbelt, paths, stub, state, env, marker)
     require_containment(value.seatbelt, stub, paths, env)
@@ -150,7 +148,7 @@ def test_compiled_allowlist_lists_the_guarded_allow(runtime: Runtime) -> None:
     assert TOOL in desktop["terminalAllowlist"]
     hooks = json.loads((runtime.paths.home / ".cursor/hooks.json").read_text())
     assert len(hooks["hooks"]["beforeShellExecution"]) == 1
-    assert shutil.which("bun", path=runtime.env["PATH"])
+    assert os.access(runtime.paths.home / ".cursor/hooks/shell-unwrap", os.X_OK)
 
 
 @pytest.mark.capability_case("cursor-agent.unwrap")

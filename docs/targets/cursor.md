@@ -105,16 +105,18 @@ in a file, and a subagent approves both itself.
   rule is skipped with a warning.
 - The allowlist has no deny channel, so every allow lands as written and a
   `beforeShellExecution` hook carries the asks and denies. It is shell-unwrap's
-  hook bundle, shared with Claude and run with the `cursor` argument, at
-  `<home>/.cursor/hooks/shell-unwrap.js`, registered in the
+  hook binary, shared with Claude and run with the `cursor` argument, at
+  `<home>/.cursor/hooks/shell-unwrap`, registered in the
   user `hooks.json` that Desktop and the CLI both load, beside
   `shell-unwrap.json`: Claude's `Bash(...)` ask and deny patterns and the deny
   reasons. It is not a local plugin, because Desktop skips user-local plugins
   when a team turns off `allowUserLocalPluginImports`. It parses each call, peels every command inside it as
-  the Claude hook does, and denies or asks when any spelling matches. Cursor
-  ignores an `allow` from the hook, so it answers `{}` otherwise and the
-  allowlist decides. It asks when it cannot parse the command or bun cannot
-  run, and the hook is `failClosed`, so the guards never silently lapse.
+  the Claude hook does, and denies or asks when any spelling matches, or when a
+  guard matches every value zsh may run a command with. Cursor ignores an
+  `allow` from the hook, so it answers `{}` otherwise and the allowlist
+  decides. It runs by its path, so Desktop's PATH does not matter. It asks
+  when it cannot parse the command or the binary cannot run, and the hook is
+  `failClosed`, so the guards never silently lapse.
   Desktop runs `beforeShellExecution` before every shell call
   (`runPreExecutionHooks` in `cursor-agent-exec`): `deny` refuses and `ask`
   prompts.

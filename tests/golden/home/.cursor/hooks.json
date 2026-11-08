@@ -3,7 +3,7 @@
   "hooks": {
     "beforeShellExecution": [
       {
-        "command": "/bin/sh -c '(cd \"$HOME\"/.cursor/hooks && PATH=\"$HOME/.bun/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH\" bun shell-unwrap.js cursor) 2>/dev/null || printf %s '\"'\"'{\"permission\": \"ask\", \"user_message\": \"shell-unwrap could not run, so its guards cannot be checked\"}'\"'\"''",
+        "command": "/bin/sh -c '\"$HOME\"/.cursor/hooks/shell-unwrap cursor 2>/dev/null || printf %s '\"'\"'{\"permission\": \"ask\", \"user_message\": \"shell-unwrap could not run, so its guards cannot be checked\"}'\"'\"''",
         "timeout": 10,
         "failClosed": true
       }

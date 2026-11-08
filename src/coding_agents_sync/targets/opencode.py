@@ -34,6 +34,7 @@ from ..sources import (
     resolve_model_policy,
 )
 from .permissions import (
+    UNWRAP_NAME,
     bucket_entries,
     bucket_patterns,
     denied_paths,
@@ -42,6 +43,7 @@ from .permissions import (
     glob_variants,
     opencode_paths,
     secret_name_variants,
+    unwrap_binary,
     unwrap_reasons_file,
     wrapper_prefixes,
 )
@@ -422,6 +424,16 @@ def compile_opencode(ctx: SyncContext, sources: SourceBundle) -> Plan:
         files.append(
             OwnedFile(
                 root / "plugins" / UNWRAP_PLUGIN_NAME, UNWRAP_PLUGIN.read_bytes(), root
+            )
+        )
+        # The plugin asks the binary, one directory above it, for its reviews.
+        files.append(
+            OwnedFile(
+                root / UNWRAP_NAME,
+                unwrap_binary(),
+                root,
+                structured=False,
+                executable=True,
             )
         )
         files.extend(unwrap_reasons_file(root, permissions, shell_entries))

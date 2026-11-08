@@ -16,6 +16,8 @@ class OwnedFile:
     # False for a file whose consumer does not read it as JSON, TOML, or YAML
     # frontmatter, so preflight does not parse it as one.
     structured: bool = True
+    # True for a program the agent runs, written with the owner's execute bit.
+    executable: bool = False
 
 
 @dataclass(frozen=True)

@@ -86,13 +86,14 @@ wildcard there; portable tokens never hold one.
 
 shell-unwrap's extension carries the denies through every spelling, so a deny
 gets no wrapper copy. It lands in `extensions/shell-unwrap/`, where Pi
-discovers its `index.js`, beside the hook bundle and a `shell-unwrap.json`
+discovers its `index.js`, beside the hook binary and a `shell-unwrap.json`
 that holds every deny as a Claude `Bash(...)` pattern. On each `bash` call it
-runs the bundle's Codex host in a Bun subprocess and blocks the call with the
-deny's reason when any peeled spelling of a command inside it is denied: a
-command behind any wrapper or a program path, a bundled or joined flag, or a
-command in a substitution. It blocks when Bun or the hook cannot run, so the
-guards fail closed. It never asks; the permission system's own ask would
+runs the binary's Codex host and blocks the call with the deny's reason when
+any peeled spelling of a command inside it is denied (a command behind any
+wrapper or a program path, a bundled or joined flag, or a command in a
+substitution), or when a deny matches every value zsh may run a command with
+(`for f in --force; do git push $f; done`). It blocks when the hook cannot
+run, so the guards fail closed. It never asks; the permission system's own ask would
 repeat its prompt.
 
 Without a permission source, an MCP tool decision or an agent `deny` still

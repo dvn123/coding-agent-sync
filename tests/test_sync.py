@@ -38,7 +38,11 @@ from coding_agents_sync.sources import (
     load_permissions,
 )
 from coding_agents_sync.targets.opencode import UNWRAP_PLUGIN
-from coding_agents_sync.targets.permissions import UNWRAP_HOOK, unwrap_command
+from coding_agents_sync.targets.permissions import (
+    UNWRAP_NAME,
+    unwrap_binary,
+    unwrap_command,
+)
 from coding_agents_sync.targets.pi import UNWRAP_EXTENSION
 
 
@@ -1600,9 +1604,9 @@ class PermissionProjectionTests(SyncCase):
         self.assertEqual(
             (extension / "index.js").read_bytes(), UNWRAP_EXTENSION.read_bytes()
         )
-        self.assertEqual(
-            (extension / "shell-unwrap.js").read_bytes(), UNWRAP_HOOK.read_bytes()
-        )
+        binary = extension / UNWRAP_NAME
+        self.assertEqual(binary.read_bytes(), unwrap_binary())
+        self.assertTrue(os.access(binary, os.X_OK))
         guards = load_json(extension / "shell-unwrap.json")["permissions"]
         self.assertEqual(guards, {"deny": ["Bash(shred *)"]})
 
@@ -1981,6 +1985,10 @@ class PermissionProjectionTests(SyncCase):
             (home / ".config/opencode/plugins/shell-unwrap.js").read_bytes(),
             UNWRAP_PLUGIN.read_bytes(),
         )
+        # The plugin asks the binary one directory above it.
+        binary = home / ".config/opencode" / UNWRAP_NAME
+        self.assertEqual(binary.read_bytes(), unwrap_binary())
+        self.assertTrue(os.access(binary, os.X_OK))
         # No `*`: OpenCode's own ask default precedes its built-in allows.
         self.assertEqual(
             opencode_rules(opencode, "external_directory"),
@@ -2301,35 +2309,30 @@ class PermissionProjectionTests(SyncCase):
         config = tomllib.loads((home / ".codex/config.toml").read_text())
         (hook,) = config["hooks"]["PreToolUse"]
         self.assertEqual(hook["matcher"], "Bash")
-        script = home / ".codex/hooks/shell-unwrap.js"
-        self.assertIn(
-            f"cd {script.parent} && bun shell-unwrap.js codex",
-            hook["hooks"][0]["command"],
-        )
+        script = home / ".codex/hooks" / UNWRAP_NAME
+        self.assertIn(f"{script} codex", hook["hooks"][0]["command"])
         self.assertIn('"permissionDecision": "deny"', hook["hooks"][0]["command"])
-        self.assertEqual(script.read_bytes(), UNWRAP_HOOK.read_bytes())
+        self.assertEqual(script.read_bytes(), unwrap_binary())
+        self.assertTrue(os.access(script, os.X_OK))
 
-    def test_unwrap_command_runs_in_the_hook_directory_and_passes_in_bypass(
+    def test_unwrap_command_runs_the_binary_and_passes_in_bypass(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()
-            hooks, bin_dir = root / "hooks", root / "bin"
-            hooks.mkdir()
-            bin_dir.mkdir()
-            # Prints where it runs, or fails like a mise shim in an untrusted project.
-            bun = bin_dir / "bun"
-            bun.write_text('#!/bin/sh\ncat >/dev/null\n[ -z "$FAIL" ] && pwd -P\n')
-            bun.chmod(0o755)
+            # Prints its host, or fails as a missing or broken binary would.
+            binary = root / "shell-unwrap"
+            binary.write_text(
+                '#!/bin/sh\ncat >/dev/null\n[ -z "$FAIL" ] && echo "$1"\n'
+            )
+            binary.chmod(0o755)
             command = unwrap_command(
-                str(hooks), "claude", {"decision": "ask"}, silent_in_bypass=True
+                str(binary), "claude", {"decision": "ask"}, silent_in_bypass=True
             )
 
             def run(mode: str, *, fail: bool) -> str:
                 event = json.dumps({"permission_mode": mode}, separators=(",", ":"))
-                env = {"PATH": f"{bin_dir}:/usr/bin:/bin"} | (
-                    {"FAIL": "1"} if fail else {}
-                )
+                env = {"PATH": "/usr/bin:/bin"} | ({"FAIL": "1"} if fail else {})
                 return subprocess.run(
                     ["/bin/sh", "-c", command],
                     input=event,
@@ -2340,7 +2343,7 @@ class PermissionProjectionTests(SyncCase):
                     check=True,
                 ).stdout
 
-            self.assertEqual(run("default", fail=False), f"{hooks}\n")
+            self.assertEqual(run("default", fail=False), "claude\n")
             self.assertEqual(run("default", fail=True), '{"decision": "ask"}')
             self.assertEqual(run("bypassPermissions", fail=True), "")
 
@@ -2584,8 +2587,9 @@ class PermissionProjectionTests(SyncCase):
         )
         run_sync(config_root=config_root, home=home)
 
-        script = home / ".claude/hooks/shell-unwrap.js"
-        self.assertEqual(script.read_bytes(), UNWRAP_HOOK.read_bytes())
+        script = home / ".claude/hooks" / UNWRAP_NAME
+        self.assertEqual(script.read_bytes(), unwrap_binary())
+        self.assertTrue(os.access(script, os.X_OK))
         hooks = claude_settings(home)["hooks"]["PreToolUse"]
         self.assertEqual(hooks[0], foreign)
         self.assertEqual(hooks[1]["matcher"], "Bash")
@@ -2640,8 +2644,9 @@ class PermissionProjectionTests(SyncCase):
         )
         run_sync(config_root=config_root, home=home)
 
-        script = home / ".cursor/hooks/shell-unwrap.js"
-        self.assertEqual(script.read_bytes(), UNWRAP_HOOK.read_bytes())
+        script = home / ".cursor/hooks" / UNWRAP_NAME
+        self.assertEqual(script.read_bytes(), unwrap_binary())
+        self.assertTrue(os.access(script, os.X_OK))
         hooks = load_json(home / ".cursor/hooks.json")
         hook, extended = hooks["hooks"]["beforeShellExecution"]
         self.assertEqual(extended, foreign)
@@ -2667,9 +2672,13 @@ class PermissionProjectionTests(SyncCase):
         )
         self.assertEqual(verdict("git push", environment)["permission"], "ask")
         self.assertEqual(verdict("git status", environment), {})
-        # Without bun, the guards fail closed.
+        # The hook runs by its path, so Desktop's bare PATH does not matter,
+        # and without the binary the guards fail closed.
         bare = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+        self.assertEqual(verdict("git status", bare), {})
+        moved = script.rename(script.with_name("moved"))
         self.assertEqual(verdict("git status", bare)["permission"], "ask")
+        moved.rename(script)
 
         write_permissions(config_root, allow=[["git"]])
         run_sync(config_root=config_root, home=home)

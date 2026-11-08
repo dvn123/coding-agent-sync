@@ -47,7 +47,6 @@ from ..sources import (
 from .permissions import (
     CLAUDE_PEELED_PREFIXES,
     CLAUDE_TOOL_PATTERNS,
-    UNWRAP_HOOK,
     UNWRAP_HOOK_PATH,
     UNWRAP_TIMEOUT_SECONDS,
     bucket_entries,
@@ -59,6 +58,7 @@ from .permissions import (
     literal_directories,
     secret_name_variants,
     tool_patterns,
+    unwrap_binary,
     unwrap_command,
     unwrap_reasons_file,
 )
@@ -249,15 +249,16 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
 
 
 # Claude matches an allow only against a flat command, peels `xargs` only bare,
-# and never shows the model a deny rule's reason. The bundled PreToolUse hook
-# allows a command when every command inside it matches an allow, and denies or
-# asks for one that any peeled spelling of a deny or ask matches, with the
-# deny's reason; Claude still applies its own deny and ask rules after a hook
-# allow. When it cannot run, it asks, since the rules leave `xargs` with options
-# to it.
+# and never shows the model a deny rule's reason. shell-unwrap's PreToolUse
+# hook judges every command zsh will run, with its run-time parts as any text:
+# it allows a command only when an allow covers every value and no guard may
+# match, and denies or asks when a deny or ask matches every value, with the
+# deny's reason. Claude still applies its own deny and ask rules after a hook
+# allow. When it cannot run, it asks, since the rules leave `xargs` with
+# options to it.
 
 
-# Printed when Bun cannot run the hook. The deny rules leave `xargs` with
+# Printed when the hook cannot run. The deny rules leave `xargs` with
 # options to the hook, so its absence must not pass a command silently, except
 # in bypass permissions mode, which still shows a hook's ask.
 UNWRAP_UNAVAILABLE = {
@@ -272,9 +273,11 @@ UNWRAP_UNAVAILABLE = {
 
 
 def _unwrap_hook(script: Path) -> dict[str, Any]:
-    directory = shlex.quote(script.parent.as_posix())
     command = unwrap_command(
-        directory, "claude", UNWRAP_UNAVAILABLE, silent_in_bypass=True
+        shlex.quote(script.as_posix()),
+        "claude",
+        UNWRAP_UNAVAILABLE,
+        silent_in_bypass=True,
     )
     return {
         "matcher": "Bash",
@@ -581,7 +584,9 @@ def compile_claude(ctx: SyncContext, sources: SourceBundle) -> Plan:
         if note := folded[1]:
             diagnostics.append(Diagnostic("warning", note, permissions.paths[0]))
         script = root / UNWRAP_HOOK_PATH
-        files.append(OwnedFile(script, UNWRAP_HOOK.read_bytes(), root))
+        files.append(
+            OwnedFile(script, unwrap_binary(), root, structured=False, executable=True)
+        )
         files.extend(unwrap_reasons_file(root, permissions, shell_entries))
         hook_values.append(
             NativeValue(

@@ -14,7 +14,7 @@ it has moved to one, and the rest still passes through that migration.
 | Command | `<home>/.config/opencode/commands/<source-file>.md` |
 | Agent | `<home>/.config/opencode/agents/<source-file>.md` |
 | Permissions | owned native `/permissions` rule list in `opencode.json` |
-| Permissions | `<home>/.config/opencode/plugins/shell-unwrap.js`, the bundled wrapper plugin |
+| Permissions | `<home>/.config/opencode/plugins/shell-unwrap.js`, the bundled wrapper plugin, and `<home>/.config/opencode/shell-unwrap`, the binary it asks |
 
 The compiler owns only its glob in `instructions`; other entries, hand-written
 or added with a patch `extend`, sit beside it. Rules have no
@@ -70,15 +70,16 @@ is through transparent wrappers (`builtin`, `command`, `env -i`/`-u`, `nice`,
 `nocorrect`, `noglob`, `nohup`, `stdbuf`, `time -p`, `timeout`, `xargs`) and
 harmless assignments (`GIT_EDITOR=true`) for a
 command that fell to the catch-all; `xargs` carries only to a rule that takes
-one more argument. The audit does not model that allow. The peel exists once,
-in shell-unwrap's TypeScript: the Claude and Cursor hook bundles the same code,
-and the audit asks the vendored hook bundle for its spellings through Bun, so
-the compiler's tests need Bun. The `opencode.unwrap` live scenarios run
+one more argument, and only when zsh fixes every word of the command, so a
+run-time value never rides on an allow. The audit does not model that allow.
+The peel exists once, in shell-unwrap's Go binary: the plugin asks it, at
+`<home>/.config/opencode/shell-unwrap` one directory above the plugin, for
+each review; the Claude, Codex and Cursor hooks are the same binary; and the
+audit asks it for its spellings. The `opencode.unwrap` live scenarios run
 OpenCode on the compiled output; the opt-in oracle scenario checks the audit's
-model against OpenCode on a real policy. To update both bundles, run
-`bun run check` in that repository, then copy
-`dist/opencode/shell-unwrap.js` to `targets/shell-unwrap/opencode.js` and
-`dist/hook/shell-unwrap.js` to `targets/shell-unwrap/hook.js`.
+model against OpenCode on a real policy. To update the vendored source and
+the plugin, run `bun run check` in that repository, then
+`scripts/vendor <this repository>/src/coding_agents_sync/targets/shell-unwrap`.
 
 File permissions are checked by path relative to the session directory for
 files inside it and by absolute path otherwise, and the matcher's `**/` needs

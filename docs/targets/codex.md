@@ -132,20 +132,21 @@ Allow rules never project and owe no omission: a Codex `allow` rule runs the
 command outside the sandbox, while an unlisted command already runs inside
 it.
 
-shell-unwrap's hook bundle carries the denies the prefix rules miss. It lands
-in `hooks/shell-unwrap.js` beside a `shell-unwrap.json` that holds every deny
-as a Claude `Bash(...)` pattern, text and exact rules included, and runs as a
+shell-unwrap's hook binary carries the denies the prefix rules miss. It lands
+in `hooks/shell-unwrap` beside a `shell-unwrap.json` that holds every deny as
+a Claude `Bash(...)` pattern, text and exact rules included, and runs as a
 `Bash` `PreToolUse` command in `config.toml`. It denies a call when any peeled
 spelling of a command inside it matches a deny: a wrapper with arguments
 (`timeout 5 …`), an option before the subcommand, a bundled or joined flag
-(`-fu`, `--method=POST`), or a command in a substitution. Codex rejects an
-`ask` from a `PreToolUse` hook, so asks stay prefix rules only. When Bun or
-the hook cannot run, the hook command prints a deny, so the guards fail closed,
-except with approval policy `never` (`permission_mode` `bypassPermissions`),
-where it prints nothing. Bun starts in the bundle's directory, since a mise
-`bun` shim exits in a project whose mise config is untrusted.
-Codex runs the hook only once the user trusts it in `/hooks`; the trust covers
-the hook's declaration, so a new bundle needs no new trust.
+(`-fu`, `--method=POST`), or a command in a substitution; or when a deny
+matches every value zsh may run a command with
+(`for f in --force; do git push $f; done`). Codex rejects an `ask` from a
+`PreToolUse` hook, so asks stay prefix rules only. When the hook cannot run,
+the hook command prints a deny, so the guards fail closed, except with
+approval policy `never` (`permission_mode` `bypassPermissions`), where it
+prints nothing. Codex runs the hook only once the user trusts it in
+`/hooks`; the trust covers the hook's declaration, so a rebuilt binary needs
+no new trust, but a changed command does.
 
 ## Permission profile
 

@@ -32,11 +32,11 @@ from .claude import shell_entries as claude_shell_entries
 from .permissions import (
     ALLOW_WRAPPERS,
     INTERPRETER_COMMANDS,
-    UNWRAP_HOOK,
     UNWRAP_HOOK_PATH,
     UNWRAP_TIMEOUT_SECONDS,
     cursor_shell_variants,
     denied_paths,
+    unwrap_binary,
     unwrap_command,
     unwrap_rules_file,
     whole_program,
@@ -186,16 +186,15 @@ def _terminal_allowlist(
     return allowlist, diagnostics
 
 
-# Cursor's allowlists cannot ask or deny. shell-unwrap's hook bundle, a
+# Cursor's allowlists cannot ask or deny. shell-unwrap's hook, a
 # `beforeShellExecution` hook in the user `hooks.json` that Desktop and the CLI
 # both load, denies or asks for any command inside a call that a guard
-# matches, peeled as on Claude, and leaves the rest to the allowlist. It reads
-# Claude's `Bash(...)` patterns and asks when it cannot run, so the guards
-# fail closed. Desktop can refuse user-local plugins, so it is not one.
-# Desktop starts from the Dock without the login shell's PATH.
-BUN_PATH = (
-    "$HOME/.bun/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin"
-)
+# matches, peeled as on Claude, or that a guard matches for every value zsh may
+# run it with, and leaves the rest to the allowlist. It reads Claude's
+# `Bash(...)` patterns and asks when it cannot run, so the guards fail closed.
+# Desktop can refuse user-local plugins, so it is not one. The hook runs by its
+# path, so Desktop starting from the Dock without the login shell's PATH does
+# not matter.
 UNWRAP_UNAVAILABLE = {
     "permission": "ask",
     "user_message": "shell-unwrap could not run, so its guards cannot be checked",
@@ -216,24 +215,20 @@ def _unwrap_hook(
     )
     if rules is None:
         return [], []
-    directory = script.parent
     located = (
-        f'"$HOME"/{shlex.quote(directory.relative_to(home).as_posix())}'
-        if directory.is_relative_to(home)
-        else shlex.quote(directory.as_posix())
+        f'"$HOME"/{shlex.quote(script.relative_to(home).as_posix())}'
+        if script.is_relative_to(home)
+        else shlex.quote(script.as_posix())
     )
-    path = f'PATH="{BUN_PATH}:$PATH" '
-    body = unwrap_command(located, "cursor", UNWRAP_UNAVAILABLE, env=path)
+    body = unwrap_command(located, "cursor", UNWRAP_UNAVAILABLE)
     hook = {
         "command": f"/bin/sh -c {shlex.quote(body)}",
         "timeout": UNWRAP_TIMEOUT_SECONDS,
         "failClosed": True,
     }
     hooks = root / "hooks.json"
-    return [
-        OwnedFile(script, UNWRAP_HOOK.read_bytes(), root, structured=False),
-        rules,
-    ], [
+    binary = OwnedFile(script, unwrap_binary(), root, structured=False, executable=True)
+    return [binary, rules], [
         NativeValue("cursor-hooks", hooks, ("version",), 1),
         NativeValue("cursor-hooks", hooks, ("hooks", "beforeShellExecution"), [hook]),
     ]
