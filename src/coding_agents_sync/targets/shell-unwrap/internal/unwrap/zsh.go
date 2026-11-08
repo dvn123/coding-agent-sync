@@ -549,7 +549,7 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 // Variables whose value a command cannot change before zsh expands them: the
 // shell inherits them from the process that also runs this hook, and the
 // analysis declines every way to assign them (they are exported).
-var constants = []string{"HOME", "USER", "LOGNAME"}
+var constants = []string{"HOME", "USER", "LOGNAME", "TMPDIR"}
 
 // plainName is the name a plain `$x` or `${x}` expands, or "".
 func plainName(node *syntax.ParamExp) string {

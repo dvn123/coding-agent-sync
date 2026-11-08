@@ -114,6 +114,11 @@ func intersects(pattern, template string) bool {
 			case j < n && template[j] == OneWord[0]:
 				// Within its word: any text but the space between words.
 				ok = at(i, j+1) || (i < m && pattern[i] != ' ' && at(i+1, j))
+			case j < n && template[j] == Positional[0]:
+				// Any words, but none that starts with `-`. After a pattern `*`
+				// the word may already have started, so `-` stays possible.
+				startsWord := i == 0 || pattern[i-1] == ' '
+				ok = at(i, j+1) || (i < m && !(pattern[i] == '-' && startsWord) && at(i+1, j))
 			case i < m && j < n:
 				ok = pattern[i] == template[j] && at(i+1, j+1)
 			default:
@@ -145,7 +150,7 @@ func covers(pattern, template string) bool {
 			case j < n && pattern[j] == '*':
 				ok = at(i, j+1) || (i < m && at(i+1, j))
 			case i < m && j < n:
-				ok = template[i] != Wild[0] && template[i] != OneWord[0] && template[i] == pattern[j] && at(i+1, j+1)
+				ok = !strings.ContainsRune(wilds, rune(template[i])) && template[i] == pattern[j] && at(i+1, j+1)
 			default:
 				ok = i == m && j == n
 			}

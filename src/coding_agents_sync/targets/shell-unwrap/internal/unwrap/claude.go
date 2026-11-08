@@ -309,7 +309,7 @@ func (r Rules) judge(command, guards string) (result verdict) {
 		}
 	}
 	for _, candidate := range append([]string{guards}, Spellings(guards)...) {
-		plain := templates(candidate)
+		plain := templatesOf(positional(Values(candidate)))
 		text := plain
 		if opaque, ok := gitArguments(Values(candidate)); ok {
 			text = templatesOf(opaque, Opaque)
@@ -584,4 +584,35 @@ func rawTexts(list []ZshWord) []string {
 		out[i] = word.Text
 	}
 	return out
+}
+
+// Programs that read every word after a literal `--` as an operand.
+var endsOptions = []string{
+	"rg", "grep", "egrep", "fgrep", "fd", "ls", "cat", "head", "tail", "wc", "sort", "uniq", "cut", "diff",
+	"file", "stat", "du", "sed", "awk", "jq", "yq",
+}
+
+// positional marks Positional the run-time parts after a literal `--` in a
+// command of endsOptions, which the program reads as operands, so they hold
+// no option a guard could name. It returns the mark for the input `xargs`
+// appends: Positional when it lands after that `--`, else Wild.
+func positional(values []string) ([]string, string) {
+	if len(values) == 0 || !slices.Contains(endsOptions, Basename(values[0])) {
+		return values, Wild
+	}
+	end := slices.Index(values, "--")
+	if end == -1 {
+		return values, Wild
+	}
+	out := slices.Clone(values)
+	input := Wild
+	for index := end + 1; index < len(out); index++ {
+		for _, mark := range []string{Wild, OneWord} {
+			out[index] = strings.ReplaceAll(out[index], mark, Positional)
+		}
+		if strings.Contains(out[index], XargsInput) {
+			input = Positional
+		}
+	}
+	return out, input
 }

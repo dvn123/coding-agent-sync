@@ -25,8 +25,13 @@ const Wild = "\x00"
 // guards' templates carry it; see Judge.
 const OneWord = "\x01"
 
-// wilds are both run-time markers.
-const wilds = Wild + OneWord
+// Positional stands for run-time text after a literal `--`, which a program
+// that ends its options there reads as operands: any words, none of them an
+// option. Only the guards' templates carry it; see positional.
+const Positional = "\x03"
+
+// wilds are the run-time markers.
+const wilds = Wild + OneWord + Positional
 
 // XargsInput marks what `xargs` appends to the command it runs, or puts in
 // place of its replacement string: the command must pass with that input in
