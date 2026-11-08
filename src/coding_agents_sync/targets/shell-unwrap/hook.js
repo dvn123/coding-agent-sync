@@ -1,12 +1,55 @@
 // @bun
+var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name2, newValue) {
+  this[name2] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name2 in all)
+    __defProp(target, name2, {
+      get: all[name2],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name2)
+    });
+};
+
+// src/claude.ts
+var exports_claude = {};
+__export(exports_claude, {
+  Abstain: () => Abstain,
+  MAX_COMMAND: () => MAX_COMMAND,
+  asked: () => asked,
+  buildRules: () => buildRules,
+  commands: () => commands,
+  decide: () => decide,
+  denied: () => denied,
+  guarded: () => guarded,
+  main: () => main,
+  matching: () => matching2,
+  spellings: () => spellings,
+  toRegex: () => toRegex,
+  transparent: () => transparent
+});
+
+// src/cursor.ts
+var exports_cursor = {};
+__export(exports_cursor, {
+  decide: () => decide2,
+  loadRules: () => loadRules2,
+  main: () => main2,
+  spellings: () => spellings,
+  transparent: () => transparent
+});
+
 // src/claude.ts
 import { existsSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 
 // node_modules/web-tree-sitter/tree-sitter.js
-var __defProp = Object.defineProperty;
-var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
+var __defProp2 = Object.defineProperty;
+var __name = (target, value) => __defProp2(target, "name", { value, configurable: true });
 var SIZE_OF_SHORT = 2;
 var SIZE_OF_INT = 4;
 var SIZE_OF_CURSOR = 4 * SIZE_OF_INT;
@@ -3397,6 +3440,53 @@ var HARMLESS_ASSIGNMENTS = new Set([
   "IFS='|'",
   "IFS=$'\\t'"
 ]);
+var SAFE_NAMES = new Set([
+  "GOEXPERIMENT",
+  "GOOS",
+  "GOARCH",
+  "CGO_ENABLED",
+  "GO111MODULE",
+  "RUST_BACKTRACE",
+  "RUST_LOG",
+  "NODE_ENV",
+  "PYTHONUNBUFFERED",
+  "PYTHONDONTWRITEBYTECODE",
+  "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+  "PYTEST_DEBUG",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_TIME",
+  "CHARSET",
+  "TERM",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "TZ",
+  "LS_COLORS",
+  "LSCOLORS",
+  "GREP_COLOR",
+  "GREP_COLORS",
+  "GCC_COLORS",
+  "TIME_STYLE",
+  "BLOCK_SIZE",
+  "BLOCKSIZE",
+  "COLUMNS",
+  "LINES",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "CI",
+  "DEBIAN_FRONTEND",
+  "GIT_TERMINAL_PROMPT"
+]);
+var PLAIN_VALUE = /^[A-Za-z0-9_.,:\/@%+-]*$/;
+function harmless(assignment) {
+  if (HARMLESS_ASSIGNMENTS.has(assignment))
+    return true;
+  const [name2, ...rest] = assignment.split("=");
+  return rest.length > 0 && SAFE_NAMES.has(name2) && PLAIN_VALUE.test(rest.join("="));
+}
 function permitted(value, options) {
   if (value === "--")
     return true;
@@ -3412,7 +3502,7 @@ function transparent(command) {
   const head = list[0];
   if (!head)
     return;
-  if (HARMLESS_ASSIGNMENTS.has(text.slice(head.start, head.end))) {
+  if (harmless(text.slice(head.start, head.end))) {
     return list[1] ? text.slice(list[1].start).trim() : undefined;
   }
   if (text.slice(head.start, head.end) !== head.value)
@@ -3887,6 +3977,8 @@ if (import.meta.main) {
   await host();
 }
 export {
+  exports_claude as claude,
+  exports_cursor as cursor,
   spellings,
   transparent
 };

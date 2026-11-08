@@ -180,6 +180,53 @@ var HARMLESS_ASSIGNMENTS = new Set([
   "IFS='|'",
   "IFS=$'\\t'"
 ]);
+var SAFE_NAMES = new Set([
+  "GOEXPERIMENT",
+  "GOOS",
+  "GOARCH",
+  "CGO_ENABLED",
+  "GO111MODULE",
+  "RUST_BACKTRACE",
+  "RUST_LOG",
+  "NODE_ENV",
+  "PYTHONUNBUFFERED",
+  "PYTHONDONTWRITEBYTECODE",
+  "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+  "PYTEST_DEBUG",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_TIME",
+  "CHARSET",
+  "TERM",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "TZ",
+  "LS_COLORS",
+  "LSCOLORS",
+  "GREP_COLOR",
+  "GREP_COLORS",
+  "GCC_COLORS",
+  "TIME_STYLE",
+  "BLOCK_SIZE",
+  "BLOCKSIZE",
+  "COLUMNS",
+  "LINES",
+  "CLICOLOR",
+  "CLICOLOR_FORCE",
+  "CI",
+  "DEBIAN_FRONTEND",
+  "GIT_TERMINAL_PROMPT"
+]);
+var PLAIN_VALUE = /^[A-Za-z0-9_.,:\/@%+-]*$/;
+function harmless(assignment) {
+  if (HARMLESS_ASSIGNMENTS.has(assignment))
+    return true;
+  const [name, ...rest] = assignment.split("=");
+  return rest.length > 0 && SAFE_NAMES.has(name) && PLAIN_VALUE.test(rest.join("="));
+}
 function permitted(value, options) {
   if (value === "--")
     return true;
@@ -195,7 +242,7 @@ function transparent(command) {
   const head = list[0];
   if (!head)
     return;
-  if (HARMLESS_ASSIGNMENTS.has(text.slice(head.start, head.end))) {
+  if (harmless(text.slice(head.start, head.end))) {
     return list[1] ? text.slice(list[1].start).trim() : undefined;
   }
   if (text.slice(head.start, head.end) !== head.value)
