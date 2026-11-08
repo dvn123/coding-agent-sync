@@ -185,6 +185,18 @@ def prune_stale_entries(
                 shutil.rmtree(target)
         elif target.is_file():
             target.unlink()
+        _remove_empty_parents(target, target_root)
+
+
+def _remove_empty_parents(path: Path, root: Path) -> None:
+    """Remove the directories between `path` and `root` that pruning emptied."""
+    for parent in path.parents:
+        if parent == root:
+            return
+        try:
+            parent.rmdir()
+        except OSError:
+            return
 
 
 def sync_manifested_entries(

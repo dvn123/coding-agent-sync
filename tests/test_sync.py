@@ -17,7 +17,12 @@ from capabilities.audit import OpenCodeRules
 from pydantic import ValidationError
 
 from coding_agents_sync import run_sync
-from coding_agents_sync.io import MANAGED_MANIFEST, ManagedEntryConflict, entry_hash
+from coding_agents_sync.io import (
+    MANAGED_MANIFEST,
+    ManagedEntryConflict,
+    entry_hash,
+    sync_manifested_entries,
+)
 from coding_agents_sync.ir import applies_to
 from coding_agents_sync.limits import required_omissions
 from coding_agents_sync.output.native import NativeConfigError
@@ -935,6 +940,17 @@ class RejectedSourceTests(SyncCase):
 
                 with self.assertRaisesRegex(ManagedEntryConflict, message):
                     run_sync(config_root=config_root, home=home)
+
+    def test_a_pruned_nested_entry_takes_the_directories_it_emptied(self) -> None:
+        _, root = self.new_roots()
+        write(root / "plugins/guard/hooks/index.js", "generated\n")
+        write(root / "plugins/kept.js", "user\n")
+        sync_manifested_entries(root, {"plugins/guard/hooks/index.js"}, "file")
+
+        sync_manifested_entries(root, set(), "file")
+
+        self.assertFalse((root / "plugins/guard").exists())
+        self.assertTrue((root / "plugins/kept.js").exists())
 
 
 class ModelPolicyTests(SyncCase):
