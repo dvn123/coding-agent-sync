@@ -1281,25 +1281,31 @@ class NativeOwnershipTests(SyncCase):
             (home / ".cursor" / "rules" / "coding-agents-global.mdc").exists()
         )
 
-    def test_a_disabled_skill_retires_every_deployed_copy(self) -> None:
-        config_root, home = self.new_roots()
-        skill = config_root / "skills/paused/SKILL.md"
-        write(skill, source_doc("skill", "Body\n", description="Paused"))
-        run_sync(config_root=config_root, home=home)
-        directories = (".agents/skills", ".claude/skills")
-        self.assertTrue(
-            all((home / d / "paused/SKILL.md").exists() for d in directories)
-        )
+    def test_a_disabled_source_retires_its_deployed_copy(self) -> None:
+        # kind: (source, its Claude output); a command reaches Claude as a skill.
+        cases = {
+            "global": ("global/AGENTS.md", ".claude/CLAUDE.md"),
+            "rule": ("rules/paused.md", ".claude/rules/paused.md"),
+            "skill": ("skills/paused/SKILL.md", ".claude/skills/paused/SKILL.md"),
+            "command": ("commands/paused.md", ".claude/skills/paused/SKILL.md"),
+            "agent": ("agents/paused.md", ".claude/agents/paused.md"),
+        }
+        for kind, (source, output) in cases.items():
+            with self.subTest(kind):
+                config_root, home = self.new_roots()
+                write(config_root / source, source_doc(kind, "Body\n", description="P"))
+                run_sync(config_root=config_root, home=home)
+                self.assertTrue((home / output).exists())
 
-        write(
-            skill,
-            source_doc(
-                "skill", "Body\n", description="Paused", extra={"enabled": False}
-            ),
-        )
-        run_sync(config_root=config_root, home=home)
+                write(
+                    config_root / source,
+                    source_doc(
+                        kind, "Body\n", description="P", extra={"enabled": False}
+                    ),
+                )
+                run_sync(config_root=config_root, home=home)
 
-        self.assertEqual([d for d in directories if (home / d / "paused").exists()], [])
+                self.assertFalse((home / output).exists())
 
 
 class PermissionProjectionTests(SyncCase):
@@ -2418,6 +2424,20 @@ class PermissionProjectionTests(SyncCase):
         desktop = load_json(home / ".cursor/permissions.json")
         self.assertIn("local-tool status", desktop["terminalAllowlist"])
         self.assertEqual(cursor_guards(home), claude_shell_guards(home))
+
+    def test_a_disabled_command_fragment_contributes_no_rules(self) -> None:
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[["git", "status"]])
+        write(
+            config_root / "permissions.local/paused.yaml",
+            "enabled: false\nallow:\n- [local-tool, status]\n",
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        allow = claude_settings(home)["permissions"]["allow"]
+        self.assertIn("Bash(git status *)", allow)
+        self.assertEqual([rule for rule in allow if "local-tool" in rule], [])
 
     def test_command_sources_that_owe_no_omission_sync(self) -> None:
         rows = (

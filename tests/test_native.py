@@ -48,10 +48,17 @@ def test_pointer_decoding_and_patch_schema_validation(tmp_path: Path) -> None:
         "scalar-extend": "extend:\n  /x: 1\n",
         "list-overlay": "overlay:\n  /x: [1]\n",
         "overlap": "set:\n  /x: 1\n  /x/y: 2\n",
+        "enabled-not-bool": "enabled: 'no'\nset:\n  /x: 1\n",
     }.items():
         write(tmp_path / name, f"{body}")
         with pytest.raises(PatchError):
             load_patch(tmp_path / name)
+
+
+def test_a_disabled_patch_writes_nothing(tmp_path: Path) -> None:
+    write(tmp_path / "paused", "enabled: false\nset:\n  /x: 1\n")
+
+    assert load_patch(tmp_path / "paused") == Patch()
 
 
 def test_operations_are_structural_and_local_overrides_replace_exact_pointers() -> None:

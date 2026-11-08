@@ -85,8 +85,14 @@ def load_patch(path: Path) -> Patch:
         return Patch()
     if not isinstance(parsed, dict):
         raise PatchError(f"patch must be a mapping: {path}")
-    if set(parsed) - {"set", "replace", "delete", "extend", "overlay"}:
+    if set(parsed) - {"enabled", "set", "replace", "delete", "extend", "overlay"}:
         raise PatchError(f"invalid patch section: {path}")
+    enabled = parsed.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise PatchError(f"enabled must be true or false: {path}")
+    # A disabled patch writes nothing, so the values it recorded retire.
+    if not enabled:
+        return Patch()
     operations: list[Operation] = []
     for kind in ("set", "replace", "extend", "overlay"):
         values = parsed.get(kind, {})

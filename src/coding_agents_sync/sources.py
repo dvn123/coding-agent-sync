@@ -379,6 +379,8 @@ class PermissionPolicyDocument(StrictModel):
 
 
 class PermissionRulesDocument(StrictModel):
+    # False keeps the fragment but merges none of its rules.
+    enabled: bool = True
     options: dict[Token, Vocabulary[OptionToken]] = Field(default_factory=dict)
     allow: tuple[CommandPermission, ...] = ()
     ask: tuple[CommandPermission, ...] = ()
@@ -401,6 +403,8 @@ class SourceModel(StrictModel):
     path: Path
     body: str
     description: Annotated[str, BeforeValidator(lambda value: value or "")] = ""
+    # False keeps the source but delivers it nowhere, retiring deployed copies.
+    enabled: bool = True
     # Restrict which targets receive this artifact. Absent or empty means all.
     only: Annotated[tuple[ToolName, ...], Unique] = ()
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
@@ -435,8 +439,6 @@ class RuleSource(SourceModel):
 
 
 class SkillSource(SourceModel):
-    # False keeps the source but delivers it nowhere, retiring deployed copies.
-    enabled: bool = True
     paths: list[str] = Field(default_factory=list)
     disable_model_invocation: bool = False
     license: str | None = None
@@ -669,7 +671,8 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
             fragment = PermissionRulesDocument.model_validate(_load_yaml(path))
         except ValidationError as exc:
             raise _model_error(path, exc) from exc
-        fragments.append((path, fragment))
+        if fragment.enabled:
+            fragments.append((path, fragment))
 
     def rule_key(rule: CommandPermission) -> tuple[Any, ...]:
         return (
@@ -777,9 +780,12 @@ def _load_many[S: SourceModel](
     errors = []
     for path in paths:
         try:
-            loaded.append(load_markdown(path, model))
+            source = load_markdown(path, model)
         except SourceSchemaError as exc:
             errors.append(str(exc))
+            continue
+        if source.enabled:
+            loaded.append(source)
     return loaded, errors
 
 
@@ -802,7 +808,6 @@ def load_sources(config_root: Path) -> SourceBundle:
     skills, skill_errors = _load_many(
         sorted(config_root.glob("skills/*/SKILL.md")), SkillSource
     )
-    skills = [skill for skill in skills if skill.enabled]
     commands, command_errors = _load_many(
         sorted(config_root.glob("commands/*.md")), CommandSource
     )

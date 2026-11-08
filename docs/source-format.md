@@ -70,14 +70,14 @@ empty file is an empty source.
 
 | Kind | Fields |
 | --- | --- |
-| Global | `only`. |
-| Rule | `only`. |
+| Global | `enabled`, `only`. |
+| Rule | `enabled`, `only`. |
 | Skill | `enabled`, `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
-| Command | `only`, `execution.agent`, `execution.subtask`. |
-| Agent | `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
+| Command | `enabled`, `only`, `execution.agent`, `execution.subtask`. |
+| Agent | `enabled`, `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
-| Permission rules | `options`, `allow`, `ask`, `deny`. |
-| MCP server | `only`, `command`, `args`, `env`, `url`, `tools`. |
+| Permission rules | `enabled`, `options`, `allow`, `ask`, `deny`. |
+| MCP server | `enabled`, `only`, `command`, `args`, `env`, `url`, `tools`. |
 
 `model-policy.yaml` is a strict compiler input. It names a `default` profile and defines
 named target profiles; a profile without a `model` makes the agent inherit
@@ -105,6 +105,13 @@ target that still receives the artifact. Host files (`CLAUDE.md`,
 file, so a global excluded by `only` is pruned, and a hand-written host file
 is refused rather than overwritten.
 
+`enabled: false` keeps a source in the tree but delivers it nowhere, so the
+next sync removes what it generated; it defaults to `true`. A global, rule,
+skill, command, or agent then reaches no target, and a permission rules
+fragment, committed or local, contributes none of its rules. An MCP server is
+the exception: `enabled: false` still registers it, switched off, as
+[MCP servers](#mcp-servers) describes. A native patch takes the same key, below.
+
 The compiler projects a canonical field only where its semantics match, and
 a field that changes behavior needs an omission where a target cannot carry
 it: agent `background` on Codex and OpenCode, agent `effort` on Cursor. Fields
@@ -121,9 +128,7 @@ those surface omissions.
 
 ### Skills
 
-`enabled: false` keeps a skill's source but delivers it to no target, so the
-next sync removes every deployed copy; it defaults to `true`. `paths` is a
-list of file globs; `disable_model_invocation` is boolean;
+`paths` is a list of file globs; `disable_model_invocation` is boolean;
 `license` is a string; `metadata` is a map. These are canonical only for the
 targets whose native behavior is equivalent. Do not substitute a similar field
 from another target for one of these values.
@@ -442,7 +447,8 @@ be mode `0600`. The named patch surfaces are:
 | `pi-autoformat` | `<home>/.pi/agent/extensions/pi-autoformat/config.json` |
 
 Patches operate on named JSON/TOML pointers and preserve unnamed native
-fields. A patch cannot overlap a portable file or a raw file. It may
+fields. A top-level `enabled: false` makes a patch write nothing, so the
+values it recorded retire as if its file were gone. A patch cannot overlap a portable file or a raw file. It may
 contribute to a generated pointer only where the contribution is unambiguous:
 a `set` that agrees with the generated value, an `extend` onto a generated
 list, or an `overlay` onto a generated map. Every other overlap, including an
