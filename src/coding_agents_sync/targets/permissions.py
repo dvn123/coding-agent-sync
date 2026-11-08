@@ -1,8 +1,10 @@
 import itertools
 import json
 import re
+import shlex
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from ..output.plan import OwnedFile
 from ..sources import (
@@ -408,7 +410,37 @@ def unwrap_reasons_file(
 # Claude, Codex, and Cursor hooks by host argument. Pi's extension runs its
 # Codex host.
 UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
+UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
 UNWRAP_TIMEOUT_SECONDS = 10
+# Claude Code and Codex send hook input as compact JSON, and a quote inside a
+# string value is escaped, so only the field itself matches.
+UNWRAP_BYPASS = '"permission_mode":"bypassPermissions"'
+
+
+def unwrap_command(
+    directory: str,
+    host: str,
+    fallback: Mapping[str, Any],
+    *,
+    env: str = "",
+    silent_in_bypass: bool = False,
+) -> str:
+    """The shell command that runs the hook bundle in `directory`, a shell word.
+
+    A hook runs in the session's working directory, where a project's untrusted
+    mise config makes the mise `bun` shim exit, so Bun starts from the bundle's
+    directory. When Bun cannot run, the command prints `fallback`, or, with
+    `silent_in_bypass`, nothing for an event in bypass permissions mode.
+    """
+    run = f"(cd {directory} && {env}bun {UNWRAP_HOOK_PATH.name} {host}) 2>/dev/null"
+    printed = f"printf %s {shlex.quote(json.dumps(fallback))}"
+    if not silent_in_bypass:
+        return f"{run} || {printed}"
+    bypass = shlex.quote(UNWRAP_BYPASS)
+    return (
+        f'input=$(cat); printf %s "$input" | {run}'
+        f" || case $input in *{bypass}*) ;; *) {printed} ;; esac"
+    )
 
 
 def unwrap_rules_file(

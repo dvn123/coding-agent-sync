@@ -1,4 +1,3 @@
-import json
 import shlex
 from pathlib import Path
 from typing import Annotated, Any
@@ -34,9 +33,11 @@ from .permissions import (
     ALLOW_WRAPPERS,
     INTERPRETER_COMMANDS,
     UNWRAP_HOOK,
+    UNWRAP_HOOK_PATH,
     UNWRAP_TIMEOUT_SECONDS,
     cursor_shell_variants,
     denied_paths,
+    unwrap_command,
     unwrap_rules_file,
     whole_program,
 )
@@ -191,7 +192,6 @@ def _terminal_allowlist(
 # matches, peeled as on Claude, and leaves the rest to the allowlist. It reads
 # Claude's `Bash(...)` patterns and asks when it cannot run, so the guards
 # fail closed. Desktop can refuse user-local plugins, so it is not one.
-UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
 # Desktop starts from the Dock without the login shell's PATH.
 BUN_PATH = (
     "$HOME/.bun/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin"
@@ -216,14 +216,14 @@ def _unwrap_hook(
     )
     if rules is None:
         return [], []
+    directory = script.parent
     located = (
-        f'"$HOME"/{shlex.quote(script.relative_to(home).as_posix())}'
-        if script.is_relative_to(home)
-        else shlex.quote(script.as_posix())
+        f'"$HOME"/{shlex.quote(directory.relative_to(home).as_posix())}'
+        if directory.is_relative_to(home)
+        else shlex.quote(directory.as_posix())
     )
-    fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
-    run_hook = f'PATH="{BUN_PATH}:$PATH" bun {located} cursor'
-    body = f"{run_hook} 2>/dev/null || printf %s {fallback}"
+    path = f'PATH="{BUN_PATH}:$PATH" '
+    body = unwrap_command(located, "cursor", UNWRAP_UNAVAILABLE, env=path)
     hook = {
         "command": f"/bin/sh -c {shlex.quote(body)}",
         "timeout": UNWRAP_TIMEOUT_SECONDS,

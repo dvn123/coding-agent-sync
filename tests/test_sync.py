@@ -38,7 +38,7 @@ from coding_agents_sync.sources import (
     load_permissions,
 )
 from coding_agents_sync.targets.opencode import UNWRAP_PLUGIN
-from coding_agents_sync.targets.permissions import UNWRAP_HOOK
+from coding_agents_sync.targets.permissions import UNWRAP_HOOK, unwrap_command
 from coding_agents_sync.targets.pi import UNWRAP_EXTENSION
 
 
@@ -2276,9 +2276,47 @@ class PermissionProjectionTests(SyncCase):
         (hook,) = config["hooks"]["PreToolUse"]
         self.assertEqual(hook["matcher"], "Bash")
         script = home / ".codex/hooks/shell-unwrap.js"
-        self.assertIn(f"bun {script} codex", hook["hooks"][0]["command"])
+        self.assertIn(
+            f"cd {script.parent} && bun shell-unwrap.js codex",
+            hook["hooks"][0]["command"],
+        )
         self.assertIn('"permissionDecision": "deny"', hook["hooks"][0]["command"])
         self.assertEqual(script.read_bytes(), UNWRAP_HOOK.read_bytes())
+
+    def test_unwrap_command_runs_in_the_hook_directory_and_passes_in_bypass(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            hooks, bin_dir = root / "hooks", root / "bin"
+            hooks.mkdir()
+            bin_dir.mkdir()
+            # Prints where it runs, or fails like a mise shim in an untrusted project.
+            bun = bin_dir / "bun"
+            bun.write_text('#!/bin/sh\ncat >/dev/null\n[ -z "$FAIL" ] && pwd -P\n')
+            bun.chmod(0o755)
+            command = unwrap_command(
+                str(hooks), "claude", {"decision": "ask"}, silent_in_bypass=True
+            )
+
+            def run(mode: str, *, fail: bool) -> str:
+                event = json.dumps({"permission_mode": mode}, separators=(",", ":"))
+                env = {"PATH": f"{bin_dir}:/usr/bin:/bin"} | (
+                    {"FAIL": "1"} if fail else {}
+                )
+                return subprocess.run(
+                    ["/bin/sh", "-c", command],
+                    input=event,
+                    env=env,
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout
+
+            self.assertEqual(run("default", fail=False), f"{hooks}\n")
+            self.assertEqual(run("default", fail=True), '{"decision": "ask"}')
+            self.assertEqual(run("bypassPermissions", fail=True), "")
 
     def test_codex_rules_share_alternatives_across_wrappers_and_siblings(
         self,

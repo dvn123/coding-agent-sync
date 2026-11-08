@@ -1,4 +1,3 @@
-import json
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
@@ -29,8 +28,10 @@ from ..sources import (
 from .claude import shell_entries as claude_shell_entries
 from .permissions import (
     UNWRAP_HOOK,
+    UNWRAP_HOOK_PATH,
     UNWRAP_TIMEOUT_SECONDS,
     literal_directories,
+    unwrap_command,
     unwrap_rules_file,
 )
 from .support import (
@@ -345,8 +346,8 @@ def _command_rules(
 # command inside a call when any peeled spelling of it matches a deny, text
 # rules included. Codex rejects an ask from a PreToolUse hook, so asks stay
 # prefix rules. The hook denies when it cannot run, so the guards fail closed.
-# Codex runs it only once the user trusts it in `/hooks`.
-UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
+# Codex runs it only once the user trusts it in `/hooks`. The deny stands in
+# for an ask, so with approval policy `never` a hook that cannot run passes.
 UNWRAP_UNAVAILABLE = {
     "hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -372,14 +373,16 @@ def _unwrap_hook(
     )
     if rules is None:
         return [], []
-    command = f"bun {shlex.quote(script.as_posix())} codex 2>/dev/null"
-    fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
+    directory = shlex.quote(script.parent.as_posix())
+    command = unwrap_command(
+        directory, "codex", UNWRAP_UNAVAILABLE, silent_in_bypass=True
+    )
     hook = {
         "matcher": "Bash",
         "hooks": [
             {
                 "type": "command",
-                "command": f"{command} || printf %s {fallback}",
+                "command": command,
                 "timeout": UNWRAP_TIMEOUT_SECONDS,
             }
         ],

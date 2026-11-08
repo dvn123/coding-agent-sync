@@ -1,8 +1,8 @@
 {
   "entries": {
     "AGENTS.md": "sha256:8244b931ed4009ef2187616a5d2d6a772580f38eb817a57963ed2ee787c213aa",
-    "extensions/shell-unwrap/index.js": "sha256:3eb3631e29bd13dcde9fd91df79c0b26ee331d22dc47f606e3c53a7f5123968f",
-    "extensions/shell-unwrap/shell-unwrap.js": "sha256:e1a15a2c5d92453cba773ad7787105daad8b767a1d98c44a5d6b6c75445f9d2d",
+    "extensions/shell-unwrap/index.js": "sha256:75ed18e165cdd5d815299239f61e7634246b624a4d29416d9604b9d15fb98527",
+    "extensions/shell-unwrap/shell-unwrap.js": "sha256:21e58aa03c8aaad0253820230d6c101d3cc43f3f4514c7ed9ea9642f6db5b22b",
     "extensions/shell-unwrap/shell-unwrap.json": "sha256:3f03f98d9da66229bb81ec87571ada6c1df566ed66d34d187816be3e1ccbc661"
   }
 }

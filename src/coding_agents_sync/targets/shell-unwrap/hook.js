@@ -3875,9 +3875,10 @@ async function decide(script, cwd, rules) {
   return { permissionDecision: "allow", permissionDecisionReason: ALLOWED };
 }
 async function main() {
+  let event;
   let decision;
   try {
-    const event = await Bun.stdin.json();
+    event = await Bun.stdin.json();
     if (event?.tool_name !== "Bash")
       return;
     const script = event.tool_input?.command;
@@ -3887,6 +3888,8 @@ async function main() {
   } catch {
     decision = unchecked("the hook failed");
   }
+  if (decision?.permissionDecision === "ask" && event?.permission_mode === "bypassPermissions")
+    return;
   if (decision) {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } }));
   }
@@ -3950,9 +3953,10 @@ async function decide3(script, rules) {
   return;
 }
 async function main3() {
+  let event;
   let reason;
   try {
-    const event = await Bun.stdin.json();
+    event = await Bun.stdin.json();
     const script = event?.tool_input?.command;
     if (event?.tool_name !== "Bash" || typeof script !== "string")
       return;
@@ -3960,6 +3964,8 @@ async function main3() {
   } catch {
     reason = FAILED;
   }
+  if (reason === FAILED && event?.permission_mode === "bypassPermissions")
+    return;
   if (reason) {
     const output = { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason };
     process.stdout.write(JSON.stringify({ hookSpecificOutput: output }));

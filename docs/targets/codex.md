@@ -140,7 +140,10 @@ spelling of a command inside it matches a deny: a wrapper with arguments
 (`timeout 5 …`), an option before the subcommand, a bundled or joined flag
 (`-fu`, `--method=POST`), or a command in a substitution. Codex rejects an
 `ask` from a `PreToolUse` hook, so asks stay prefix rules only. When Bun or
-the hook cannot run, the hook command prints a deny, so the guards fail closed.
+the hook cannot run, the hook command prints a deny, so the guards fail closed,
+except with approval policy `never` (`permission_mode` `bypassPermissions`),
+where it prints nothing. Bun starts in the bundle's directory, since a mise
+`bun` shim exits in a project whose mise config is untrusted.
 Codex runs the hook only once the user trusts it in `/hooks`; the trust covers
 the hook's declaration, so a new bundle needs no new trust.
 

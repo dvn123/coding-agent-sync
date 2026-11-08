@@ -48,6 +48,7 @@ from .permissions import (
     CLAUDE_PEELED_PREFIXES,
     CLAUDE_TOOL_PATTERNS,
     UNWRAP_HOOK,
+    UNWRAP_HOOK_PATH,
     UNWRAP_TIMEOUT_SECONDS,
     bucket_entries,
     bucket_patterns,
@@ -58,6 +59,7 @@ from .permissions import (
     literal_directories,
     secret_name_variants,
     tool_patterns,
+    unwrap_command,
     unwrap_reasons_file,
 )
 from .support import (
@@ -253,11 +255,11 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
 # deny's reason; Claude still applies its own deny and ask rules after a hook
 # allow. When it cannot run, it asks, since the rules leave `xargs` with options
 # to it.
-UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
 
 
 # Printed when Bun cannot run the hook. The deny rules leave `xargs` with
-# options to the hook, so its absence must not pass a command silently.
+# options to the hook, so its absence must not pass a command silently, except
+# in bypass permissions mode, which still shows a hook's ask.
 UNWRAP_UNAVAILABLE = {
     "hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -270,14 +272,16 @@ UNWRAP_UNAVAILABLE = {
 
 
 def _unwrap_hook(script: Path) -> dict[str, Any]:
-    command = f"bun {shlex.quote(script.as_posix())} claude 2>/dev/null"
-    fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
+    directory = shlex.quote(script.parent.as_posix())
+    command = unwrap_command(
+        directory, "claude", UNWRAP_UNAVAILABLE, silent_in_bypass=True
+    )
     return {
         "matcher": "Bash",
         "hooks": [
             {
                 "type": "command",
-                "command": f"{command} || printf %s {fallback}",
+                "command": command,
                 "timeout": UNWRAP_TIMEOUT_SECONDS,
             }
         ],

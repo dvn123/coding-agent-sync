@@ -77,7 +77,10 @@ transparent wrappers and harmless assignments alone. Claude still evaluates its
 deny and ask rules after a hook allow, so the hook removes prompts and never
 lifts a guard. The compiler leaves `xargs` with options to the hook, so the
 hook asks when it cannot parse the command or fails, and the hook command
-prints an ask when Bun cannot run it. For an allow it stays silent, leaving
+prints an ask when Bun cannot run it. Bypass permissions mode still shows a
+hook's ask, so in that mode neither asks; denies still apply. Bun starts in
+the bundle's directory, since a mise `bun` shim exits in a project whose mise
+config is untrusted. For an allow it stays silent, leaving
 Claude's own flow, on anything it does not model: file redirects, `tee`,
 `find` actions, `fd -x`, `cd` outside the working directories or beside `git`,
 shell variable assignments, function definitions, and dynamic program names.

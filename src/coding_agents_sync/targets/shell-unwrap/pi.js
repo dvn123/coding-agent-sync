@@ -7,7 +7,11 @@ var TIMEOUT_MS = 1e4;
 var UNAVAILABLE = "shell-unwrap could not run, so its guards were not checked";
 function runHook(command, hook = HOOK) {
   return new Promise((resolve, reject) => {
-    const child = spawn("bun", [hook, "codex"], { stdio: ["pipe", "pipe", "ignore"], timeout: TIMEOUT_MS });
+    const child = spawn("bun", [hook, "codex"], {
+      cwd: dirname(hook),
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: TIMEOUT_MS
+    });
     let output = "";
     child.stdout.on("data", (chunk) => output += chunk);
     child.on("error", reject);
