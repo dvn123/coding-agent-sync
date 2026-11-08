@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -103,4 +104,82 @@ func gitDirectoryShape(dir string) bool {
 		}
 	}
 	return true
+}
+
+// Opaque stands for run-time text that no text rule can read: it matches a
+// rule's `*` but none of its literal text.
+const Opaque = "\x02"
+
+// Git's options before the subcommand that take the next word: a path, or a
+// value that may set configuration.
+var (
+	gitPathOptions  = []string{"-C", "--git-dir", "--work-tree", "--namespace"}
+	gitValueOptions = []string{"-c", "--config-env"}
+)
+
+// Subcommands that read settings or transports from their own arguments:
+// `git config` sets them, and these take a URL, which may name `ext::`.
+var gitReadsArguments = []string{"config", "clone", "fetch", "pull", "push", "ls-remote", "remote", "submodule", "archive"}
+
+// gitArguments is a git command's words for the text rules (see textRule):
+// git reads settings only from -c and --config-env before the subcommand, from
+// `git config`, and from a transport URL, so when the subcommand is literal
+// and reads none from its arguments, the run-time parts of those arguments and
+// of the paths git takes before it are marked Opaque. ok is false for any
+// other command, or when -c or --config-env holds a run-time value.
+func gitArguments(values []string) ([]string, bool) {
+	if len(values) == 0 || Basename(values[0]) != "git" {
+		return nil, false
+	}
+	out := slices.Clone(values)
+	opaque := func(index int) {
+		for _, mark := range []string{Wild, OneWord} {
+			out[index] = strings.ReplaceAll(out[index], mark, Opaque)
+		}
+	}
+	index := 1
+subcommand:
+	for ; index < len(out); index++ {
+		arg := out[index]
+		switch {
+		case runTime(arg):
+			return nil, false
+		case !strings.HasPrefix(arg, "-"):
+			break subcommand
+		case slices.Contains(gitPathOptions, arg) && index+1 < len(out):
+			index++
+			opaque(index)
+			continue
+		case slices.Contains(gitValueOptions, arg):
+			index++
+			if index < len(out) && runTime(out[index]) {
+				return nil, false
+			}
+			continue
+		}
+	}
+	if index >= len(out) || slices.Contains(gitReadsArguments, out[index]) {
+		return nil, false
+	}
+	for after := index + 1; after < len(out); after++ {
+		opaque(after)
+	}
+	return out, true
+}
+
+// textRule is whether a rule matches text inside a word, as a `text`
+// predicate compiles (`git*core.pager*`, `git -* config*alias.*`), rather
+// than whole words (`git -* push * --force *`).
+func textRule(pattern string) bool {
+	for _, token := range strings.Fields(pattern) {
+		if token != "*" && token != "-*" && strings.Contains(token, "*") {
+			return true
+		}
+	}
+	return false
+}
+
+// runTime is whether a value holds any part decided at run time.
+func runTime(value string) bool {
+	return strings.ContainsAny(value, wilds) || strings.Contains(value, XargsInput)
 }

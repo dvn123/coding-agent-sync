@@ -75,16 +75,21 @@ func runsItself(spelling string) bool {
 // templates are what a peeled spelling stands for: its words joined, with
 // the input `xargs` adds read as any arguments or none.
 func templates(spelling string) []string {
-	values := Values(spelling)
-	wild := func(list []string) string {
+	return templatesOf(Values(spelling), Wild)
+}
+
+// templatesOf joins values with the input `xargs` adds read as mark, and
+// once more without it when it stands alone.
+func templatesOf(values []string, mark string) []string {
+	join := func(list []string) string {
 		out := make([]string, len(list))
 		for i, value := range list {
-			out[i] = strings.ReplaceAll(value, XargsInput, Wild)
+			out[i] = strings.ReplaceAll(value, XargsInput, mark)
 		}
 		return strings.Join(out, " ")
 	}
-	kept := wild(values)
-	dropped := wild(slices.DeleteFunc(slices.Clone(values), func(value string) bool { return value == XargsInput }))
+	kept := join(values)
+	dropped := join(slices.DeleteFunc(slices.Clone(values), func(value string) bool { return value == XargsInput }))
 	if dropped == kept {
 		return []string{kept}
 	}
@@ -177,6 +182,13 @@ func setsVariables(program string, args []string) []string {
 	return names
 }
 
+// plainOption is whether a setopt argument names one of setNames, which zsh
+// reads ignoring case and underscores, with an optional `no` to unset it.
+func plainOption(arg string) bool {
+	name := strings.ToLower(strings.ReplaceAll(arg, "_", ""))
+	return slices.Contains(setNames, name) || slices.Contains(setNames, strings.TrimPrefix(name, "no"))
+}
+
 // plainSet is whether `set` changes only error handling, tracing, or the
 // positional parameters.
 func plainSet(args []string) bool {
@@ -206,6 +218,8 @@ func keepsShell(spelling string) {
 	}
 	name, args := Basename(values[start]), values[start+1:]
 	switch {
+	case name == "setopt" && len(args) > 0 && !slices.ContainsFunc(args, func(arg string) bool { return !plainOption(arg) }):
+		// Only error handling and tracing, as a plain `set` changes.
 	case slices.Contains(stateful, name):
 		decline("%s changes the shell", name)
 	case name == "set":
@@ -248,14 +262,19 @@ func (r Rules) certain(spelling, template string) (verdict, bool) {
 // possible is the first guard some value of a template may meet, if any. A
 // rule that starts with `*` is about the script's text, such as a variable
 // it names, which a run-time value cannot add to it, so Decide judges it on
-// the text alone.
-func (r Rules) possible(template string) (string, bool) {
+// the text alone. A text rule (`git*core.pager*`) reads text, where git's
+// arguments after a known subcommand are opaque; see gitArguments.
+func (r Rules) possible(template, text string) (string, bool) {
 	for _, guard := range []struct {
 		kind  string
 		rules bucket
 	}{{"deny", r.Deny}, {"ask", r.Ask}} {
 		for _, rule := range guard.rules.candidates(template) {
-			if !strings.HasPrefix(rule.Pattern, "*") && MayMatch(rule.Pattern, template) {
+			against := template
+			if textRule(rule.Pattern) {
+				against = text
+			}
+			if !strings.HasPrefix(rule.Pattern, "*") && MayMatch(rule.Pattern, against) {
 				return fmt.Sprintf("%s rule `%s` may match", guard.kind, rule.Pattern), true
 			}
 		}
@@ -290,8 +309,13 @@ func (r Rules) judge(command, guards string) (result verdict) {
 		}
 	}
 	for _, candidate := range append([]string{guards}, Spellings(guards)...) {
-		for _, template := range templates(candidate) {
-			if why, ok := r.possible(template); ok && maybe == "" {
+		plain := templates(candidate)
+		text := plain
+		if opaque, ok := gitArguments(Values(candidate)); ok {
+			text = templatesOf(opaque, Opaque)
+		}
+		for index, template := range plain {
+			if why, ok := r.possible(template, text[index]); ok && maybe == "" {
 				maybe = why
 			}
 		}
@@ -320,16 +344,37 @@ func (r Rules) judge(command, guards string) (result verdict) {
 	return undecided("no allow rule covers every value")
 }
 
-// insideWords marks OneWord the run-time parts of each word that begins with
-// literal text other than an option's `-` and cannot split: zsh expands such
-// a word, a glob like `src/*` or a plain `src/$f`, only to words that begin
-// with that text, so none of them is an option or a bare subcommand.
+// insideWords marks OneWord the run-time parts that zsh keeps inside one
+// argument which cannot be an option, so they can only stand for text within
+// it: a word that cannot split and begins with literal text other than `-`
+// (a glob like `src/*` expands only to names that begin `src/`), and the path
+// git takes after -C, --git-dir, --work-tree or --namespace. Any other
+// run-time word may be an option such as `-XPOST`, which a rule matches only
+// once spelled out, so it stays Wild.
 func insideWords(list []ZshWord) []ZshWord {
 	out := slices.Clone(list)
 	for index, word := range out {
 		prefix, _, found := strings.Cut(word.Text, Wild)
-		if found && prefix != "" && !strings.HasPrefix(prefix, "-") && !word.Splits {
+		if found && !word.Splits && prefix != "" && !strings.HasPrefix(prefix, "-") {
 			out[index].Text = strings.ReplaceAll(word.Text, Wild, OneWord)
+		}
+	}
+	program := slices.IndexFunc(out, func(word ZshWord) bool { return !assignment.MatchString(word.Text) })
+	if program == -1 || Basename(out[program].Text) != "git" {
+		return out
+	}
+	for index := program + 1; index < len(out); index++ {
+		arg := out[index].Text
+		if !strings.HasPrefix(arg, "-") || strings.ContainsAny(arg, wilds) {
+			break
+		}
+		if slices.Contains(gitPathOptions, arg) && index+1 < len(out) {
+			index++
+			if path := out[index]; !path.Splits && !path.Globs {
+				out[index].Text = strings.ReplaceAll(path.Text, Wild, Opaque)
+			}
+		} else if slices.Contains(gitValueOptions, arg) {
+			index++
 		}
 	}
 	return out
@@ -397,13 +442,13 @@ func (r Rules) Verdict(script, cwd string) verdict {
 		case step.Access != nil:
 			result = r.access(*step.Access, place, cwd)
 		case step.Words[0].Text == "cd":
-			result = r.cd(step, cwd, &place)
+			result = r.cd(step, &place)
 		default:
 			result = r.Judge(step.Words)
 			if result.decision == "" {
 				result.message = fmt.Sprintf("`%s`: %s", render(texts(step.Words)), result.message)
 			}
-			if git, ok := gitVerdict(render(texts(step.Words)), place); ok && result.decision != "deny" && result.decision != "ask" {
+			if git, ok := gitVerdict(render(rawTexts(step.Words)), place); ok && result.decision != "deny" && result.decision != "ask" {
 				result = git
 			}
 		}
@@ -443,9 +488,10 @@ func (r Rules) access(access Access, place directory, cwd string) verdict {
 	return r.fileVerdict(access, path, cwd)
 }
 
-// cd is the verdict for a `cd`: allowed when it moves to a known directory
-// inside the working ones.
-func (r Rules) cd(step Step, cwd string, place *directory) verdict {
+// cd is the verdict for a `cd`: allowed when it moves to a known directory.
+// What runs there is judged as usual, relative paths against it: commands by
+// their rules, redirects by the Read and Edit rules, git by its repository.
+func (r Rules) cd(step Step, place *directory) verdict {
 	list := step.Words
 	moved := *place
 	defer func() {
@@ -474,8 +520,11 @@ func (r Rules) cd(step Step, cwd string, place *directory) verdict {
 		path = filepath.Join(place.path, path)
 	}
 	moved.path = real(path)
-	if !inside(moved.path, append([]string{real(cwd)}, r.Directories...)) {
-		return undecided("cd outside the working directories")
+	// cd is a builtin that changes the shell, which Judge declines, so its own
+	// allow rule is checked here.
+	command := strings.Join(rawTexts(list), " ")
+	if !slices.ContainsFunc(r.Allow.candidates(command), func(rule Rule) bool { return MustMatch(rule.Pattern, command) }) {
+		return undecided("no allow rule covers `cd`")
 	}
 	return verdict{"allow", Allowed}
 }
@@ -525,4 +574,14 @@ func (r Rules) Decide(script, cwd string) *Decision {
 		return nil
 	}
 	return &Decision{result.decision, result.message}
+}
+
+// rawTexts are the words' texts with their run-time parts still Wild, for
+// the checks that judge them; texts is for messages.
+func rawTexts(list []ZshWord) []string {
+	out := make([]string, len(list))
+	for i, word := range list {
+		out[i] = word.Text
+	}
+	return out
 }

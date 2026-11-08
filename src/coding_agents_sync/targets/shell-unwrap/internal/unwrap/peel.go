@@ -109,10 +109,11 @@ var systemDirs = []string{"", "/bin/", "/usr/bin/"}
 
 // Assignments that change nothing a rule decides, written as agents type them
 // and as the zsh analysis renders them: the editor Git and gh would open, the
-// separator `read` splits on, and Python's bytecode cache.
+// separator `read` splits on, Python's bytecode cache, and Git's optional index
+// lock.
 var (
-	harmlessRaw    = []string{"GIT_EDITOR=true", "PYTHONDONTWRITEBYTECODE=1", "IFS=", "IFS=,", "IFS='|'", `IFS=$'\t'`}
-	harmlessValues = []string{"GIT_EDITOR=true", "PYTHONDONTWRITEBYTECODE=1", "IFS=", "IFS=,", "IFS=|", "IFS=\t"}
+	harmlessRaw    = []string{"GIT_EDITOR=true", "GIT_OPTIONAL_LOCKS=0", "PYTHONDONTWRITEBYTECODE=1", "IFS=", "IFS=,", "IFS='|'", `IFS=$'\t'`}
+	harmlessValues = []string{"GIT_EDITOR=true", "GIT_OPTIONAL_LOCKS=0", "PYTHONDONTWRITEBYTECODE=1", "IFS=", "IFS=,", "IFS=|", "IFS=\t"}
 )
 
 // Names Claude Code 2.1.319 lets an allow rule read past: locale, colour,

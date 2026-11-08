@@ -34,12 +34,14 @@ func (d Decline) Error() string { return d.Why }
 func decline(format string, args ...any) { panic(Decline{fmt.Sprintf(format, args...)}) }
 
 // ZshWord is one word of a command; Vanishes when zsh may drop it, as it
-// does an empty unquoted `$x`, and Splits when it may become several words
-// not all sharing its literal start, as an unquoted `$(…)` does.
+// does an empty unquoted `$x`, Splits when it may become several words not
+// all sharing its literal start, as an unquoted `$(…)` does, and Globs when
+// it may become several words that do, as `src/*` does.
 type ZshWord struct {
 	Text     string
 	Vanishes bool
 	Splits   bool
+	Globs    bool
 }
 
 // Characters zsh and its parser may read differently: controls other than tab
@@ -294,6 +296,8 @@ func (a *analysis) command(node syntax.Command) {
 				a.stmts(item.Stmts)
 			}
 		})
+	case *syntax.DeclClause:
+		a.export(node)
 	case *syntax.TestClause:
 		a.test(node.X)
 	case *syntax.ArithmCmd:
@@ -304,6 +308,26 @@ func (a *analysis) command(node syntax.Command) {
 		}
 	default:
 		decline("%T", node)
+	}
+}
+
+// export judges an `export` that only sets harmless variables to literal
+// values (`export GIT_OPTIONAL_LOCKS=0`): every later command inherits them,
+// so each must be one an allowed command may carry, as a leading assignment
+// would. Any other declaration changes what later commands run.
+func (a *analysis) export(node *syntax.DeclClause) {
+	if node.Variant.Value != "export" || len(node.Args) == 0 {
+		decline("%s declaration", node.Variant.Value)
+	}
+	for _, assign := range node.Args {
+		if assign.Name == nil || assign.Naked || assign.Append || assign.Array != nil || assign.Index != nil || assign.Value == nil {
+			decline("export of a run-time or bare name")
+		}
+		value := a.word(assign.Value, true).Text
+		pair := assign.Name.Value + "=" + value
+		if !slices.Contains(harmlessValues, pair) && !(slices.Contains(safeNames, assign.Name.Value) && plainValue.MatchString(value)) {
+			decline("export of %s", assign.Name.Value)
+		}
 	}
 }
 
@@ -420,7 +444,7 @@ func (a *analysis) call(node *syntax.CallExpr) []ZshWord {
 
 type text struct {
 	strings.Builder
-	literal, dynamic, splits bool
+	literal, dynamic, splits, globs bool
 }
 
 // word is one word's text as zsh passes it, with Wild for what it decides at
@@ -442,7 +466,7 @@ func (a *analysis) word(node *syntax.Word, quoted bool) ZshWord {
 	if !quoted && braceList.MatchString(skeleton.String()) {
 		return ZshWord{Text: Wild, Vanishes: true}
 	}
-	return ZshWord{Text: out.String(), Vanishes: !quoted && out.dynamic && !out.literal, Splits: out.splits}
+	return ZshWord{Text: out.String(), Vanishes: !quoted && out.dynamic && !out.literal, Splits: out.splits, Globs: out.globs}
 }
 
 func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
@@ -451,7 +475,10 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 		if quoted {
 			out.WriteString(part.Value)
 		} else {
-			out.WriteString(unquoted(part.Value, first))
+			text := unquoted(part.Value, first)
+			out.WriteString(text)
+			// Glob characters, EQUALS expansion, or `~user`.
+			out.globs = out.globs || strings.Contains(text, Wild)
 		}
 		out.literal = out.literal || part.Value != ""
 	case *syntax.SglQuoted:
@@ -508,6 +535,7 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 	case *syntax.ExtGlob:
 		out.WriteString(Wild)
 		out.literal = true
+		out.globs = true
 	case *syntax.ArithmExp:
 		// A number, so never an empty word.
 		a.arithmetic(part.X)
