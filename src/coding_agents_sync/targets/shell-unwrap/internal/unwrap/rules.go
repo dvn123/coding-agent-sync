@@ -139,7 +139,7 @@ func (b bucket) matching(text string) []Rule {
 // one, or all when the program is decided at run time.
 func (b bucket) candidates(template string) []Rule {
 	program, _, _ := strings.Cut(template, " ")
-	if strings.Contains(program, Wild) {
+	if strings.ContainsAny(program, wilds) {
 		var all []Rule
 		for _, rules := range b {
 			all = append(all, rules...)

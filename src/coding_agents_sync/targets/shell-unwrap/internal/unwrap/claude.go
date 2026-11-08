@@ -267,8 +267,10 @@ func (r Rules) possible(template string) (string, bool) {
 // some spelling meets decides it, a deny before an ask. A guard some value
 // may meet, a command that changes the shell, or one that runs its own
 // arguments leaves it undecided. Otherwise it is allowed when it reaches an
-// allow rule through transparent wrappers.
-func (r Rules) judge(command string) (result verdict) {
+// allow rule through transparent wrappers. guards is the same shape with the
+// run-time parts that stay inside their word marked OneWord, which only the
+// test for a guard some value may meet reads.
+func (r Rules) judge(command, guards string) (result verdict) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			declined, ok := recovered.(Decline)
@@ -285,6 +287,10 @@ func (r Rules) judge(command string) (result verdict) {
 			if found, ok := r.certain(candidate, template); ok && (guarded == nil || found.decision == "deny" && guarded.decision == "ask") {
 				guarded = &found
 			}
+		}
+	}
+	for _, candidate := range append([]string{guards}, Spellings(guards)...) {
+		for _, template := range templates(candidate) {
 			if why, ok := r.possible(template); ok && maybe == "" {
 				maybe = why
 			}
@@ -314,6 +320,21 @@ func (r Rules) judge(command string) (result verdict) {
 	return undecided("no allow rule covers every value")
 }
 
+// insideWords marks OneWord the run-time parts of each word that begins with
+// literal text other than an option's `-` and cannot split: zsh expands such
+// a word, a glob like `src/*` or a plain `src/$f`, only to words that begin
+// with that text, so none of them is an option or a bare subcommand.
+func insideWords(list []ZshWord) []ZshWord {
+	out := slices.Clone(list)
+	for index, word := range out {
+		prefix, _, found := strings.Cut(word.Text, Wild)
+		if found && prefix != "" && !strings.HasPrefix(prefix, "-") && !word.Splits {
+			out[index].Text = strings.ReplaceAll(word.Text, Wild, OneWord)
+		}
+	}
+	return out
+}
+
 // Judge is the verdict for one command's words over every shape zsh may run
 // them in. It is allowed when every shape is; when every shape meets a guard
 // for certain it is denied if any shape is, else asked; any other mix depends
@@ -323,9 +344,11 @@ func (r Rules) Judge(list []ZshWord) verdict {
 	if !ok {
 		return undecided("too many words zsh may drop")
 	}
+	// The same shapes, in the same order, as the guards read them.
+	guarded, _ := shapes(insideWords(list))
 	var results []verdict
-	for _, values := range found {
-		result := r.judge(render(values))
+	for index, values := range found {
+		result := r.judge(render(values), render(guarded[index]))
 		if result.decision == "" {
 			return result
 		}

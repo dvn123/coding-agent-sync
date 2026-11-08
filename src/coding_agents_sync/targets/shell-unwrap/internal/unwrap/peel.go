@@ -20,6 +20,14 @@ import (
 // Wild stands for any text the shell decides at run time; see glob.go.
 const Wild = "\x00"
 
+// OneWord stands for run-time text that stays inside its word, such as the
+// rest of each name a glob like `src/*` expands to. Only the deny and ask
+// guards' templates carry it; see Judge.
+const OneWord = "\x01"
+
+// wilds are both run-time markers.
+const wilds = Wild + OneWord
+
 // XargsInput marks what `xargs` appends to the command it runs, or puts in
 // place of its replacement string: the command must pass with that input in
 // place, so an exact rule never carries it and a guard must judge it.
@@ -228,7 +236,7 @@ func harmless(raw, value string) bool {
 // transparent.
 func permitted(value string, options []string) bool {
 	switch {
-	case strings.Contains(value, Wild): // a run-time value can move the command it runs
+	case strings.ContainsAny(value, wilds): // a run-time value can move the command it runs
 		return false
 	case value == "--":
 		return true

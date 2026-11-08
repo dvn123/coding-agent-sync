@@ -34,10 +34,12 @@ func (d Decline) Error() string { return d.Why }
 func decline(format string, args ...any) { panic(Decline{fmt.Sprintf(format, args...)}) }
 
 // ZshWord is one word of a command; Vanishes when zsh may drop it, as it
-// does an empty unquoted `$x`.
+// does an empty unquoted `$x`, and Splits when it may become several words
+// not all sharing its literal start, as an unquoted `$(…)` does.
 type ZshWord struct {
 	Text     string
 	Vanishes bool
+	Splits   bool
 }
 
 // Characters zsh and its parser may read differently: controls other than tab
@@ -418,7 +420,7 @@ func (a *analysis) call(node *syntax.CallExpr) []ZshWord {
 
 type text struct {
 	strings.Builder
-	literal, dynamic bool
+	literal, dynamic, splits bool
 }
 
 // word is one word's text as zsh passes it, with Wild for what it decides at
@@ -440,7 +442,7 @@ func (a *analysis) word(node *syntax.Word, quoted bool) ZshWord {
 	if !quoted && braceList.MatchString(skeleton.String()) {
 		return ZshWord{Text: Wild, Vanishes: true}
 	}
-	return ZshWord{Text: out.String(), Vanishes: !quoted && out.dynamic && !out.literal}
+	return ZshWord{Text: out.String(), Vanishes: !quoted && out.dynamic && !out.literal, Splits: out.splits}
 }
 
 func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
@@ -487,6 +489,10 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 		a.parameter(part)
 		out.WriteString(Wild)
 		out.dynamic = true
+		// zsh splits a plain parameter only under SH_WORD_SPLIT, off by
+		// default as this analysis assumes throughout; any other form may
+		// hold a `$(…)` or a flag that splits.
+		out.splits = out.splits || !quoted && plainName(part) == ""
 	case *syntax.CmdSubst:
 		if part.TempFile || part.ReplyVar {
 			decline("mksh substitution")
@@ -494,6 +500,7 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 		a.inside(func() { a.stmts(part.Stmts) })
 		out.WriteString(Wild)
 		out.dynamic = true
+		out.splits = out.splits || !quoted
 	case *syntax.ProcSubst:
 		a.inside(func() { a.stmts(part.Stmts) })
 		out.WriteString(Wild)

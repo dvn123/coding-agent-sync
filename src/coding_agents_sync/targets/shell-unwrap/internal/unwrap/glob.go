@@ -68,13 +68,14 @@ func alternatives(rule string) []string {
 	return found
 }
 
-// ends are the literal text before the first and after the last of mark.
-func ends(text, mark string) (string, string) {
-	first, last := strings.Index(text, mark), strings.LastIndex(text, mark)
+// ends are the literal text before the first and after the last of any of
+// the single-byte marks.
+func ends(text, marks string) (string, string) {
+	first, last := strings.IndexAny(text, marks), strings.LastIndexAny(text, marks)
 	if first == -1 {
 		return text, text
 	}
-	return text[:first], text[last+len(mark):]
+	return text[:first], text[last+1:]
 }
 
 // compatible is whether one of a and b is a prefix (or, with suffix, a
@@ -94,7 +95,7 @@ func compatible(a, b string, suffix bool) bool {
 func intersects(pattern, template string) bool {
 	// Both match a common text only if their literal ends agree.
 	patternHead, patternTail := ends(pattern, "*")
-	templateHead, templateTail := ends(template, Wild)
+	templateHead, templateTail := ends(template, wilds)
 	if !compatible(patternHead, templateHead, false) || !compatible(patternTail, templateTail, true) {
 		return false
 	}
@@ -110,6 +111,9 @@ func intersects(pattern, template string) bool {
 				ok = at(i+1, j) || (j < n && at(i, j+1))
 			case j < n && template[j] == Wild[0]:
 				ok = at(i, j+1) || (i < m && at(i+1, j))
+			case j < n && template[j] == OneWord[0]:
+				// Within its word: any text but the space between words.
+				ok = at(i, j+1) || (i < m && pattern[i] != ' ' && at(i+1, j))
 			case i < m && j < n:
 				ok = pattern[i] == template[j] && at(i+1, j+1)
 			default:
@@ -126,7 +130,7 @@ func intersects(pattern, template string) bool {
 func covers(pattern, template string) bool {
 	// The pattern's literal ends must lie in the template's literal ends.
 	patternHead, patternTail := ends(pattern, "*")
-	templateHead, templateTail := ends(template, Wild)
+	templateHead, templateTail := ends(template, wilds)
 	if !strings.HasPrefix(templateHead, patternHead) || !strings.HasSuffix(templateTail, patternTail) {
 		return false
 	}
@@ -141,7 +145,7 @@ func covers(pattern, template string) bool {
 			case j < n && pattern[j] == '*':
 				ok = at(i, j+1) || (i < m && at(i+1, j))
 			case i < m && j < n:
-				ok = template[i] != Wild[0] && template[i] == pattern[j] && at(i+1, j+1)
+				ok = template[i] != Wild[0] && template[i] != OneWord[0] && template[i] == pattern[j] && at(i+1, j+1)
 			default:
 				ok = i == m && j == n
 			}
@@ -153,7 +157,7 @@ func covers(pattern, template string) bool {
 
 // MayMatch is whether some value of the template's Wilds makes rule match.
 func MayMatch(rule, template string) bool {
-	if !strings.Contains(template, Wild) {
+	if !strings.ContainsAny(template, wilds) {
 		for _, pattern := range alternatives(rule) {
 			if Glob(pattern).MatchString(template) {
 				return true
@@ -172,7 +176,7 @@ func MayMatch(rule, template string) bool {
 // MustMatch is whether rule matches the template for every value of its
 // Wilds.
 func MustMatch(rule, template string) bool {
-	if !strings.Contains(template, Wild) {
+	if !strings.ContainsAny(template, wilds) {
 		return MayMatch(rule, template)
 	}
 	for _, pattern := range alternatives(rule) {
