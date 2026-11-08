@@ -1,3 +1,5 @@
+import json
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -24,7 +26,13 @@ from ..sources import (
     StrictModel,
     resolve_model_policy,
 )
-from .permissions import literal_directories
+from .claude import shell_entries as claude_shell_entries
+from .permissions import (
+    UNWRAP_HOOK,
+    UNWRAP_TIMEOUT_SECONDS,
+    literal_directories,
+    unwrap_rules_file,
+)
 from .support import (
     bundled_files,
     collision_error,
@@ -272,8 +280,10 @@ def _command_rules(
     Codex matches one flat argv by literal prefix, with no wildcard, so a rule
     projects as its head and each tail appended directly, bare and behind any
     declared wrapper. The option-hole and tail-after-arguments spellings fall to
-    Codex's own approval flow. Text and exact predicates have no prefix form.
-    A rule's `reason` becomes the `justification` Codex shows on rejection.
+    Codex's own approval flow. Text and exact predicates have no prefix form;
+    shell-unwrap's hook carries such denies (`_unwrap_hook`), and such asks
+    fall to Codex's approval flow. A rule's `reason` becomes the
+    `justification` Codex shows on rejection.
     Allows never project: a Codex `allow` rule runs the command outside the
     sandbox, while an unlisted command already runs inside it.
 
@@ -295,7 +305,8 @@ def _command_rules(
     for bucket, decision in CODEX_DECISIONS.items():
         for rule in getattr(permissions.commands, bucket):
             if rule.text or rule.exact:
-                dropped.append(f"{bucket} {' '.join((rule.command, *rule.subcommand))}")
+                if bucket == "ask":
+                    dropped.append(" ".join((rule.command, *rule.subcommand)))
                 continue
             head = (rule.command, *rule.subcommand)
             for *stem, last in [(*head, *tail) for tail in sorted(rule.tail)] or [head]:
@@ -321,11 +332,62 @@ def _command_rules(
             Diagnostic(
                 "warning",
                 "Codex prefix rules cannot hold a text predicate or an exact "
-                f"match, so these fall to its sandbox: {', '.join(dropped)}",
+                "match, and its hooks cannot ask, so these asks fall to its "
+                f"approval flow: {', '.join(dropped)}",
                 permissions.paths[0],
             )
         )
     return rules, diagnostics
+
+
+# Codex prefix rules miss a wrapped, bundled, or joined spelling and hold no
+# text rule. shell-unwrap's hook bundle, a `Bash` PreToolUse command, denies a
+# command inside a call when any peeled spelling of it matches a deny, text
+# rules included. Codex rejects an ask from a PreToolUse hook, so asks stay
+# prefix rules. The hook denies when it cannot run, so the guards fail closed.
+# Codex runs it only once the user trusts it in `/hooks`.
+UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
+UNWRAP_UNAVAILABLE = {
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            "shell-unwrap could not run, so its guards were not checked"
+        ),
+    }
+}
+
+
+def _unwrap_hook(
+    root: Path, permissions: PermissionSource
+) -> tuple[list[OwnedFile], list[NativeValue]]:
+    """The hook and its deny rules, or nothing when no command is denied."""
+    script = root / UNWRAP_HOOK_PATH
+    rules = unwrap_rules_file(
+        script.with_suffix(".json"),
+        root,
+        permissions,
+        claude_shell_entries,
+        asks=False,
+    )
+    if rules is None:
+        return [], []
+    command = f"bun {shlex.quote(script.as_posix())} codex 2>/dev/null"
+    fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
+    hook = {
+        "matcher": "Bash",
+        "hooks": [
+            {
+                "type": "command",
+                "command": f"{command} || printf %s {fallback}",
+                "timeout": UNWRAP_TIMEOUT_SECONDS,
+            }
+        ],
+    }
+    return [
+        OwnedFile(script, UNWRAP_HOOK.read_bytes(), root, structured=False),
+        rules,
+    ], [NativeValue("codex", root / "config.toml", ("hooks", "PreToolUse"), [hook])]
 
 
 def _agent_toml(
@@ -546,6 +608,7 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
                 Diagnostic("warning", "using unvalidated raw target fields", agent.path)
             )
     selected_profile = PROFILE
+    hook_values: list[NativeValue] = []
     if permissions := sources.permissions:
         resolved_permissions, issues = resolve(
             "codex", [permissions], CodexPermissionNative, raw=False
@@ -553,6 +616,8 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(issues)
         for resolved in resolved_permissions:
             selected_profile = resolved.native.default_permissions or PROFILE
+        hook_files, hook_values = _unwrap_hook(root, permissions)
+        files.extend(hook_files)
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries
     # no registration for them.
     servers, issues = mcp_servers(sources, "codex")
@@ -584,6 +649,7 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
             }.items()
         ),
         *_mcp_tool_values(servers, root / "config.toml"),
+        *hook_values,
     ]
     patch, issues = native_patch(
         config_root=ctx.config_root,

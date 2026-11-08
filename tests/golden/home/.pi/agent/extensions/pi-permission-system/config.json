@@ -7,10 +7,10 @@
       "fixture-tool -C* status *": "allow",
       "fixture-tool publish --public *": "ask",
       "fixture-tool publish * --public *": "ask",
-      "fixture-tool -C* publish --public *": "ask",
-      "fixture-tool -C* publish * --public *": "ask",
+      "fixture-tool -* publish --public *": "ask",
+      "fixture-tool -* publish * --public *": "ask",
       "fixture-tool remove": "deny",
-      "fixture-tool -C* remove": "deny",
+      "fixture-tool -* remove": "deny",
       "*FIXTURE_TOKEN*": "deny"
     },
     "read": "allow",

@@ -21,9 +21,9 @@ def wrapper_prefixes(wrapper: str) -> tuple[str, str]:
 
 
 # Claude strips an absolute program path and then peels these wrappers before
-# it matches a deny or ask rule, so copies behind them are dead. `xargs` is
-# peeled only bare: a deny retries itself behind `xargs `, but not behind
-# `xargs` options.
+# it matches a deny or ask rule, so copies behind them are dead. It peels
+# `xargs` only bare; shell-unwrap's hook peels it with its options too, and
+# asks when it cannot run, so `xargs` needs no copy either.
 CLAUDE_PEELED_WRAPPERS = (
     "timeout",
     "time",
@@ -35,17 +35,18 @@ CLAUDE_PEELED_WRAPPERS = (
     "builtin",
     "env",
     "sudo",
+    "xargs",
 )
 CLAUDE_PEELED_PREFIXES = frozenset(
-    {
-        *(
-            prefix
-            for wrapper in CLAUDE_PEELED_WRAPPERS
-            for prefix in wrapper_prefixes(wrapper)
-        ),
-        "xargs ",
-    }
+    prefix for wrapper in CLAUDE_PEELED_WRAPPERS for prefix in wrapper_prefixes(wrapper)
 )
+# A hole for any options between a program and its subcommand, which an ask or
+# deny matches whatever they are.
+ANY_OPTIONS = ("-",)
+# Wrappers that run their argument as given, so an allowed whole program is
+# allowed behind them too where the target cannot see through them itself.
+ALLOW_WRAPPERS = ("command", "xargs")
+INTERPRETER_COMMANDS = frozenset({"bash", "eval", "sh", "zsh"})
 # Claude's file permission checks only consult Edit rules, and an Edit rule
 # covers every file-editing tool, so `write` folds onto the same pattern as
 # `edit`. A `Write(**)` rule parses but never matches.
@@ -300,24 +301,29 @@ def secret_name_variants(names: Iterable[str]) -> tuple[str, ...]:
     return tuple(f"*{name}*" for name in names)
 
 
+def whole_program(rule: CommandPermission) -> bool:
+    """Whether the rule takes its program with any arguments."""
+    return not (rule.subcommand or rule.tail or rule.text or rule.exact)
+
+
 def bucket_entries(
     permissions: PermissionSource,
     lower: Callable[[CommandPermission, Sequence[str], str], Sequence[str]],
     peeled: frozenset[str] = frozenset(),
     *,
-    peels_ask: bool = True,
+    wrapped_allows: bool = False,
 ) -> Iterator[tuple[str, str, str]]:
-    """Lower each bucket as `(bucket, origin, pattern)`, with wrapped copies
-    of every ask and deny rule.
+    """Lower each bucket as `(bucket, origin, pattern)`.
 
-    `origin` names the step that produced the pattern, for the audit. Allows
-    get no wrapper form: a blanket `env *` would allow any payload the wrapper
-    carries, so a wrapped allowed command falls to `unmatched`. `peeled` are
-    wrapper prefixes the target strips before it matches a deny, and before an
-    ask too unless `peels_ask` is false; such a target strips leading
-    assignments there as well. Every other rule, allows included, lands behind
-    each literal `NAME=value` its command declares in `assignments`: a fixed
-    value spans nothing, unlike a wrapper's `*`.
+    `origin` names the step that produced the pattern, for the audit. An ask
+    or deny also lands with a hole for any options before its subcommand, and
+    behind each declared wrapper the target does not peel: `peeled` are the
+    wrapper prefixes it strips before it matches an ask or deny. An allow
+    carries over only its command's
+    option vocabulary and gets no wrapper form, since a blanket `env *` would
+    allow any payload the wrapper carries. With `wrapped_allows`, an allowed
+    whole program also lands behind `command` and `xargs`, which run it as
+    given, unless the target peels that wrapper itself.
     """
     commands = permissions.commands
     wrapped = [
@@ -331,31 +337,31 @@ def bucket_entries(
         # an ask or deny.
         if bucket == "allow" and permissions.unmatched == "allow":
             continue
-        peels = bool(peeled) and (bucket == "deny" or (bucket == "ask" and peels_ask))
+        guard = bucket != "allow"
         for rule in rules:
-            options = commands.option_tokens(rule.command)
-            assigned = (
-                []
-                if peels
-                else [f"{token} " for token in commands.assignment_tokens(rule.command)]
-            )
+            options = ANY_OPTIONS if guard else commands.option_tokens(rule.command)
             for origin, patterns in (
                 ("base", lower(rule, (), "")),
                 ("option", lower(rule, options, "")),
-                *(
-                    ("assignment", lower(rule, opts, prefix))
-                    for prefix in assigned
-                    for opts in ((), options)
-                ),
             ):
                 yield from ((bucket, origin, pattern) for pattern in patterns)
-            if bucket != "allow":
-                skip = peeled if peels else frozenset()
+            if guard:
                 for origin, prefix in wrapped:
-                    if prefix not in skip:
+                    if prefix not in peeled:
                         yield from (
                             (bucket, origin, pattern)
                             for pattern in lower(rule, options, prefix)
+                        )
+            elif (
+                wrapped_allows
+                and whole_program(rule)
+                and rule.command not in INTERPRETER_COMMANDS
+            ):
+                for wrapper in ALLOW_WRAPPERS:
+                    if f"{wrapper} " not in peeled:
+                        yield from (
+                            (bucket, wrapper, pattern)
+                            for pattern in lower(rule, (), f"{wrapper} ")
                         )
 
 
@@ -396,6 +402,43 @@ def unwrap_reasons_file(
         return []
     text = json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n"
     return [OwnedFile(root / UNWRAP_REASONS, text.encode(), root)]
+
+
+# shell-unwrap's hook bundle, run by Bun with tree-sitter's WASM embedded: the
+# Claude, Codex, and Cursor hooks by host argument. Pi's extension runs its
+# Codex host.
+UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
+UNWRAP_TIMEOUT_SECONDS = 10
+
+
+def unwrap_rules_file(
+    path: Path,
+    manifest_root: Path,
+    permissions: PermissionSource,
+    entries: Callable[[PermissionSource], Iterable[tuple[str, str, str]]],
+    *,
+    asks: bool,
+) -> OwnedFile | None:
+    """The `shell-unwrap.json` a hook reads beside itself, or None when nothing
+    is guarded: the guards as Claude `Bash(...)` patterns, whose matching the
+    hook shares, and the denies' reasons. Without `asks`, the deny rules only."""
+    buckets = bucket_patterns(entries(permissions))
+    guards = {
+        "deny": [*buckets["deny"], *secret_name_variants(permissions.secret_names)]
+    }
+    if asks:
+        guards["ask"] = buckets["ask"]
+    if not any(guards.values()):
+        return None
+    rules = {
+        "permissions": {
+            bucket: [f"Bash({pattern})" for pattern in patterns]
+            for bucket, patterns in guards.items()
+        },
+        "reasons": deny_reasons(permissions, entries),
+    }
+    text = json.dumps(rules, indent=2, sort_keys=True) + "\n"
+    return OwnedFile(path, text.encode(), manifest_root)
 
 
 def _glob(pattern: str) -> re.Pattern[str]:

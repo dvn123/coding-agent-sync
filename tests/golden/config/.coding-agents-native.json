@@ -108,6 +108,13 @@
     },
     {
       "target": "codex",
+      "pointer": "/hooks/PreToolUse",
+      "items": [
+        "sha256:<hash>"
+      ]
+    },
+    {
+      "target": "codex",
       "pointer": "/mcp_servers/fixture-local/args",
       "items": [
         "sha256:<hash>"
@@ -318,14 +325,6 @@
       "target": "opencode",
       "pointer": "/permissions",
       "items": [
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
-        "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",
         "sha256:<hash>",

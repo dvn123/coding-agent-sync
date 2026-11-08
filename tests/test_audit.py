@@ -56,9 +56,10 @@ def test_claude_model_adds_the_hook_deny() -> None:
 
 # The peel itself is pinned by shell-unwrap's own tests; the model asks the
 # vendored bundle for it.
-def test_opencode_model_carries_over_only_a_peeled_deny() -> None:
+def test_opencode_model_carries_over_a_peeled_deny_or_ask() -> None:
     rules = OpenCodeRules([("*", "allow"), ("git push *", "ask"), ("rm *", "deny")])
     assert rules.decision("timeout 30 rm -rf x") == "deny"
-    assert rules.decision("FOO=1 git push origin") == "allow"
+    assert rules.decision("FOO=1 git push origin") == "ask"
     assert rules.decision("echo rm -rf x") == "allow"
+    assert OpenCodeRules([("*", "ask")]).decision("FOO=1 ls") == "ask"
     assert rules.native("timeout 30 rm -rf x") == "allow"

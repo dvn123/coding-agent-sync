@@ -35,5 +35,13 @@ approval_mode = "approve"
 [mcp_servers.fixture-remote]
 url = "https://mcp.example.test/mcp"
 
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "bun <tmp>/home/.codex/hooks/shell-unwrap.js codex 2>/dev/null || printf %s '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"shell-unwrap could not run, so its guards were not checked\"}}'"
+timeout = 10
+
 [fixture]
 codex = true

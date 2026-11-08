@@ -89,18 +89,35 @@ class CommandExecution(StrictModel):
     subtask: bool = False
 
 
-# One shell word, quoted as typed (`IFS=$'\t'`), with no whitespace or glob
-# character, so its pattern matches that exact text and nothing wider.
-# A literal value only, so its pattern matches that exact text: a wildcard
-# value would span into the command.
-type AssignmentToken = Annotated[
-    str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*=[^\s*?]*$")
-]
 # A leading token that is not option-shaped is a subcommand and belongs in a
 # rule; tolerating it would open a hole at an arbitrary argument position.
 type OptionToken = Annotated[
     str, StringConstraints(pattern=r"^-[A-Za-z0-9_./,@%+=~-]*$")
 ]
+# Options a well-known CLI takes before its subcommand that pick where or how
+# it runs, not what it does, so an allow carries over them. Asks and denies
+# need no table: they match any leading options. The corpus `options` adds to
+# these for its own tools.
+PROGRAM_OPTIONS: dict[str, tuple[str, ...]] = {
+    "aws": ("--profile", "--region"),
+    "databricks": ("--profile", "-p", "--host"),
+    "gcloud": (
+        "--account",
+        "--configuration",
+        "--format",
+        "--project",
+        "--quiet",
+        "-q",
+        "--verbosity",
+    ),
+    "gh": ("-R",),
+    "git": ("-C", "--no-pager"),
+    "kubectl": ("--context", "--namespace", "-n"),
+    "mise": ("--locked",),
+    "terraform": ("-chdir",),
+    "uv": ("--frozen", "--locked"),
+    "wt": ("-C",),
+}
 # Literal text anywhere in the segment, edged by at most one space a side.
 type LiteralText = Annotated[
     str, StringConstraints(pattern=r"^ ?[^\s*?()](?:[^*?()]*[^\s*?()])? ?$")
@@ -113,8 +130,8 @@ class CommandPermission(StrictModel):
     Predicates are named for the region they constrain: `subcommand` pins the
     head, `tail` matches token sequences after it, and `text` matches literal
     text anywhere in the segment. The leading-option region between a command
-    and its subcommand is not a rule predicate; it is the per-command
-    `options` vocabulary, which the compiler expands into every rule's heads.
+    and its subcommand is not a rule predicate: an ask or deny matches any
+    options there, and an allow carries over the command's options vocabulary.
     `reason`, on a deny only, is what the agent is told to do instead; it is
     not a predicate.
     """
@@ -227,7 +244,6 @@ class CommandPermissions(StrictModel):
     ask: tuple[CommandPermission, ...] = ()
     deny: tuple[CommandPermission, ...] = ()
     options: dict[Token, Vocabulary[OptionToken]] = Field(default_factory=dict)
-    assignments: dict[Token, Vocabulary[AssignmentToken]] = Field(default_factory=dict)
 
     @property
     def buckets(self) -> tuple[tuple[str, tuple[CommandPermission, ...]], ...]:
@@ -239,10 +255,12 @@ class CommandPermissions(StrictModel):
         return (("allow", self.allow), ("ask", self.ask), ("deny", self.deny))
 
     def option_tokens(self, command: str) -> tuple[str, ...]:
-        return self.options.get(command, ())
-
-    def assignment_tokens(self, command: str) -> tuple[str, ...]:
-        return self.assignments.get(command, ())
+        """The options an allow for `command` carries over."""
+        return tuple(
+            dict.fromkeys(
+                (*PROGRAM_OPTIONS.get(command, ()), *self.options.get(command, ()))
+            )
+        )
 
     @model_validator(mode="after")
     def _validate_rules(self) -> CommandPermissions:
@@ -284,11 +302,10 @@ class CommandPermissions(StrictModel):
                     "stricter rule may narrow a looser one"
                 )
         commanded = {rule.command for _, rule in named}
-        for field in ("options", "assignments"):
-            if unused := sorted(set(getattr(self, field)) - commanded):
-                raise ValueError(
-                    f"{field} declared for {unused[0]}, which has no permission rule"
-                )
+        if unused := sorted(set(self.options) - commanded):
+            raise ValueError(
+                f"options declared for {unused[0]}, which has no permission rule"
+            )
         return self
 
 
@@ -331,9 +348,23 @@ class WorkspacePermissions(StrictModel):
         return self
 
 
+# Programs that run their argument as a command, which agents type in front of
+# one; a target that cannot peel them gets ask and deny copies behind them.
+DEFAULT_WRAPPERS = (
+    "command",
+    "env",
+    "nice",
+    "nohup",
+    "stdbuf",
+    "time",
+    "timeout",
+    "xargs",
+)
+
+
 class PermissionPolicyDocument(StrictModel):
     description: str = ""
-    wrappers: Annotated[tuple[Token, ...], Unique] = ()
+    wrappers: Annotated[tuple[Token, ...], Unique] = DEFAULT_WRAPPERS
     unmatched: Literal["ask", "allow"] = "ask"
     tools: dict[PermissionTool, Decision] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
@@ -344,7 +375,6 @@ class PermissionPolicyDocument(StrictModel):
 
 class PermissionRulesDocument(StrictModel):
     options: dict[Token, Vocabulary[OptionToken]] = Field(default_factory=dict)
-    assignments: dict[Token, Vocabulary[AssignmentToken]] = Field(default_factory=dict)
     allow: tuple[CommandPermission, ...] = ()
     ask: tuple[CommandPermission, ...] = ()
     deny: tuple[CommandPermission, ...] = ()
@@ -649,29 +679,23 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
     # A command's leading-option vocabulary has one home, so the fragment that
     # owns the command owns its options and a second declaration is an error
     # rather than a silent union.
-    vocabularies: dict[str, dict[str, tuple[str, ...]]] = {
-        "options": {},
-        "assignments": {},
-    }
-    for field, vocabulary in vocabularies.items():
-        owners: dict[str, Path] = {}
-        for path, fragment in fragments:
-            for command, tokens in getattr(fragment, field).items():
-                if command in owners:
-                    raise SourceSchemaError(
-                        f"{path}: {field} for {command} are already declared in "
-                        f"{owners[command]}; a command's {field.rstrip('s')} "
-                        "vocabulary has one home"
-                    )
-                owners[command], vocabulary[command] = path, tokens
+    options: dict[str, tuple[str, ...]] = {}
+    owners: dict[str, Path] = {}
+    for path, fragment in fragments:
+        for command, tokens in fragment.options.items():
+            if command in owners:
+                raise SourceSchemaError(
+                    f"{path}: options for {command} are already declared in "
+                    f"{owners[command]}; a command's option vocabulary has one home"
+                )
+            owners[command], options[command] = path, tokens
 
     try:
         commands = CommandPermissions(
             allow=bucket("allow"),
             ask=bucket("ask"),
             deny=bucket("deny"),
-            options=dict(sorted(vocabularies["options"].items())),
-            assignments=dict(sorted(vocabularies["assignments"].items())),
+            options=dict(sorted(options.items())),
         )
     except ValidationError as exc:
         raise _model_error(root, exc) from exc
@@ -686,6 +710,51 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         secret_names=policy.secret_names,
         commands=commands,
         targets=policy.targets,
+    )
+
+
+def with_home_paths(permissions: PermissionSource, home: Path) -> PermissionSource:
+    """Each rule holding a `~/` token also with its tokens under the absolute
+    path, the other spelling agents type. A home outside the token alphabet,
+    such as a Windows drive's `C:/`, cannot be written in a rule and gets
+    none."""
+    prefix = f"{home.as_posix()}/"
+    if not re.fullmatch(r"[A-Za-z0-9_./,@%+=~-]+", prefix):
+        return permissions
+    commands = permissions.commands
+
+    def absolute(token: str) -> str:
+        return prefix + token[2:] if token.startswith("~/") else token
+
+    def home_relative(rule: CommandPermission) -> bool:
+        tokens = (rule.command, *rule.subcommand, *(t for s in rule.tail for t in s))
+        return any(token.startswith("~/") for token in tokens)
+
+    def twinned(rules: tuple[CommandPermission, ...]) -> tuple[CommandPermission, ...]:
+        return (
+            *rules,
+            *(
+                rule.model_copy(
+                    update={
+                        "command": absolute(rule.command),
+                        "subcommand": tuple(map(absolute, rule.subcommand)),
+                        "tail": tuple(tuple(map(absolute, s)) for s in rule.tail),
+                    }
+                )
+                for rule in rules
+                if home_relative(rule)
+            ),
+        )
+
+    return permissions.model_copy(
+        update={
+            "commands": commands.model_copy(
+                update={
+                    bucket: twinned(getattr(commands, bucket))
+                    for bucket in ("allow", "ask", "deny")
+                }
+            )
+        }
     )
 
 

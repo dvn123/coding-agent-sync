@@ -170,10 +170,10 @@ def opencode_skill(
 
 
 # OpenCode matches a shell rule against a command's raw text. shell-unwrap's
-# bundled OpenCode plugin denies a command when the rules deny it with its
-# assignments, program path, or these wrappers peeled, so deny copies behind
-# them are dead. It carries over only a deny, so asks keep their copies, as
-# does a declared wrapper outside this list.
+# bundled OpenCode plugin denies or asks for a command when the rules deny or
+# ask for it with its assignments, program path, or these wrappers peeled, so
+# guard copies behind them are dead; a declared wrapper outside this list keeps
+# its copies.
 UNWRAP_PLUGIN = Path(__file__).with_name("shell-unwrap") / "opencode.js"
 UNWRAP_PLUGIN_NAME = "shell-unwrap.js"
 UNWRAP_PEELED = frozenset(
@@ -203,7 +203,6 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
         permissions,
         functools.partial(glob_variants, optional_trailing=True),
         UNWRAP_PEELED,
-        peels_ask=False,
     )
 
 

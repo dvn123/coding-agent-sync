@@ -42,9 +42,10 @@ program path, then peels leading assignments, `env` in every form, `sudo`,
 and `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, and
 `noglob` before it matches a deny or ask rule, and retries the rule behind a
 bare `xargs`. So `/usr/bin/git push -f` and `/usr/bin/env rm -rf x` need no
-copies, and neither do those wrappers; `xargs` with options still does. An
-allow strips only the assignments Claude lists as safe, so a declared
-`assignments` token lands in front of allow rules alone. Claude also
+copies, and neither do those wrappers. `xargs` with options gets none either:
+the shell-unwrap hook peels it, and asks when it cannot run. An allow strips
+only the assignments Claude lists as safe; the hook carries an allow over the
+other harmless ones (`GIT_EDITOR=true`). Claude also
 looks past a leading redirect (`2>&1 rm -rf x`), so that shape needs no
 copies either. The `deny-reach`, `ask-reach`, `allow-assign`, and `compiled-guard` live scenarios
 pin this. The compiler targets the latest Claude Code release and the copy the
@@ -68,15 +69,18 @@ tree-sitter's bash grammar embedded. The hook reads the deployed `permissions`
 and the reasons file, which maps every pattern a reasoned deny emits to its
 reason, and judges each command node with the same peel as the OpenCode
 target's shell-unwrap plugin: it denies the command when any peeled spelling of
-a node matches a deny, in the plugin's words and with the rule's reason, and
-allows it when every node reaches an allow through transparent wrappers alone.
-Claude still evaluates its deny and ask rules after a hook allow, so the hook
-removes prompts and never lifts a guard. It stays silent,
-leaving Claude's own flow, on anything it does not model: file redirects, `tee`,
+a node matches a deny, in the plugin's words and with the rule's reason, asks
+when one matches an ask, and allows it when every node reaches an allow through
+transparent wrappers and harmless assignments alone. Claude still evaluates its
+deny and ask rules after a hook allow, so the hook removes prompts and never
+lifts a guard. The compiler leaves `xargs` with options to the hook, so the
+hook asks when it cannot parse the command or fails, and the hook command
+prints an ask when Bun cannot run it. For an allow it stays silent, leaving
+Claude's own flow, on anything it does not model: file redirects, `tee`,
 `find` actions, `fd -x`, `cd` outside the working directories or beside `git`,
-shell variable assignments, function definitions, dynamic program names, parse
-errors, and any failure, Bun's absence included. shell-unwrap's own tests pin
-its decisions; `tests/test_sync.py` runs the deployed hook once.
+shell variable assignments, function definitions, and dynamic program names.
+shell-unwrap's own tests pin its decisions; `tests/test_sync.py` runs the
+deployed hook once.
 
 `patches/claude-settings.yaml` targets `<home>/.claude/settings.json` and
 `patches/claude-mcp.yaml` targets `<home>/.claude.json`. Local counterparts

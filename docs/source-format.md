@@ -76,7 +76,7 @@ empty file is an empty source.
 | Command | `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
-| Permission rules | `options`, `assignments`, `allow`, `ask`, `deny`. |
+| Permission rules | `options`, `allow`, `ask`, `deny`. |
 | MCP server | `only`, `command`, `args`, `env`, `url`, `tools`. |
 
 `model-policy.yaml` is a strict compiler input. It names a `default` profile and defines
@@ -114,8 +114,8 @@ the skill everywhere), and agent `color` on Codex, Cursor, and Pi. Codex project
 portable effort, including `max`.
 Cursor projects allows to the allowlist its Desktop app and CLI share, and
 a generated hook carries the asks and denies. Codex projects ask and deny rules as
-`prompt` and `forbidden` prefix rules and leaves allows to its sandbox, so it
-owes no command omission. Commands and agents that intentionally never
+`prompt` and `forbidden` prefix rules, a generated hook carries every deny, and
+allows stay with its sandbox, so it owes no command omission. Commands and agents that intentionally never
 reach Cursor or Codex can set `only: [claude, opencode]` instead of repeating
 those surface omissions.
 
@@ -194,10 +194,14 @@ OpenCode's and Pi's `*` bash entry, which every rule is written after, Claude's 
 for `unmatched: allow`: Cursor's shared allowlist has no deny channel to keep
 the guards binding, and Codex gates an unmatched command by sandbox. There is no `deny`
 value: a blanket command denial is not a policy any target can run under.
-Declared `wrappers` get wrapped copies of every ask and deny rule, never a
+`wrappers`, by default the programs that run their argument as a command
+(`command`, `env`, `nice`, `nohup`, `stdbuf`, `time`, `timeout`, `xargs`),
+get wrapped copies of every ask and deny rule, never a
 blanket allow, so a wrapped allowed command falls to `unmatched`; a target
 that peels a wrapper itself gets no copies for it, and Cursor's hook peels
-them as Claude's does. Claude strips a program
+them as Claude's does. An allowed whole program (`- rg`) also lands behind
+`command` and `xargs`, which run it as given, where the target cannot see
+through them: Cursor, and Pi for `command`. Claude strips a program
 path itself, and OpenCode's bundled plugin does, as the OpenCode target
 reference describes.
 
@@ -231,28 +235,31 @@ braces, so `gh pr {list,view}` is two rules and
 alternative is dropped, so a long group may wrap onto the next line. Tokens are portable
 literal argv tokens. A token may start with `~` to match the
 home-relative command text agents type; every target matches it literally and
-never expands it. Claude and OpenCode, which match the typed text, also receive
-a `~/` command under its `$HOME/` spelling, and a subcommand token holding a
-`/` single- and double-quoted. `assignments` maps a command to literal
-`NAME=value` tokens (`git: [GIT_EDITOR=true]`) that agents type in front of it
-and that change nothing a rule decides; those two targets land the command's
-rules behind each one too, except where the target strips assignments itself:
-Claude before an ask or deny, OpenCode's shell-unwrap plugin before a deny. A
-value is one literal shell word, quoted as typed (`IFS=$'\t'`), with no
-whitespace or glob character, because a wildcard
-would span into the command; Cursor and Codex receive nothing, so such a command
-falls to their default. Like `options`, a command's `assignments` have one
-home. A `text` predicate matches as a substring anywhere after the command, so
+never expands it. Every target also receives a `~/` command under its absolute
+path, and the glob targets under its `$HOME/` spelling and a subcommand token
+holding a `/` single- and double-quoted.
+
+An ask or deny with a subcommand also matches any options between the program
+and the subcommand (`git -C repo push` for `git push`). An allow carries over
+only the options that pick where or how a command runs: the compiler's table
+for well-known CLIs (`git -C`, `kubectl --context`, `gcloud --project`), plus
+the `options` a fragment declares for its own tools. A command's `options` have
+one home. Spellings that change nothing a rule decides are not written as
+rules: shell-unwrap reads a bundled or joined flag (`-fu`, `--method=POST`,
+`-XPOST`) in each of its readings, peels wrappers and program paths, and carries
+an allow over a harmless assignment such as `GIT_EDITOR=true`. Every target
+runs it for denies, and Claude, Cursor, and OpenCode for asks too. A `text` predicate matches as a substring anywhere after the command, so
 a leading or trailing space in it anchors the match to a token boundary:
 `' -T'` matches `curl -T f` but not `-H Content-Type`. A deny rule
 may carry a one-line `reason`, what the agent should run instead; it is not a
 predicate. Claude delivers it through the shell-unwrap hook, OpenCode through
-the shell-unwrap plugin, Pi through the permission system's deny `reason`, and
-Codex as the forbidden rule's `justification`.
+the shell-unwrap plugin, Pi through the permission system's deny `reason` and
+the shell-unwrap extension, and Codex as the forbidden rule's `justification`
+and through the shell-unwrap hook.
 
 ```yaml
 options:
-  git: [-C, --no-pager]
+  ./gradlew: [--offline]
 allow:
   - git {status,log}
   - exact: node --version

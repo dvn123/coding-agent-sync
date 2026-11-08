@@ -114,10 +114,12 @@ in a file, and a subagent approves both itself.
   Desktop runs `beforeShellExecution` before every shell call
   (`runPreExecutionHooks` in `cursor-agent-exec`): `deny` refuses and `ask`
   prompts.
-- Wrapped spellings are not listed: `timeout 30 git status` prompts. A bare
-  wrapper entry would allow any payload the wrapper carries, a `*` hole after
-  the wrapper swallows a whole command, and one entry per wrapper and rule
-  multiplies the allowlist. Cursor needs few wrappers: the parser leaves
+- Wrapped spellings are mostly not listed: `timeout 30 git status` prompts. A
+  bare wrapper entry would allow any payload the wrapper carries, a `*` hole
+  after the wrapper swallows a whole command, and one entry per wrapper and
+  rule multiplies the allowlist. The exception is an allowed whole program
+  (`rg`), which also lands as `command rg` and `xargs rg`: both run it as
+  given, and agents pipe into `xargs` often. Cursor needs few wrappers: the parser leaves
   leading `VAR=value` assignments out of the matched text (the
   `assignment-prefix` scenario), and the Shell tool has its own `timeout`,
   `is_background`, and `block_until_ms`. A Cursor-only rule that steers the

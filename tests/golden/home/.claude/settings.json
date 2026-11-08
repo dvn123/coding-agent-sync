@@ -13,10 +13,10 @@
       "Bash(fixture-tool publish --public *)",
       "Bash(fixture-tool publish * --public *)",
       "Bash(fixture-tool publish * --public)",
-      "Bash(fixture-tool -C* publish --public *)",
-      "Bash(fixture-tool -C* publish --public)",
-      "Bash(fixture-tool -C* publish * --public *)",
-      "Bash(fixture-tool -C* publish * --public)",
+      "Bash(fixture-tool -* publish --public *)",
+      "Bash(fixture-tool -* publish --public)",
+      "Bash(fixture-tool -* publish * --public *)",
+      "Bash(fixture-tool -* publish * --public)",
       "WebSearch(*)",
       "Read(//tmp/fixture-review/**)",
       "Edit(//tmp/fixture-review/**)",
@@ -24,7 +24,7 @@
     ],
     "deny": [
       "Bash(fixture-tool remove)",
-      "Bash(fixture-tool -C* remove)",
+      "Bash(fixture-tool -* remove)",
       "Bash(*FIXTURE_TOKEN*)",
       "Read(//**/.env)",
       "Edit(//**/.env)",
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun <tmp>/home/.claude/hooks/shell-unwrap.js claude 2>/dev/null || true",
+            "command": "bun <tmp>/home/.claude/hooks/shell-unwrap.js claude 2>/dev/null || printf %s '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"shell-unwrap could not run, so its guards were not checked\"}}'",
             "timeout": 10
           }
         ]

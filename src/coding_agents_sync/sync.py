@@ -16,7 +16,7 @@ from .output.writer import (
     publish_plan_manifests,
     write_plan,
 )
-from .sources import load_sources
+from .sources import load_sources, with_home_paths
 from .targets import (
     compile_claude,
     compile_codex,
@@ -54,6 +54,10 @@ def apply_transaction(transaction: Transaction) -> None:
 def run_sync(*, config_root: Path, home: Path, check: bool = False) -> tuple[Path, ...]:
     ctx = SyncContext(config_root=config_root, home=home)
     sources = load_sources(ctx.config_root)
+    if sources.permissions is not None:
+        sources = sources.model_copy(
+            update={"permissions": with_home_paths(sources.permissions, home)}
+        )
     plan = merge_plans(
         compile_claude(ctx, sources),
         compile_cursor(ctx, sources),

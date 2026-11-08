@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(fixture-tool remove)",
+      "Bash(fixture-tool -* remove)",
+      "Bash(*FIXTURE_TOKEN*)"
+    ]
+  },
+  "reasons": {}
+}

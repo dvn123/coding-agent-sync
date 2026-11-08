@@ -36,7 +36,7 @@ def compiled_tree(tmp_path: Path) -> dict[str, str]:
     # `test_sync` checks; the golden tree pins only where they land.
     texts = {
         name: VENDORED
-        if name.endswith("/shell-unwrap.js")
+        if name.endswith(("/shell-unwrap.js", "/shell-unwrap/index.js"))
         else path.read_text().replace(str(tmp_path), "<tmp>")
         for name, path in sorted(outputs.items())
     }
@@ -77,6 +77,8 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.codex/agents/.coding-agents-managed.json",
             "home/.codex/agents/sample.toml",
             "home/.codex/config.toml",
+            "home/.codex/hooks/shell-unwrap.js",
+            "home/.codex/hooks/shell-unwrap.json",
             "home/.codex/rules/.coding-agents-managed.json",
             "home/.codex/rules/coding-agents.rules",
             "home/.codex/skills/.coding-agents-managed.json",
@@ -114,6 +116,9 @@ def test_fixture_compiles_to_the_golden_tree(tmp_path: Path) -> None:
             "home/.pi/agent/agents/.coding-agents-managed.json",
             "home/.pi/agent/agents/sample.md",
             "home/.pi/agent/extensions/pi-permission-system/config.json",
+            "home/.pi/agent/extensions/shell-unwrap/index.js",
+            "home/.pi/agent/extensions/shell-unwrap/shell-unwrap.js",
+            "home/.pi/agent/extensions/shell-unwrap/shell-unwrap.json",
             "home/.pi/agent/mcp.json",
             "home/.pi/agent/prompts/.coding-agents-managed.json",
             "home/.pi/agent/settings.json",

@@ -31,11 +31,14 @@ from ..sources import (
 )
 from .claude import shell_entries as claude_shell_entries
 from .permissions import (
-    bucket_patterns,
+    ALLOW_WRAPPERS,
+    INTERPRETER_COMMANDS,
+    UNWRAP_HOOK,
+    UNWRAP_TIMEOUT_SECONDS,
     cursor_shell_variants,
     denied_paths,
-    deny_reasons,
-    secret_name_variants,
+    unwrap_rules_file,
+    whole_program,
 )
 from .support import (
     collision_error,
@@ -133,17 +136,15 @@ def _ignore_pattern(path: str) -> str | None:
     return None
 
 
-INTERPRETER_COMMANDS = frozenset({"bash", "eval", "sh", "zsh"})
-
-
 def _terminal_allowlist(
     sources: SourceBundle,
 ) -> tuple[list[str], tuple[Diagnostic, ...]]:
     """Lower allows to Desktop's `terminalAllowlist`, which the CLI also reads.
 
     The allowlist has no deny channel; shell-unwrap's hook carries the asks and
-    denies (`_unwrap_hook`), so every allow lands as written. Wrapped
-    spellings (`timeout 30 git status`) are not listed and prompt.
+    denies (`_unwrap_hook`), so every allow lands as written. An allowed whole
+    program also lands behind `command` and `xargs`; other wrapped spellings
+    (`timeout 30 git status`) are not listed and prompt.
     """
     if not (permissions := sources.permissions):
         return [], ()
@@ -159,13 +160,25 @@ def _terminal_allowlist(
         for rule in commands.allow
         if rule.command in INTERPRETER_COMMANDS
     )
+    allowed = [
+        rule for rule in commands.allow if rule.command not in INTERPRETER_COMMANDS
+    ]
     allowlist = list(
         dict.fromkeys(
-            pattern
-            for rule in commands.allow
-            if rule.command not in INTERPRETER_COMMANDS
-            for pattern in cursor_shell_variants(
-                rule, commands.option_tokens(rule.command)
+            (
+                *(
+                    pattern
+                    for rule in allowed
+                    for pattern in cursor_shell_variants(
+                        rule, commands.option_tokens(rule.command)
+                    )
+                ),
+                *(
+                    f"{wrapper} {rule.command}"
+                    for rule in allowed
+                    if whole_program(rule)
+                    for wrapper in ALLOW_WRAPPERS
+                ),
             )
         )
     )
@@ -178,9 +191,7 @@ def _terminal_allowlist(
 # matches, peeled as on Claude, and leaves the rest to the allowlist. It reads
 # Claude's `Bash(...)` patterns and asks when it cannot run, so the guards
 # fail closed. Desktop can refuse user-local plugins, so it is not one.
-UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
 UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
-UNWRAP_TIMEOUT_SECONDS = 10
 # Desktop starts from the Dock without the login shell's PATH.
 BUN_PATH = (
     "$HOME/.bun/bin:$HOME/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin"
@@ -191,19 +202,20 @@ UNWRAP_UNAVAILABLE = {
 }
 
 
-def _json(value: object) -> bytes:
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
-
-
 def _unwrap_hook(
     root: Path, home: Path, permissions: PermissionSource
 ) -> tuple[list[OwnedFile], list[NativeValue]]:
     """The hook and its rules, or nothing when no command is asked or denied."""
-    buckets = bucket_patterns(claude_shell_entries(permissions))
-    deny = [*buckets["deny"], *secret_name_variants(permissions.secret_names)]
-    if not (deny or buckets["ask"]):
-        return [], []
     script = root / UNWRAP_HOOK_PATH
+    rules = unwrap_rules_file(
+        script.with_suffix(".json"),
+        root,
+        permissions,
+        claude_shell_entries,
+        asks=True,
+    )
+    if rules is None:
+        return [], []
     located = (
         f'"$HOME"/{shlex.quote(script.relative_to(home).as_posix())}'
         if script.is_relative_to(home)
@@ -217,17 +229,10 @@ def _unwrap_hook(
         "timeout": UNWRAP_TIMEOUT_SECONDS,
         "failClosed": True,
     }
-    rules = {
-        "permissions": {
-            "ask": [f"Bash({pattern})" for pattern in buckets["ask"]],
-            "deny": [f"Bash({pattern})" for pattern in deny],
-        },
-        "reasons": deny_reasons(permissions, claude_shell_entries),
-    }
     hooks = root / "hooks.json"
     return [
         OwnedFile(script, UNWRAP_HOOK.read_bytes(), root, structured=False),
-        OwnedFile(script.with_suffix(".json"), _json(rules), root),
+        rules,
     ], [
         NativeValue("cursor-hooks", hooks, ("version",), 1),
         NativeValue("cursor-hooks", hooks, ("hooks", "beforeShellExecution"), [hook]),

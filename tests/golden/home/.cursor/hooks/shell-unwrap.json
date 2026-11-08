@@ -4,14 +4,14 @@
       "Bash(fixture-tool publish --public *)",
       "Bash(fixture-tool publish * --public *)",
       "Bash(fixture-tool publish * --public)",
-      "Bash(fixture-tool -C* publish --public *)",
-      "Bash(fixture-tool -C* publish --public)",
-      "Bash(fixture-tool -C* publish * --public *)",
-      "Bash(fixture-tool -C* publish * --public)"
+      "Bash(fixture-tool -* publish --public *)",
+      "Bash(fixture-tool -* publish --public)",
+      "Bash(fixture-tool -* publish * --public *)",
+      "Bash(fixture-tool -* publish * --public)"
     ],
     "deny": [
       "Bash(fixture-tool remove)",
-      "Bash(fixture-tool -C* remove)",
+      "Bash(fixture-tool -* remove)",
       "Bash(*FIXTURE_TOKEN*)"
     ]
   },

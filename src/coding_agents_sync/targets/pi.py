@@ -34,13 +34,16 @@ from ..sources import (
     StrictModel,
     resolve_model_policy,
 )
+from .claude import shell_entries as claude_shell_entries
 from .permissions import (
+    UNWRAP_HOOK,
     bucket_entries,
     bucket_patterns,
     denied_paths,
     deny_reasons,
     glob_variants,
     secret_name_variants,
+    unwrap_rules_file,
     wrapper_prefixes,
 )
 from .support import (
@@ -180,7 +183,7 @@ def pi_skill(
 # behind an execution modifier (`time`, `timeout`, `nice`, `stdbuf`, `setsid`)
 # as the command it runs, and raises one behind any other wrapper here to at
 # least ask, so a guard needs no copy behind them: a deny there prompts instead.
-# It does not know `command`, `builtin`, or `exec`, which keep their copies.
+# It does not know `command`, `builtin`, or `exec`, which keep their ask copies.
 PI_PEELED = frozenset(
     prefix
     for wrapper in (
@@ -203,11 +206,55 @@ PI_PEELED = frozenset(
 
 
 def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str]]:
-    return bucket_entries(
+    """shell-unwrap's extension (`_unwrap_extension`) denies behind every
+    wrapper, so a deny needs no wrapper copy. It never asks, so an ask keeps
+    its copies behind the wrappers the permission system does not know."""
+    for entry in bucket_entries(
         permissions,
         functools.partial(glob_variants, optional_trailing=True),
         PI_PEELED,
+        wrapped_allows=True,
+    ):
+        bucket, origin, _ = entry
+        if bucket != "deny" or origin in ("base", "option"):
+            yield entry
+
+
+# Pi runs extensions in Node; this one starts shell-unwrap's hook bundle, its
+# Codex host, on every `bash` call and blocks the call when the hook denies or
+# cannot run, so the guards fail closed. Pi discovers it by its directory.
+UNWRAP_EXTENSION = Path(__file__).with_name("shell-unwrap") / "pi.js"
+UNWRAP_ROOT = Path("extensions/shell-unwrap")
+
+
+def _unwrap_extension(root: Path, permissions: PermissionSource) -> list[OwnedFile]:
+    """The extension, the hook it runs, and their deny rules, or nothing when
+    no command is denied."""
+    directory = root / UNWRAP_ROOT
+    rules = unwrap_rules_file(
+        directory / "shell-unwrap.json",
+        root,
+        permissions,
+        claude_shell_entries,
+        asks=False,
     )
+    if rules is None:
+        return []
+    return [
+        OwnedFile(
+            directory / "index.js",
+            UNWRAP_EXTENSION.read_bytes(),
+            root,
+            structured=False,
+        ),
+        OwnedFile(
+            directory / "shell-unwrap.js",
+            UNWRAP_HOOK.read_bytes(),
+            root,
+            structured=False,
+        ),
+        rules,
+    ]
 
 
 def _bash_rules(permissions: PermissionSource) -> dict[str, Any]:
@@ -392,6 +439,7 @@ def compile_pi(ctx: SyncContext, sources: SourceBundle) -> Plan:
     if permissions:
         _, issues = resolve("pi", [permissions])
         diagnostics.extend(issues)
+        files.extend(_unwrap_extension(root, permissions))
     servers, issues = mcp_servers(sources, "pi")
     diagnostics.extend(issues)
     gated = bool(

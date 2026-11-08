@@ -126,11 +126,23 @@ with the same decision and reason merge (`["git", "push", ["--force", "-f"]]`).
 A wrapper that takes arguments of its own (`timeout 5 …`) still falls through,
 because no prefix can skip them. Codex resolves an absolute program path to
 its basename itself. The option-hole heads and the tail-after-arguments
-spellings have no prefix form and fall to Codex's own approval flow; an ask
-or deny with a text predicate or an exact match is dropped with a warning.
+spellings have no prefix form, and an ask with a text predicate or an exact
+match is dropped with a warning; these fall to Codex's own approval flow.
 Allow rules never project and owe no omission: a Codex `allow` rule runs the
 command outside the sandbox, while an unlisted command already runs inside
 it.
+
+shell-unwrap's hook bundle carries the denies the prefix rules miss. It lands
+in `hooks/shell-unwrap.js` beside a `shell-unwrap.json` that holds every deny
+as a Claude `Bash(...)` pattern, text and exact rules included, and runs as a
+`Bash` `PreToolUse` command in `config.toml`. It denies a call when any peeled
+spelling of a command inside it matches a deny: a wrapper with arguments
+(`timeout 5 …`), an option before the subcommand, a bundled or joined flag
+(`-fu`, `--method=POST`), or a command in a substitution. Codex rejects an
+`ask` from a `PreToolUse` hook, so asks stay prefix rules only. When Bun or
+the hook cannot run, the hook command prints a deny, so the guards fail closed.
+Codex runs the hook only once the user trusts it in `/hooks`; the trust covers
+the hook's declaration, so a new bundle needs no new trust.
 
 ## Permission profile
 

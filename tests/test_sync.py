@@ -37,9 +37,9 @@ from coding_agents_sync.sources import (
     describe_rule,
     load_permissions,
 )
-from coding_agents_sync.targets.claude import UNWRAP_HOOK
-from coding_agents_sync.targets.cursor import UNWRAP_HOOK as CURSOR_UNWRAP_HOOK
 from coding_agents_sync.targets.opencode import UNWRAP_PLUGIN
+from coding_agents_sync.targets.permissions import UNWRAP_HOOK
+from coding_agents_sync.targets.pi import UNWRAP_EXTENSION
 
 
 def write(path: Path, content: str) -> None:
@@ -194,7 +194,6 @@ def permission_files(
     ask: Rules | None = None,
     deny: Rules | None = None,
     options: dict[str, list[str]] | None = None,
-    assignments: dict[str, list[str]] | None = None,
     wrappers: list[str] | None = None,
     secret_paths: list[str] | None = None,
     secret_names: list[str] | None = None,
@@ -224,7 +223,6 @@ def permission_files(
             ask=ask,
             deny=deny,
             options=options,
-            extra={"assignments": assignments} if assignments else None,
         ),
     }
 
@@ -289,11 +287,11 @@ def desktop_allowlist(*entries: str) -> dict[str, Any]:
     return {"approvalMode": "allowlist", "terminalAllowlist": list(entries)}
 
 
-def codex_sandbox_warning(rules: str) -> str:
+def codex_ask_warning(rules: str) -> str:
     return (
         "Warning: Codex prefix rules cannot hold a text predicate or an exact "
-        f"match, so these fall to its sandbox: {rules}: "
-        "<config>/permissions/policy.yaml"
+        "match, and its hooks cannot ask, so these asks fall to its approval "
+        f"flow: {rules}: <config>/permissions/policy.yaml"
     )
 
 
@@ -521,20 +519,6 @@ class RejectedSourceTests(SyncCase):
                     "reason on an allow",
                     permission_files(allow=[{"prefix": ["fd"], "reason": "no"}]),
                     "only a deny",
-                ),
-                *(
-                    (
-                        f"assignment {assignments}",
-                        permission_files(
-                            allow=[["tool", "status"]], assignments=assignments
-                        ),
-                        pattern,
-                    )
-                    for assignments, pattern in (
-                        ({"tool": ["EDITOR=*"]}, "String should match pattern"),
-                        ({"tool": ["EDITOR=a b"]}, "String should match pattern"),
-                        ({"other": ["EDITOR=true"]}, "assignments declared for other"),
-                    )
                 ),
                 (
                     "rule with both prefix and exact",
@@ -1487,18 +1471,15 @@ class PermissionProjectionTests(SyncCase):
         )
 
     def test_a_deny_reaches_every_target_that_has_a_deny_channel(self) -> None:
-        """Two targets degrade, for unrelated reasons.
-
-        Cursor Desktop's shipped schema has no deny key. OpenCode has one but
-        must not be given it: a denial there serializes the entire bash
-        ruleset into the model-visible error, so guards land as `ask`.
-        """
+        """A guard matches any options before its subcommand; an allow carries
+        over only the declared ones, which the corpus adds to the built-in
+        table for its own tools."""
         config_root, home = self.new_roots()
         write_permissions(
             config_root,
-            allow=[["kubectl", "get"]],
-            deny=[["kubectl", "apply"]],
-            options={"kubectl": ["--context"]},
+            allow=[["kube", "get"]],
+            deny=[["kube", "apply"]],
+            options={"kube": ["--context"]},
         )
 
         run_sync(config_root=config_root, home=home)
@@ -1506,17 +1487,16 @@ class PermissionProjectionTests(SyncCase):
         claude = claude_settings(home)
         self.assertEqual(
             claude["permissions"]["deny"],
-            [
-                "Bash(kubectl apply *)",
-                "Bash(kubectl --context* apply *)",
-                "Bash(kubectl --context* apply)",
-            ],
+            ["Bash(kube apply *)", "Bash(kube -* apply *)", "Bash(kube -* apply)"],
         )
         bash = opencode_rules(opencode_config(home), "shell")
         expected = {
-            "kubectl get pods": "allow",
-            "kubectl apply -f x.yaml": "deny",
-            "kubectl --context prod apply -f x.yaml": "deny",
+            "kube get pods": "allow",
+            "kube --context prod get pods": "allow",
+            "kube --as admin get pods": "ask",
+            "kube apply -f x.yaml": "deny",
+            "kube --context prod apply -f x.yaml": "deny",
+            "kube --as admin apply -f x.yaml": "deny",
         }
         self.assertEqual(opencode_decisions(bash, expected), expected)
 
@@ -1525,12 +1505,80 @@ class PermissionProjectionTests(SyncCase):
         self.assertEqual(
             desktop["terminalAllowlist"],
             [
-                "kubectl get",
-                "kubectl --context get",
-                "kubectl:--context * get",
-                "kubectl:--context * get *",
+                "kube get",
+                "kube --context get",
+                "kube:--context * get",
+                "kube:--context * get *",
             ],
         )
+
+    def test_built_in_options_carry_a_well_known_cli_allow(self) -> None:
+        """`git -C repo status` runs `git status`, so the allow carries over it
+        with no corpus vocabulary."""
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[["git", "status"]])
+
+        run_sync(config_root=config_root, home=home)
+
+        bash = opencode_rules(opencode_config(home), "shell")
+        expected = {
+            "git -C repo status": "allow",
+            "git --no-pager status": "allow",
+            "git -c core.pager=x status": "ask",
+        }
+        self.assertEqual(opencode_decisions(bash, expected), expected)
+
+    def test_whole_program_allows_land_behind_wrappers_the_target_cannot_see(
+        self,
+    ) -> None:
+        """Cursor sees through neither `command` nor `xargs` for an allow, and
+        Pi only through `xargs`; both wrappers run the program as given."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root, allow=[["rg"], ["git", "status"], ["sh"]], unmatched="ask"
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        allowlist = load_json(home / ".cursor/permissions.json")["terminalAllowlist"]
+        self.assertIn("xargs rg", allowlist)
+        self.assertIn("command rg", allowlist)
+        self.assertNotIn("xargs git", allowlist)
+        self.assertFalse([entry for entry in allowlist if entry.endswith(" sh")])
+        pi = load_json(home / ".pi/agent/extensions/pi-permission-system/config.json")
+        self.assertNotIn("xargs rg *", pi["permission"]["bash"])
+        self.assertEqual(pi["permission"]["bash"].get("command rg *"), "allow")
+
+    def test_pi_extension_carries_wrapped_denies(self) -> None:
+        """shell-unwrap's extension denies behind any wrapper, so a deny lands
+        bare; it never asks, so an ask keeps its copy behind `command`, which
+        the permission system does not know."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root,
+            deny=[["shred"]],
+            ask=[["rmdir"]],
+            wrappers=["command", "env"],
+            unmatched="allow",
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        bash = load_json(
+            home / ".pi/agent/extensions/pi-permission-system/config.json"
+        )["permission"]["bash"]
+        self.assertEqual(bash.get("shred *"), "deny")
+        self.assertNotIn("command shred *", bash)
+        self.assertEqual(bash.get("command rmdir *"), "ask")
+        extension = home / ".pi/agent/extensions/shell-unwrap"
+        self.assertEqual(
+            (extension / "index.js").read_bytes(), UNWRAP_EXTENSION.read_bytes()
+        )
+        self.assertEqual(
+            (extension / "shell-unwrap.js").read_bytes(), UNWRAP_HOOK.read_bytes()
+        )
+        guards = load_json(extension / "shell-unwrap.json")["permissions"]
+        self.assertEqual(guards, {"deny": ["Bash(shred *)"]})
 
     def test_unmatched_allow_lands_only_where_the_guards_outrank_it(self) -> None:
         """Codex and Cursor Desktop owe an omit.
@@ -1584,37 +1632,37 @@ class PermissionProjectionTests(SyncCase):
                 "bare exact rules project the exact bare form",
                 {"allow": [{"exact": ["fd"]}], "deny": [{"exact": ["shred"]}]},
                 desktop_allowlist("fd:"),
-                [codex_sandbox_warning("deny shred")],
+                [],
             ),
             (
                 "a guard leaves the allow it narrows in place",
                 {
-                    "allow": [["git", "push"], ["git", "status"]],
-                    "deny": [{"prefix": ["git", "push"], "tail": ["--force"]}],
-                    "ask": [{"prefix": ["git", "status"], "text": ["--ignored"]}],
+                    "allow": [["tool", "push"], ["tool", "status"]],
+                    "deny": [{"prefix": ["tool", "push"], "tail": ["--force"]}],
+                    "ask": [{"prefix": ["tool", "status"], "text": ["--ignored"]}],
                 },
-                desktop_allowlist("git push", "git status"),
-                [codex_sandbox_warning("ask git status")],
+                desktop_allowlist("tool push", "tool status"),
+                [codex_ask_warning("tool status")],
             ),
             (
                 "the declared option vocabulary expands every allow",
                 {
-                    "allow": [["git", "status"]],
-                    "ask": [["git", "-C", "foo", "status"]],
-                    "options": {"git": ["-C"]},
+                    "allow": [["tool", "status"]],
+                    "ask": [["tool", "-C", "foo", "status"]],
+                    "options": {"tool": ["-C"]},
                 },
                 desktop_allowlist(
-                    "git status",
-                    "git -C status",
-                    "git:-C * status",
-                    "git:-C * status *",
+                    "tool status",
+                    "tool -C status",
+                    "tool:-C * status",
+                    "tool:-C * status *",
                 ),
                 [],
             ),
             (
                 "interpreter allows are never projected",
-                {"allow": [["sh"], ["bash"], ["zsh"], ["eval"], ["git", "status"]]},
-                desktop_allowlist("git status"),
+                {"allow": [["sh"], ["bash"], ["zsh"], ["eval"], ["tool", "status"]]},
+                desktop_allowlist("tool status"),
                 [
                     f"Warning: omitted allow {name}: Cursor cannot confine an "
                     "interpreter payload"
@@ -1644,16 +1692,16 @@ class PermissionProjectionTests(SyncCase):
                     cursor_guards(home), guards if any(guards.values()) else None
                 )
 
-    def test_a_home_relative_command_projects_unexpanded_and_as_a_variable(
+    def test_a_home_relative_command_projects_in_every_spelling_agents_type(
         self,
     ) -> None:
-        """Agents type `~/bin/tool` and also `$HOME/bin/tool`, and glob targets
-        match the text as typed, so the token alphabet carries `~` and every
-        target projects it unexpanded."""
+        """Agents type `~/bin/tool`, `$HOME/bin/tool`, and the absolute path,
+        and glob targets match the text as typed, so a `~/` program lands in
+        all three, and a `~/` argument under its absolute path too."""
         config_root, home = self.new_roots()
         write_permissions(
             config_root,
-            allow=[["~/bin/tool", "status"]],
+            allow=[["~/bin/tool", "status"], ["agent", "load", "~/x.plist"]],
             deny=[["~/bin/tool", "push"]],
         )
 
@@ -1663,66 +1711,19 @@ class PermissionProjectionTests(SyncCase):
         expected = {
             "~/bin/tool status": "allow",
             "$HOME/bin/tool status -v": "allow",
+            f"{home.as_posix()}/bin/tool status": "allow",
             "$HOME/bin/tool push": "deny",
+            f"{home.as_posix()}/bin/tool push": "deny",
             "$HOME/bin/tool reset": "ask",
+            "agent load ~/x.plist": "allow",
+            f"agent load {home.as_posix()}/x.plist": "allow",
         }
         self.assertEqual(opencode_decisions(bash, expected), expected)
         allow = claude_settings(home)["permissions"]["allow"]
         self.assertIn("Bash(~/bin/tool status *)", allow)
         self.assertIn("Bash($HOME/bin/tool status *)", allow)
+        self.assertIn(f"Bash({home.as_posix()}/bin/tool status *)", allow)
         self.assertFalse((home / ".cursor/cli-config.json").exists())
-
-    def test_a_declared_assignment_prefixes_every_rule_its_target_does_not_peel(
-        self,
-    ) -> None:
-        """A literal `NAME=value` agents type before a command decides nothing.
-
-        Claude strips any assignment before an ask or deny, and the
-        shell-unwrap plugin before a deny, so only the other rules get
-        copies behind it.
-        """
-        config_root, home = self.new_roots()
-        write_permissions(
-            config_root,
-            allow=[["tool", "status"]],
-            ask=[["tool", "push"]],
-            deny=[["tool", "reset"]],
-            assignments={"tool": ["EDITOR=true", "IFS=", "IFS=$'\\t'"]},
-        )
-
-        run_sync(config_root=config_root, home=home)
-
-        bash = opencode_rules(opencode_config(home), "shell")
-        expected = {
-            "EDITOR=true tool status": "allow",
-            "IFS= tool status -v": "allow",
-            "IFS=$'\\t' tool status": "allow",
-            "EDITOR=true tool reset": "deny",
-            "EDITOR=true tool push": "ask",
-            "EDITOR=false tool status": "ask",
-            "OTHER=1 tool status": "ask",
-        }
-        self.assertEqual(opencode_decisions(bash, expected), expected)
-        self.assertEqual(
-            {
-                effect
-                for resource, effect in bash.items()
-                if resource.startswith("EDITOR=true ")
-            },
-            {"allow", "ask"},
-        )
-        permissions = claude_settings(home)["permissions"]
-        self.assertEqual(
-            {
-                bucket: [
-                    rule
-                    for rule in permissions[bucket]
-                    if rule.startswith("Bash(EDITOR=true ")
-                ]
-                for bucket in ("allow", "ask", "deny")
-            },
-            {"allow": ["Bash(EDITOR=true tool status *)"], "ask": [], "deny": []},
-        )
 
     def test_a_text_rule_absorbs_the_token_rules_it_covers_on_glob_targets(
         self,
@@ -1745,7 +1746,7 @@ class PermissionProjectionTests(SyncCase):
                 for rule in claude_settings(home)["permissions"]["deny"]
                 if "kube" in rule
             ],
-            ["Bash(kube get*yaml*)"],
+            ["Bash(kube get*yaml*)", "Bash(kube -* get*yaml*)"],
         )
         self.assertEqual(
             {
@@ -1755,7 +1756,7 @@ class PermissionProjectionTests(SyncCase):
                 ).items()
                 if "kube" in resource
             },
-            {"kube get*yaml*": "deny"},
+            {"kube get*yaml*": "deny", "kube -* get*yaml*": "deny"},
         )
         self.assertIn(
             'prefix_rule(pattern=["kube", "get", "-oyaml"], decision="forbidden")',
@@ -1876,9 +1877,12 @@ class PermissionProjectionTests(SyncCase):
             {
                 "*": "ask",
                 "git status *": "allow",
+                "git -C* status *": "allow",
+                "git --no-pager* status *": "allow",
                 "rmdir *": "ask",
                 "shred *": "deny",
                 "git push *": "deny",
+                "git -* push *": "deny",
                 "*EXAMPLE_TOKEN*": "deny",
             },
         )
@@ -2115,17 +2119,17 @@ class PermissionProjectionTests(SyncCase):
     def test_wrapper_guards_bind_where_the_target_cannot_peel_the_wrapper(self) -> None:
         """A wrapped copy of every guard, and no blanket wrapper allow.
 
-        Claude Code peels `timeout` and `env` before matching a guard, so it
-        needs no copy for them, and retries a guard behind a bare `xargs`, so
-        it receives only the `xargs` copy that carries options. A blanket
-        `env *` allow would match any payload the wrapper carries, so a wrapped
-        allowed command falls to `unmatched` on the glob targets and prompts on
-        Cursor, which lists no wrapped spelling.
+        Claude Code peels `timeout`, `env`, and a bare `xargs` before matching
+        a guard, and shell-unwrap's hook and plugin peel all three, so neither
+        Claude nor OpenCode needs a copy. A blanket `env *` allow would match
+        any payload the wrapper carries, so a wrapped allowed command falls to
+        `unmatched` on the glob targets and prompts on Cursor, which lists no
+        wrapped spelling.
         """
         config_root, home = self.new_roots()
         write_permissions(
             config_root,
-            allow=[["git", "status"]],
+            allow=[["tool", "status"]],
             ask=[["rmdir"]],
             wrappers=["timeout", "env", "xargs"],
         )
@@ -2133,34 +2137,14 @@ class PermissionProjectionTests(SyncCase):
         run_sync(config_root=config_root, home=home)
 
         claude = claude_settings(home)
-        self.assertEqual(claude["permissions"]["allow"], ["Bash(git status *)"])
-        self.assertEqual(
-            claude["permissions"]["ask"],
-            [
-                "Bash(rmdir *)",
-                "Bash(xargs * rmdir *)",
-                "Bash(xargs * rmdir)",
-            ],
-        )
+        self.assertEqual(claude["permissions"]["allow"], ["Bash(tool status *)"])
+        self.assertEqual(claude["permissions"]["ask"], ["Bash(rmdir *)"])
 
         bash = opencode_rules(opencode_config(home), "shell")
-        self.assertEqual(
-            list(bash),
-            [
-                "*",
-                "git status *",
-                "rmdir *",
-                "timeout rmdir *",
-                "timeout * rmdir *",
-                "env rmdir *",
-                "env * rmdir *",
-                "xargs rmdir *",
-                "xargs * rmdir *",
-            ],
-        )
+        self.assertEqual(list(bash), ["*", "tool status *", "rmdir *"])
         expected = {
-            "git status": "allow",
-            "timeout 5 git status": "ask",
+            "tool status": "allow",
+            "timeout 5 tool status": "ask",
             "timeout 5 rmdir build": "ask",
             "env FOO=1 rmdir build": "ask",
             "env rmdir build": "ask",
@@ -2173,7 +2157,7 @@ class PermissionProjectionTests(SyncCase):
         self.assertEqual(
             desktop["terminalAllowlist"],
             # A wrapped spelling is not listed, so it prompts.
-            ["git status"],
+            ["tool status"],
         )
 
     def test_codex_receives_asks_as_prompt_and_denies_as_forbidden(self) -> None:
@@ -2183,8 +2167,8 @@ class PermissionProjectionTests(SyncCase):
         Codex exec policy has no wildcards and lapses entirely on any `$VAR`
         or substitution, so it is not a containment boundary; a prefix still
         governs the plain spelling. Allows stay with the sandbox, because a
-        Codex allow rule runs outside it, and predicates with no prefix form
-        are dropped with a warning.
+        Codex allow rule runs outside it. A deny with no prefix form lands in
+        shell-unwrap's hook instead, which denies every peeled spelling.
         """
         config_root, home = self.new_roots()
         write_permissions(
@@ -2232,7 +2216,19 @@ class PermissionProjectionTests(SyncCase):
         for absent in ("git", "rg", "ls", "EXAMPLE_TOKEN", ".env"):
             with self.subTest(absent=absent):
                 self.assertNotIn(f'"{absent}"', codex_rules)
-        self.assertIn("fall to its sandbox: deny ls, deny rg:", stderr.getvalue())
+        self.assertNotIn("Codex prefix rules", stderr.getvalue())
+        guards = json.loads((home / ".codex/hooks/shell-unwrap.json").read_text())
+        self.assertEqual(set(guards["permissions"]), {"deny"})
+        for pattern in ("Bash(ls)", "Bash(rg*--pre*)", "Bash(shred *)"):
+            with self.subTest(pattern=pattern):
+                self.assertIn(pattern, guards["permissions"]["deny"])
+        config = tomllib.loads((home / ".codex/config.toml").read_text())
+        (hook,) = config["hooks"]["PreToolUse"]
+        self.assertEqual(hook["matcher"], "Bash")
+        script = home / ".codex/hooks/shell-unwrap.js"
+        self.assertIn(f"bun {script} codex", hook["hooks"][0]["command"])
+        self.assertIn('"permissionDecision": "deny"', hook["hooks"][0]["command"])
+        self.assertEqual(script.read_bytes(), UNWRAP_HOOK.read_bytes())
 
     def test_codex_rules_share_alternatives_across_wrappers_and_siblings(
         self,
@@ -2355,7 +2351,7 @@ class PermissionProjectionTests(SyncCase):
         """A patch contributes freely where it does not clash, and the generated
         entries survive it: extending adds to the compiler's list rather than
         replacing it, and an overlay adds rather than clashes."""
-        git_status = {"allow": [["git", "status"]]}
+        git_status = {"allow": [["tool", "status"]]}
         netrc = (
             "extend:\n  /permissions:\n  - {action: external_directory,"
             " resource: '~/.netrc', effect: %s}\n"
@@ -2368,7 +2364,7 @@ class PermissionProjectionTests(SyncCase):
                 "claude-settings",
                 "extend:\n  /permissions/allow: [WebFetch(*), mcp__github__get_me]\n",
                 lambda home: claude_settings(home)["permissions"]["allow"],
-                ["Bash(git status *)", "WebFetch(*)", "mcp__github__get_me"],
+                ["Bash(tool status *)", "WebFetch(*)", "mcp__github__get_me"],
             ),
             (
                 "claude command denials",
@@ -2517,7 +2513,7 @@ class PermissionProjectionTests(SyncCase):
         run_sync(config_root=config_root, home=home)
 
         script = home / ".cursor/hooks/shell-unwrap.js"
-        self.assertEqual(script.read_bytes(), CURSOR_UNWRAP_HOOK.read_bytes())
+        self.assertEqual(script.read_bytes(), UNWRAP_HOOK.read_bytes())
         hooks = load_json(home / ".cursor/hooks.json")
         hook, extended = hooks["hooks"]["beforeShellExecution"]
         self.assertEqual(extended, foreign)

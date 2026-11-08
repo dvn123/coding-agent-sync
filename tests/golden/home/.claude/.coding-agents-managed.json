@@ -1,6 +1,6 @@
 {
   "entries": {
     "CLAUDE.md": "sha256:a68e9d77fe6040bf78f2ab259da7d90ba22acd6fb39f08783a506014519c43ef",
-    "hooks/shell-unwrap.js": "sha256:380dceed1c351847cfcf87cb81d2909dbff6064c5636e54c97246cdbf718fb67"
+    "hooks/shell-unwrap.js": "sha256:c30b5d79d506331688e0694c51665b358357de1744ed1868a610e0fec5fef033"
   }
 }

@@ -78,14 +78,22 @@ before matching, so guards get no assignment copies. It decides a command
 behind `time`, `timeout`, `nice`, `stdbuf`, or `setsid` with literal, known
 options as the command it runs, and raises one behind `env`, `xargs`, `nohup`,
 `sudo`, `doas`, `flock`, `parallel`, or `watch`, or inside an inline shell
-payload (`bash -c`, `eval`), to at least `ask`. Pi therefore needs no
-shell-unwrap bundle. Guards get
-no copies behind those wrappers, so a denied command behind `env` prompts
-instead of being denied; copies behind them would multiply the `bash` map
-about fifteenfold. It does not know `command`, `builtin`, or `exec`, so a
-declared one keeps its copies. It does not strip a program path:
-`/usr/bin/git push` misses a `git push` deny. A `?` is a one-character wildcard there; portable tokens never
-hold one.
+payload (`bash -c`, `eval`), to at least `ask`, so asks get no copies behind
+those wrappers. It does not know `command`, `builtin`, or `exec`, so an ask
+keeps its copies behind a declared one. It does not strip a program path:
+`/usr/bin/git push` misses a `git push` ask. A `?` is a one-character
+wildcard there; portable tokens never hold one.
+
+shell-unwrap's extension carries the denies through every spelling, so a deny
+gets no wrapper copy. It lands in `extensions/shell-unwrap/`, where Pi
+discovers its `index.js`, beside the hook bundle and a `shell-unwrap.json`
+that holds every deny as a Claude `Bash(...)` pattern. On each `bash` call it
+runs the bundle's Codex host in a Bun subprocess and blocks the call with the
+deny's reason when any peeled spelling of a command inside it is denied: a
+command behind any wrapper or a program path, a bundled or joined flag, or a
+command in a substitution. It blocks when Bun or the hook cannot run, so the
+guards fail closed. It never asks; the permission system's own ask would
+repeat its prompt.
 
 Without a permission source, an MCP tool decision or an agent `deny` still
 installs the permission system, with `*: allow` and `bash: {"*": "allow"}`,

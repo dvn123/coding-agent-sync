@@ -3389,6 +3389,14 @@ var TRANSPARENT = {
 var SYSTEM_DIRS = ["", "/bin/", "/usr/bin/"];
 var XARGS_INPUT = "<xargs-input>";
 var XARGS_REPLACE = ["-I", "-J", "--replace"];
+var HARMLESS_ASSIGNMENTS = new Set([
+  "GIT_EDITOR=true",
+  "PYTHONDONTWRITEBYTECODE=1",
+  "IFS=",
+  "IFS=,",
+  "IFS='|'",
+  "IFS=$'\\t'"
+]);
 function permitted(value, options) {
   if (value === "--")
     return true;
@@ -3402,7 +3410,12 @@ function transparent(command) {
   const text = command.trim();
   const list = words(text);
   const head = list[0];
-  if (!head || text.slice(head.start, head.end) !== head.value)
+  if (!head)
+    return;
+  if (HARMLESS_ASSIGNMENTS.has(text.slice(head.start, head.end))) {
+    return list[1] ? text.slice(list[1].start).trim() : undefined;
+  }
+  if (text.slice(head.start, head.end) !== head.value)
     return;
   const program = basename(head.value);
   const options = TRANSPARENT[program];
@@ -3417,6 +3430,35 @@ function transparent(command) {
   const inner = text.slice(list[index].start).trim();
   const replaces = before.some(({ value }) => XARGS_REPLACE.some((flag) => value.split("=")[0].startsWith(flag)));
   return program === "xargs" && !replaces ? `${inner} ${XARGS_INPUT}` : inner;
+}
+var MAX_BUNDLE = 4;
+function flagReadings(raw) {
+  const joined = /^(--?[A-Za-z0-9][A-Za-z0-9-]*)=(.+)$/s.exec(raw);
+  if (joined)
+    return [`${joined[1]} ${joined[2]}`, `${joined[1]} ${joined[2]}`];
+  if (!/^-[A-Za-z]./s.test(raw) || raw.startsWith("--"))
+    return;
+  const value = `${raw.slice(0, 2)} ${raw.slice(2)}`;
+  const valued = /[A-Z]/.test(raw.slice(2));
+  if (!/^-[A-Za-z]+$/.test(raw))
+    return [value, value];
+  if (raw.length - 1 > MAX_BUNDLE)
+    return valued ? [value, value] : undefined;
+  const split = [...raw.slice(1)].map((letter) => `-${letter}`).join(" ");
+  return [split, valued ? value : split];
+}
+function flagSpellings(text, list) {
+  const variants = [text, text];
+  for (const word of [...list.slice(1)].reverse()) {
+    const raw = text.slice(word.start, word.end);
+    const readings = raw === word.value ? flagReadings(raw) : undefined;
+    if (!readings)
+      continue;
+    for (const index of [0, 1]) {
+      variants[index] = variants[index].slice(0, word.start) + readings[index] + variants[index].slice(word.end);
+    }
+  }
+  return [...new Set(variants)].filter((variant) => variant !== text);
 }
 function peelOnce(text) {
   const list = words(text);
@@ -3446,6 +3488,8 @@ function peelOnce(text) {
       if (payload)
         found.push(payload.value + text.slice(payload.end));
     }
+  } else if (program === raw) {
+    found.push(...flagSpellings(text, list));
   }
   return found.map((spelling) => spelling.trim()).filter(Boolean);
 }
@@ -3504,6 +3548,9 @@ var FD_ACTIONS = new Set(["-x", "-X", "--exec", "--exec-batch"]);
 var NEVER_ALLOWED = new Set(["tee", "watch", "setsid", "ionice", "flock", "pushd"]);
 var SPECIAL = new Set(["PATH", "IFS", "CDPATH", "ENV", "BASH_ENV", "HOME", "SHELL"]);
 var DYNAMIC = new Set(["command_substitution", "simple_expansion", "expansion", "process_substitution"]);
+function unchecked(why) {
+  return { permissionDecision: "ask", permissionDecisionReason: `shell-unwrap: ${why}, so its guards were not checked` };
+}
 var compiled2 = new Map;
 function toRegex(glob) {
   let regex = compiled2.get(glob);
@@ -3661,6 +3708,9 @@ function denied(rules, command) {
   }
   return;
 }
+function asked(rules, command) {
+  return [command, ...spellings(command)].find((spelling) => matching2(rules.ask, spelling).length > 0);
+}
 function runsItself(spelling) {
   const [program = "", ...rest] = words(spelling).map((word) => word.value);
   const options = new Set(rest.map((argument) => argument.split("=", 1)[0]));
@@ -3681,7 +3731,27 @@ function passes(rules, command) {
 function inside(target, directories) {
   return directories.some((root) => target === root || target.startsWith(root.endsWith("/") ? root : `${root}/`));
 }
+async function guarded(script) {
+  try {
+    return await commands(script, false);
+  } catch (error) {
+    if (!(error instanceof Abstain))
+      throw error;
+    return script.split(/\$\(|[;&|\n()`{}]+/).map((piece) => piece.replace(/^(?:\s*(?:if|then|else|elif|do|while|until|!)\s+)+/, "").trim()).filter(Boolean);
+  }
+}
 async function decide(script, cwd, rules) {
+  const all = await guarded(script);
+  for (const command of all) {
+    const message = denied(rules, command);
+    if (message)
+      return { permissionDecision: "deny", permissionDecisionReason: message };
+  }
+  for (const command of all) {
+    const spelling = asked(rules, command);
+    if (spelling)
+      return { permissionDecision: "ask", permissionDecisionReason: `shell-unwrap: \`${spelling}\` needs approval` };
+  }
   if (script.length > MAX_COMMAND)
     return;
   let found;
@@ -3694,11 +3764,6 @@ async function decide(script, cwd, rules) {
   }
   if (found.length === 0)
     return;
-  for (const command of found) {
-    const message = denied(rules, command);
-    if (message)
-      return { permissionDecision: "deny", permissionDecisionReason: message };
-  }
   const directories = [real(cwd), ...rules.directories];
   const split = found.map((command) => words(command).map((word) => word.value));
   const names = new Set(split.filter((parts2) => parts2.length > 0).map((parts2) => basename(parts2[0])));
@@ -3730,12 +3795,15 @@ async function main() {
       return;
     decision = await decide(script, event.cwd || process.cwd(), await loadRules(ROOT));
   } catch {
-    return;
+    decision = unchecked("the hook failed");
   }
   if (decision) {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } }));
   }
 }
+
+// src/codex.ts
+import { join as join3 } from "path";
 
 // src/cursor.ts
 import { join as join2 } from "path";
@@ -3762,10 +3830,9 @@ async function decide2(script, rules) {
       return verdict("deny", message);
   }
   for (const command of found) {
-    for (const spelling of [command, ...spellings(command)]) {
-      if (matching2(rules.ask, spelling).length > 0)
-        return verdict("ask", `shell-unwrap: \`${spelling}\` needs approval`);
-    }
+    const spelling = asked(rules, command);
+    if (spelling)
+      return verdict("ask", `shell-unwrap: \`${spelling}\` needs approval`);
   }
   return;
 }
@@ -3781,12 +3848,40 @@ async function main2() {
   process.stdout.write(JSON.stringify(output ?? {}));
 }
 
+// src/codex.ts
+var RULES2 = join3(import.meta.dir, "shell-unwrap.json");
+var FAILED = "shell-unwrap: the hook failed, so its guards were not checked";
+async function decide3(script, rules) {
+  for (const command of await guarded(script)) {
+    const message = denied(rules, command);
+    if (message)
+      return message;
+  }
+  return;
+}
+async function main3() {
+  let reason;
+  try {
+    const event = await Bun.stdin.json();
+    const script = event?.tool_input?.command;
+    if (event?.tool_name !== "Bash" || typeof script !== "string")
+      return;
+    reason = await decide3(script, await loadRules2(RULES2));
+  } catch {
+    reason = FAILED;
+  }
+  if (reason) {
+    const output = { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason };
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: output }));
+  }
+}
+
 // src/hook.ts
-var HOSTS = { claude: main, cursor: main2 };
+var HOSTS = { claude: main, codex: main3, cursor: main2 };
 if (import.meta.main) {
   const host = HOSTS[Bun.argv[2] ?? ""];
   if (!host) {
-    console.error("usage: bun shell-unwrap.js claude|cursor");
+    console.error("usage: bun shell-unwrap.js claude|codex|cursor");
     process.exit(2);
   }
   await host();

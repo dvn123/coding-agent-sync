@@ -27,52 +27,12 @@
     },
     {
       "action": "shell",
-      "resource": "fixture-tool -C* publish --public *",
+      "resource": "fixture-tool -* publish --public *",
       "effect": "ask"
     },
     {
       "action": "shell",
-      "resource": "fixture-tool -C* publish * --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env fixture-tool publish --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env fixture-tool publish * --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env fixture-tool -C* publish --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env fixture-tool -C* publish * --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env * fixture-tool publish --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env * fixture-tool publish * --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env * fixture-tool -C* publish --public *",
-      "effect": "ask"
-    },
-    {
-      "action": "shell",
-      "resource": "env * fixture-tool -C* publish * --public *",
+      "resource": "fixture-tool -* publish * --public *",
       "effect": "ask"
     },
     {
@@ -82,7 +42,7 @@
     },
     {
       "action": "shell",
-      "resource": "fixture-tool -C* remove",
+      "resource": "fixture-tool -* remove",
       "effect": "deny"
     },
     {

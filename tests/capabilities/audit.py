@@ -10,8 +10,9 @@ Claude model reproduces the matching the live `deny-reach` scenarios pin: the
 wildcard grammar, the peeling of assignments, program paths, and wrappers
 before deny and ask rules, and the retry behind a bare `xargs`. Both targets
 also run shell-unwrap, which denies a command when a deny matches a spelling
-its peel yields; the audit asks the vendored bundle for those spellings
-through Bun, so the peel exists once, in TypeScript.
+its peel yields, and on Claude also asks when an ask does; the audit asks the
+vendored bundle for those spellings through Bun, so the peel exists once, in
+TypeScript.
 """
 
 import collections
@@ -32,6 +33,7 @@ from coding_agents_sync.sources import (
     SourceBundle,
     describe_rule,
     load_sources,
+    with_home_paths,
 )
 from coding_agents_sync.targets import claude, opencode
 from coding_agents_sync.targets.permissions import fold_edit_write
@@ -317,10 +319,19 @@ def _judges(sources: SourceBundle) -> dict[str, Callable[[str], str]]:
     return judges
 
 
+def _load(config_root: Path) -> SourceBundle:
+    """The sources as a sync into this home compiles them."""
+    sources = load_sources(config_root)
+    assert sources.permissions is not None
+    return sources.model_copy(
+        update={"permissions": with_home_paths(sources.permissions, Path.home())}
+    )
+
+
 def decisions(
     config_root: Path, extra: Iterable[str] = ()
 ) -> dict[str, dict[str, str]]:
-    sources = load_sources(config_root)
+    sources = _load(config_root)
     assert sources.permissions is not None
     probes = list(dict.fromkeys([*probe_commands(sources.permissions), *extra]))
     prime_spellings(probes)
@@ -337,7 +348,7 @@ def redundant(config_root: Path) -> list[str]:
     duplicate each other are both reported; remove them and rerun `decisions`
     to confirm.
     """
-    sources = load_sources(config_root)
+    sources = _load(config_root)
     permissions = sources.permissions
     assert permissions is not None
     commands = permissions.commands
@@ -439,15 +450,19 @@ class ClaudeRules:
         return "unmatched"
 
     def decision(self, command: str) -> str:
-        """The verdict, or deny when a deny rule matches a spelling
-        shell-unwrap's Claude hook peels from the command."""
+        """The verdict, raised to deny or ask when a rule of that bucket
+        matches a spelling shell-unwrap's Claude hook peels from the command."""
         verdict = self.verdict(command)
-        if verdict != "deny" and any(
-            claude_match(pattern, spelling)
-            for spelling in unwrap_spellings(command)
-            for pattern in self.index["deny"].lookup((spelling,))
-        ):
-            return "deny"
+        spellings = unwrap_spellings(command)
+        for bucket in ("deny", "ask"):
+            if verdict == bucket:
+                return verdict
+            if any(
+                claude_match(pattern, spelling)
+                for spelling in spellings
+                for pattern in self.index[bucket].lookup((spelling,))
+            ):
+                return bucket
         return verdict
 
 
@@ -460,27 +475,38 @@ class OpenCodeRules:
             ]
         )
 
-    def native(self, command: str) -> str:
-        """The last matching rule's effect; OpenCode's own default asks."""
+    def deciding(self, command: str) -> tuple[str, str]:
+        """The last matching rule's pattern and effect; OpenCode's own default
+        asks."""
         return next(
             (
-                effect
+                (resource, effect)
                 for _, resource, effect in sorted(
                     self.index.lookup((command,)), reverse=True
                 )
                 if opencode_match(resource, command)
             ),
-            "ask",
+            ("*", "ask"),
         )
+
+    def native(self, command: str) -> str:
+        return self.deciding(command)[1]
 
     def decision(self, command: str) -> str:
         """The native effect, or deny when the rules deny a spelling the
-        shell-unwrap plugin peels from the command."""
+        shell-unwrap plugin peels from the command, or ask for an allowed one
+        when a rule narrower than the catch-all asks for such a spelling."""
         effect = self.native(command)
+        spellings = unwrap_spellings(command)
         if effect != "deny" and any(
-            self.native(spelling) == "deny" for spelling in unwrap_spellings(command)
+            self.native(spelling) == "deny" for spelling in spellings
         ):
             return "deny"
+        if effect == "allow" and any(
+            resource != "*" and narrower == "ask"
+            for resource, narrower in map(self.deciding, spellings)
+        ):
+            return "ask"
         return effect
 
 
@@ -488,7 +514,7 @@ class OpenCodeRules:
 
 
 def origins(config_root: Path) -> dict[str, collections.Counter[str]]:
-    sources = load_sources(config_root)
+    sources = _load(config_root)
     assert sources.permissions is not None
     result = {}
     for target, entries in (

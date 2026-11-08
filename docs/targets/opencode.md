@@ -61,11 +61,14 @@ shell-unwrap's OpenCode plugin (source: <https://github.com/dvn123/shell-unwrap>
 vendored as `targets/shell-unwrap/opencode.js`) whenever it emits permissions. The plugin
 hooks `permission.evaluate` and denies a command when the agent's and
 session's rules deny it with its assignments, program path, or wrappers
-peeled, so denies land bare, with no directory copies and no copies behind
-the wrappers the plugin peels. It carries over a deny, so ask rules and any
-declared wrapper it does not peel keep their copies. The one allow it carries
+peeled, or its bundled and joined flags read apart (`-fu`, `--method=POST`),
+so denies land bare, with no directory copies and no copies behind
+the wrappers the plugin peels. It also asks for an allowed command when a rule
+narrower than the catch-all asks for a peeled spelling, so asks need no copies
+either; a declared wrapper it does not peel keeps them. The one allow it carries
 is through transparent wrappers (`builtin`, `command`, `env -i`/`-u`, `nice`,
-`nocorrect`, `noglob`, `nohup`, `stdbuf`, `time -p`, `timeout`, `xargs`) for a
+`nocorrect`, `noglob`, `nohup`, `stdbuf`, `time -p`, `timeout`, `xargs`) and
+harmless assignments (`GIT_EDITOR=true`) for a
 command that fell to the catch-all; `xargs` carries only to a rule that takes
 one more argument. The audit does not model that allow. The peel exists once,
 in shell-unwrap's TypeScript: the Claude and Cursor hook bundles the same code,

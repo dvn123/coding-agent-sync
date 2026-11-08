@@ -47,6 +47,8 @@ from ..sources import (
 from .permissions import (
     CLAUDE_PEELED_PREFIXES,
     CLAUDE_TOOL_PATTERNS,
+    UNWRAP_HOOK,
+    UNWRAP_TIMEOUT_SECONDS,
     bucket_entries,
     bucket_patterns,
     claude_path,
@@ -244,26 +246,38 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
     return bucket_entries(permissions, glob_variants, CLAUDE_PEELED_PREFIXES)
 
 
-# Claude matches an allow only against a flat command and never shows the model
-# a deny rule's reason. The bundled PreToolUse hook allows a command when every
-# command inside it matches an allow, and denies one with the reason of the
-# deny it matches; Claude still applies its own deny and ask rules after a hook
-# allow. It is shell-unwrap's hook bundle, shared with Cursor and run by Bun
-# with tree-sitter's WASM embedded; failing that, it stays silent, which leaves
-# the command to Claude.
-UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
+# Claude matches an allow only against a flat command, peels `xargs` only bare,
+# and never shows the model a deny rule's reason. The bundled PreToolUse hook
+# allows a command when every command inside it matches an allow, and denies or
+# asks for one that any peeled spelling of a deny or ask matches, with the
+# deny's reason; Claude still applies its own deny and ask rules after a hook
+# allow. When it cannot run, it asks, since the rules leave `xargs` with options
+# to it.
 UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
-UNWRAP_TIMEOUT_SECONDS = 10
+
+
+# Printed when Bun cannot run the hook. The deny rules leave `xargs` with
+# options to the hook, so its absence must not pass a command silently.
+UNWRAP_UNAVAILABLE = {
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": (
+            "shell-unwrap could not run, so its guards were not checked"
+        ),
+    }
+}
 
 
 def _unwrap_hook(script: Path) -> dict[str, Any]:
     command = f"bun {shlex.quote(script.as_posix())} claude 2>/dev/null"
+    fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
     return {
         "matcher": "Bash",
         "hooks": [
             {
                 "type": "command",
-                "command": f"{command} || true",
+                "command": f"{command} || printf %s {fallback}",
                 "timeout": UNWRAP_TIMEOUT_SECONDS,
             }
         ],

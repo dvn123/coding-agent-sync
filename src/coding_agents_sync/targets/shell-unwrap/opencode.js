@@ -172,6 +172,14 @@ var TRANSPARENT = {
 var SYSTEM_DIRS = ["", "/bin/", "/usr/bin/"];
 var XARGS_INPUT = "<xargs-input>";
 var XARGS_REPLACE = ["-I", "-J", "--replace"];
+var HARMLESS_ASSIGNMENTS = new Set([
+  "GIT_EDITOR=true",
+  "PYTHONDONTWRITEBYTECODE=1",
+  "IFS=",
+  "IFS=,",
+  "IFS='|'",
+  "IFS=$'\\t'"
+]);
 function permitted(value, options) {
   if (value === "--")
     return true;
@@ -185,7 +193,12 @@ function transparent(command) {
   const text = command.trim();
   const list = words(text);
   const head = list[0];
-  if (!head || text.slice(head.start, head.end) !== head.value)
+  if (!head)
+    return;
+  if (HARMLESS_ASSIGNMENTS.has(text.slice(head.start, head.end))) {
+    return list[1] ? text.slice(list[1].start).trim() : undefined;
+  }
+  if (text.slice(head.start, head.end) !== head.value)
     return;
   const program = basename(head.value);
   const options = TRANSPARENT[program];
@@ -200,6 +213,35 @@ function transparent(command) {
   const inner = text.slice(list[index].start).trim();
   const replaces = before.some(({ value }) => XARGS_REPLACE.some((flag) => value.split("=")[0].startsWith(flag)));
   return program === "xargs" && !replaces ? `${inner} ${XARGS_INPUT}` : inner;
+}
+var MAX_BUNDLE = 4;
+function flagReadings(raw) {
+  const joined = /^(--?[A-Za-z0-9][A-Za-z0-9-]*)=(.+)$/s.exec(raw);
+  if (joined)
+    return [`${joined[1]} ${joined[2]}`, `${joined[1]} ${joined[2]}`];
+  if (!/^-[A-Za-z]./s.test(raw) || raw.startsWith("--"))
+    return;
+  const value = `${raw.slice(0, 2)} ${raw.slice(2)}`;
+  const valued = /[A-Z]/.test(raw.slice(2));
+  if (!/^-[A-Za-z]+$/.test(raw))
+    return [value, value];
+  if (raw.length - 1 > MAX_BUNDLE)
+    return valued ? [value, value] : undefined;
+  const split = [...raw.slice(1)].map((letter) => `-${letter}`).join(" ");
+  return [split, valued ? value : split];
+}
+function flagSpellings(text, list) {
+  const variants = [text, text];
+  for (const word of [...list.slice(1)].reverse()) {
+    const raw = text.slice(word.start, word.end);
+    const readings = raw === word.value ? flagReadings(raw) : undefined;
+    if (!readings)
+      continue;
+    for (const index of [0, 1]) {
+      variants[index] = variants[index].slice(0, word.start) + readings[index] + variants[index].slice(word.end);
+    }
+  }
+  return [...new Set(variants)].filter((variant) => variant !== text);
 }
 function peelOnce(text) {
   const list = words(text);
@@ -229,6 +271,8 @@ function peelOnce(text) {
       if (payload)
         found.push(payload.value + text.slice(payload.end));
     }
+  } else if (program === raw) {
+    found.push(...flagSpellings(text, list));
   }
   return found.map((spelling) => spelling.trim()).filter(Boolean);
 }
@@ -297,9 +341,15 @@ async function review(event, rules, reasons = {}) {
   if (denied) {
     event.effect = "deny";
     event.message = denial(denied, because(loaded, denied, reasons));
+  } else if (event.effect === "allow" && peeled.some((spelling) => asked(loaded, spelling))) {
+    event.effect = "ask";
   } else if (event.effect === "ask" && event.resources.every((resource) => passes(loaded, resource))) {
     event.effect = "allow";
   }
+}
+function asked(rules, spelling) {
+  const rule = matching(rules, "shell", spelling);
+  return rule !== undefined && rule.resource !== "*" && rule.effect === "ask";
 }
 function passes(rules, command) {
   if (evaluate(rules, "shell", command) === "allow")
