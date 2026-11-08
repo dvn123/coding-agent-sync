@@ -435,6 +435,8 @@ class RuleSource(SourceModel):
 
 
 class SkillSource(SourceModel):
+    # False keeps the source but delivers it nowhere, retiring deployed copies.
+    enabled: bool = True
     paths: list[str] = Field(default_factory=list)
     disable_model_invocation: bool = False
     license: str | None = None
@@ -800,6 +802,7 @@ def load_sources(config_root: Path) -> SourceBundle:
     skills, skill_errors = _load_many(
         sorted(config_root.glob("skills/*/SKILL.md")), SkillSource
     )
+    skills = [skill for skill in skills if skill.enabled]
     commands, command_errors = _load_many(
         sorted(config_root.glob("commands/*.md")), CommandSource
     )

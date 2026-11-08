@@ -1281,6 +1281,26 @@ class NativeOwnershipTests(SyncCase):
             (home / ".cursor" / "rules" / "coding-agents-global.mdc").exists()
         )
 
+    def test_a_disabled_skill_retires_every_deployed_copy(self) -> None:
+        config_root, home = self.new_roots()
+        skill = config_root / "skills/paused/SKILL.md"
+        write(skill, source_doc("skill", "Body\n", description="Paused"))
+        run_sync(config_root=config_root, home=home)
+        directories = (".agents/skills", ".claude/skills")
+        self.assertTrue(
+            all((home / d / "paused/SKILL.md").exists() for d in directories)
+        )
+
+        write(
+            skill,
+            source_doc(
+                "skill", "Body\n", description="Paused", extra={"enabled": False}
+            ),
+        )
+        run_sync(config_root=config_root, home=home)
+
+        self.assertEqual([d for d in directories if (home / d / "paused").exists()], [])
+
 
 class PermissionProjectionTests(SyncCase):
     def test_an_ask_guards_an_allow_through_the_strictest_available_channel(

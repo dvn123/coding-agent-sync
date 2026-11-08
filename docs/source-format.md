@@ -72,7 +72,7 @@ empty file is an empty source.
 | --- | --- |
 | Global | `only`. |
 | Rule | `only`. |
-| Skill | `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
+| Skill | `enabled`, `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
 | Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
@@ -121,7 +121,9 @@ those surface omissions.
 
 ### Skills
 
-`paths` is a list of file globs; `disable_model_invocation` is boolean;
+`enabled: false` keeps a skill's source but delivers it to no target, so the
+next sync removes every deployed copy; it defaults to `true`. `paths` is a
+list of file globs; `disable_model_invocation` is boolean;
 `license` is a string; `metadata` is a map. These are canonical only for the
 targets whose native behavior is equivalent. Do not substitute a similar field
 from another target for one of these values.
