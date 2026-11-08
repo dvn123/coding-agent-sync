@@ -362,10 +362,15 @@ DEFAULT_WRAPPERS = (
 )
 
 
+# The decision for a shell command no rule matches. `sandbox` runs it in the
+# target's own sandbox without asking, and asks where the target has none.
+type Unmatched = Literal["ask", "allow", "sandbox"]
+
+
 class PermissionPolicyDocument(StrictModel):
     description: str = ""
     wrappers: Annotated[tuple[Token, ...], Unique] = DEFAULT_WRAPPERS
-    unmatched: Literal["ask", "allow"] = "ask"
+    unmatched: Unmatched = "ask"
     tools: dict[PermissionTool, Decision] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
     secret_paths: Annotated[tuple[SecretPath, ...], Unique] = ()
@@ -514,13 +519,18 @@ class PermissionSource(BaseModel):
     paths: tuple[Path, ...]
     description: str
     wrappers: tuple[str, ...]
-    unmatched: Literal["ask", "allow"]
+    unmatched: Unmatched
     tools: dict[PermissionTool, Decision]
     workspace: WorkspacePermissions
     secret_paths: tuple[str, ...]
     secret_names: tuple[str, ...]
     commands: CommandPermissions
     targets: TargetBlocks = Field(default_factory=lambda: TargetBlocks({}))
+
+    @property
+    def unsandboxed(self) -> Literal["ask", "allow"]:
+        """`unmatched` on a target with no sandbox, where `sandbox` asks."""
+        return "ask" if self.unmatched == "sandbox" else self.unmatched
 
 
 class McpServerSource(StrictModel):

@@ -268,7 +268,7 @@ def _bash_rules(permissions: PermissionSource) -> dict[str, Any]:
         rules.pop(pattern, None)
         rules[pattern] = decision
 
-    add("*", permissions.unmatched)
+    add("*", permissions.unsandboxed)
     buckets = bucket_patterns(shell_entries(permissions))
     for bucket in ("allow", "ask", "deny"):
         for pattern in buckets[bucket]:

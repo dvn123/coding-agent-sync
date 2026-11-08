@@ -188,11 +188,21 @@ provider, so unknown keys there are passthrough by design.
 ### Permissions
 
 `unmatched` is the decision for a shell command no rule matches: `ask`, the
-default, or `allow`. It lands only where the guard rules still outrank it:
-OpenCode's and Pi's `*` bash entry, which every rule is written after, Claude's bare
-`Bash` allow, which every deny outranks. Cursor and Codex each need an omit
-for `unmatched: allow`: Cursor's shared allowlist has no deny channel to keep
-the guards binding, and Codex gates an unmatched command by sandbox. There is no `deny`
+default, `allow`, or `sandbox`. `allow` lands only where the guard rules still
+outrank it: OpenCode's and Pi's `*` bash entry, which every rule is written
+after, Claude's bare `Bash` allow, which every deny outranks. Cursor and Codex
+each need an omit for `unmatched: allow`: Cursor's shared allowlist has no deny
+channel to keep the guards binding, and Codex gates an unmatched command by
+sandbox. `sandbox` runs an unmatched command in the target's own sandbox
+without asking, and asks where the target has none: Claude gets no bare `Bash`
+allow but `sandbox.enabled` and `sandbox.autoAllowBashIfSandboxed`, so leaving
+the sandbox needs an allow rule or a prompt; Codex's `on-request` already runs
+an unlisted command in its sandboxed profile, and a native
+`default_permissions: :danger-full-access` is an error under `sandbox`; the
+Cursor CLI gets `sandbox.mode: enabled` beside the shared allowlist, while
+Desktop's sandbox setting lives in the editor's own storage; OpenCode's and
+Pi's `*` entry asks. Under `sandbox` an allow rule means a command may also run outside
+the sandbox unasked. There is no `deny`
 value: a blanket command denial is not a policy any target can run under.
 `wrappers`, by default the programs that run their argument as a command
 (`command`, `env`, `nice`, `nohup`, `stdbuf`, `time`, `timeout`, `xargs`),

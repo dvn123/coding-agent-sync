@@ -81,6 +81,10 @@ no generated `cli-config.json` shell entries. Both load the shell-unwrap hook
 plugin that carries the guards; `--force` approves its asks but not its
 denies (the `hook-denied-forced` scenario). Desktop stays on `allowlist` whatever the policy
 says, so `unmatched: allow` requires `unmatched` in `targets.cursor.omit`.
+`unmatched: sandbox` needs no omit: it writes the CLI's `sandbox.mode:
+enabled` to `cli-config.json`, so a command off the allowlist runs sandboxed
+there without asking, and a patch must not set that key. Desktop's sandbox
+setting is in the editor's own storage, out of the compiler's reach.
 Desktop's agent runs file tools unasked inside the workspace: a write asks
 only outside it, for a protected config file, or when `promptWorkspaceWrites`
 is set, which Desktop never sets. A web fetch asks unless the host is in the

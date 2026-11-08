@@ -616,6 +616,18 @@ def compile_codex(ctx: SyncContext, sources: SourceBundle) -> Plan:
         diagnostics.extend(issues)
         for resolved in resolved_permissions:
             selected_profile = resolved.native.default_permissions or PROFILE
+        if (
+            permissions.unmatched == "sandbox"
+            and selected_profile == ":danger-full-access"
+        ):
+            diagnostics.append(
+                Diagnostic(
+                    "error",
+                    "unmatched: sandbox runs unlisted commands in Codex's sandbox, "
+                    "which default_permissions :danger-full-access turns off",
+                    permissions.paths[0],
+                )
+            )
         hook_files, hook_values = _unwrap_hook(root, permissions)
         files.extend(hook_files)
     # Codex discovers skills/ and agents/*.toml itself, so config.toml carries

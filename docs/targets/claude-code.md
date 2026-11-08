@@ -24,7 +24,9 @@ so the subagent follows the parent conversation deliberately.
 Claude receives portable command, tool, workspace, secret-path, and
 secret-name permissions in `settings.json`. It is one of the two targets with
 an exact portable command-policy projection. `unmatched: allow` lands as a
-bare `Bash` allow, which every deny rule outranks; the permission mode stays a
+bare `Bash` allow, which every deny rule outranks; `unmatched: sandbox` lands
+as `sandbox.enabled` and `sandbox.autoAllowBashIfSandboxed`, with no bare
+allow, so a patch must not set those two keys; the permission mode stays a
 patch's to set. Claude anchors a bare path rule at the cwd and a `/` one at
 the settings file, so `**/` secret paths and absolute directories take the
 `//` root form, workspace directories receive `Edit(<dir>/**)` when edits are

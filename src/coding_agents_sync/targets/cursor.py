@@ -408,8 +408,20 @@ def compile_cursor(ctx: SyncContext, sources: SourceBundle) -> Plan:
         sources, servers, root / "permissions.json"
     )
     diagnostics.extend(permission_diagnostics)
+    # The CLI runs a command off the allowlist in its sandbox without asking;
+    # Desktop keeps that setting in its own storage, out of reach.
+    sandbox = (
+        (
+            NativeValue(
+                "cursor-cli", root / "cli-config.json", ("sandbox", "mode"), "enabled"
+            ),
+        )
+        if sources.permissions and sources.permissions.unmatched == "sandbox"
+        else ()
+    )
     native_values = (
         *native_values,
+        *sandbox,
         *hook_values,
         *(
             NativeValue(

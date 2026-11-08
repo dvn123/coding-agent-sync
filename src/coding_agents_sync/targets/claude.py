@@ -348,6 +348,14 @@ def _permission_values(
         values.append((("permissions", "deny"), deny))
     if directories := literal_directories(permissions.workspace):
         values.append((("permissions", "additionalDirectories"), directories))
+    # `unmatched: sandbox` turns the sandbox on and lets a sandboxed command run
+    # unasked; leaving the sandbox goes through the rules above, so only an
+    # allow rule lets a command out without a prompt.
+    if permissions.unmatched == "sandbox":
+        values += [
+            (("sandbox", "enabled"), True),
+            (("sandbox", "autoAllowBashIfSandboxed"), True),
+        ]
     # The deny above only stops a command that names the variable; the sandbox
     # also unsets it, so `env` cannot print it either.
     if permissions.secret_names:

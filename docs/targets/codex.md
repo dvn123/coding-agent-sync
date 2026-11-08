@@ -181,7 +181,9 @@ cannot match text. `workspace.ask` has no channel and needs an omit, and so
 does `unmatched: allow`: Codex
 0.166 retired the `untrusted` approval policy, and `on-request` already runs
 an unlisted command inside the sandbox, so the approval policy stays with the
-user's patch.
+user's patch. `unmatched: sandbox` is that behaviour by name and needs no omit;
+a native `default_permissions: :danger-full-access` beside it is an error,
+since that profile has no sandbox.
 
 Typed Codex skill fields are `name`, `description`, `license`, `metadata`, and
 `allowed-tools`. Typed agent fields are `name`, `description`,

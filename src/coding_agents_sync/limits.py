@@ -116,7 +116,7 @@ LIMITATIONS = (
         "unmatched",
         "`on-request`, the only approval policy that asks, runs an unlisted "
         "command in the sandbox; Codex retired `untrusted`.",
-        lambda permissions: permissions.unmatched != "ask",
+        lambda permissions: permissions.unmatched == "allow",
         probe="codex.unmatched-ask",
     ),
     Limitation(
@@ -178,7 +178,7 @@ LIMITATIONS = (
         "unmatched",
         "Cursor Desktop's permission file, which the CLI reads too, has no deny "
         "list, so `unrestricted` there would run every guarded command.",
-        lambda permissions: permissions.unmatched != "ask",
+        lambda permissions: permissions.unmatched == "allow",
         probe="cursor-desktop.permission-channels",
     ),
     Limitation(

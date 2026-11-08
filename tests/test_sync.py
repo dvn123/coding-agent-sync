@@ -1620,6 +1620,56 @@ class PermissionProjectionTests(SyncCase):
         self.assertNotIn("kubectl get *", bash)
         self.assertIn("Bash(kubectl apply *)", claude["permissions"]["deny"])
 
+    def test_unmatched_sandbox_runs_unlisted_commands_where_a_sandbox_exists(
+        self,
+    ) -> None:
+        """Claude gets no bare `Bash` allow but its sandbox, auto-allowing what
+        runs inside it; Codex and Cursor need no omit, since their own sandbox
+        runs an unlisted command; OpenCode and Pi have none, so they ask."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root,
+            allow=[["kubectl", "get"]],
+            deny=[["kubectl", "apply"]],
+            unmatched="sandbox",
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        claude = claude_settings(home)
+        self.assertNotIn("Bash", claude["permissions"]["allow"])
+        self.assertIn("Bash(kubectl get *)", claude["permissions"]["allow"])
+        self.assertEqual(
+            claude["sandbox"], {"enabled": True, "autoAllowBashIfSandboxed": True}
+        )
+        self.assertEqual(opencode_rules(opencode_config(home), "shell")["*"], "ask")
+        pi = load_json(home / ".pi/agent/extensions/pi-permission-system/config.json")
+        self.assertEqual(pi["permission"]["bash"]["*"], "ask")
+        desktop = load_json(home / ".cursor/permissions.json")
+        self.assertEqual(desktop["approvalMode"], "allowlist")
+        self.assertIn("kubectl get", desktop["terminalAllowlist"])
+        cli = load_json(home / ".cursor/cli-config.json")
+        self.assertEqual(cli["sandbox"], {"mode": "enabled"})
+        self.assertIn(
+            'default_permissions = "coding-agents"',
+            (home / ".codex/config.toml").read_text(),
+        )
+
+    def test_unmatched_sandbox_refuses_codex_full_access(self) -> None:
+        """A profile with no sandbox would run every unlisted command freely."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root,
+            allow=[["kubectl", "get"]],
+            unmatched="sandbox",
+            targets={
+                "codex": {"native": {"default_permissions": ":danger-full-access"}}
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "danger-full-access turns off"):
+            run_sync(config_root=config_root, home=home)
+
     def test_cursor_desktop_lists_every_allow_and_its_hook_holds_the_guards(
         self,
     ) -> None:

@@ -246,7 +246,7 @@ def _permissions(
 
     # OpenCode applies the last matching rule, so each action's catch-all
     # precedes its narrower rules, and every guard follows every allow.
-    add("shell", permissions.unmatched, ["*"])
+    add("shell", permissions.unsandboxed, ["*"])
     for bucket in ("allow", "ask", "deny"):
         add("shell", bucket, buckets[bucket])
     add("shell", "deny", secret_name_variants(permissions.secret_names))
