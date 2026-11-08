@@ -98,8 +98,22 @@ class OwnedItems:
     hashes: frozenset[str]
 
 
+@dataclass(frozen=True)
+class PatchedValue:
+    """The hash of the value a patch's set or replace last wrote.
+
+    A patch keeps overwriting its value, so an edit is never refused. Once no
+    patch writes the pointer, the value is deleted if it still holds this hash
+    and left to the native tool if it was edited since.
+    """
+
+    hash: str
+
+
 # A whole owned value is recorded by its hash; a generated list by its items.
-type Ownership = str | OwnedItems
+type Ownership = str | OwnedItems | PatchedValue
+
+PATCH_WRITES = frozenset({"set", "replace"})
 
 HASH = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -119,14 +133,15 @@ def _load_manifest(
             if (
                 entry["target"] not in targets
                 or not isinstance(entry["pointer"], str)
-                or fields not in ({"hash"}, {"items"})
+                or fields not in ({"hash"}, {"items"}, {"patched"})
             ):
                 raise ValueError
             ownership: Ownership
-            if "hash" in entry:
-                ownership = entry["hash"]
-                if not isinstance(ownership, str) or not HASH.fullmatch(ownership):
+            if "hash" in entry or "patched" in entry:
+                recorded = entry.get("hash", entry.get("patched"))
+                if not isinstance(recorded, str) or not HASH.fullmatch(recorded):
                     raise ValueError
+                ownership = PatchedValue(recorded) if "patched" in entry else recorded
             else:
                 items = entry["items"]
                 if not isinstance(items, list) or not all(
@@ -279,13 +294,28 @@ def prepare_plan_native(
     for surface in surfaces:
         generated = values[surface.target]
         patch = Patch(tuple(patches[surface.target]))
-        previous_for_target = {
+        previous_all = {
             pointer: ownership
             for (target, pointer), ownership in previous.items()
             if target == surface.target
         }
-        if not patch.operations and not generated and not previous_for_target:
+        if not patch.operations and not generated and not previous_all:
             continue
+        previous_patched = {
+            pointer: ownership.hash
+            for pointer, ownership in previous_all.items()
+            if isinstance(ownership, PatchedValue)
+        }
+        previous_for_target = {
+            pointer: ownership
+            for pointer, ownership in previous_all.items()
+            if not isinstance(ownership, PatchedValue)
+        }
+        patch_written = {
+            operation.pointer
+            for operation in patch.operations
+            if operation.kind in PATCH_WRITES and operation.pointer not in generated
+        }
         document = _parse(surface)
         original = _plain(document)
         foreign: dict[Pointer, list[Any]] = {}
@@ -328,6 +358,12 @@ def prepare_plan_native(
                 )
             elif get_value(document, pointer)[0]:
                 _delete_with_empty_parents(document, pointer)
+        for pointer, recorded in previous_patched.items():
+            if pointer in patch_written or pointer in generated:
+                continue
+            present, current = get_value(document, pointer)
+            if present and semantic_hash(current) == recorded:
+                _delete_with_empty_parents(document, pointer)
         apply_operations(
             document,
             Patch(
@@ -363,6 +399,10 @@ def prepare_plan_native(
                 if isinstance(generated[pointer], list)
                 else semantic_hash(current)
             )
+        for pointer in patch_written:
+            present, current = get_value(document, pointer)
+            if present:
+                owned[(surface.target, pointer)] = PatchedValue(semantic_hash(current))
         candidates.append(NativeCandidate(surface.path, content, changed))
 
     manifest = {
@@ -373,6 +413,8 @@ def prepare_plan_native(
                 **(
                     {"items": sorted(ownership.hashes)}
                     if isinstance(ownership, OwnedItems)
+                    else {"patched": ownership.hash}
+                    if isinstance(ownership, PatchedValue)
                     else {"hash": ownership}
                 ),
             }

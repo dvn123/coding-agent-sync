@@ -180,6 +180,42 @@ def test_native_plan_removes_parent_tables_a_stale_pointer_leaves_empty(
     assert tomllib.loads(path.read_text()) == {"model": "keep"}
 
 
+def test_value_a_patch_stops_writing_is_removed_unless_edited(tmp_path: Path) -> None:
+    config_root = tmp_path / "config"
+    path = tmp_path / "home/config.toml"
+    write(path, 'model = "keep"\n')
+
+    def sync(*operations: Operation) -> None:
+        apply_native_plan(
+            prepare_plan_native(
+                config_root=config_root,
+                native_values=(),
+                native_patches=(
+                    NativePatch("fixture", path, operations, config_root / "patch"),
+                ),
+            )
+        )
+
+    sync(
+        Operation("set", ("sandbox", "mode"), "on"),
+        Operation("set", ("edited",), 1),
+    )
+    write(path, path.read_text().replace("edited = 1", "edited = 2"))
+    manifest = json.loads((config_root / ".coding-agents-native.json").read_text())
+    assert {
+        entry["pointer"] for entry in manifest["entries"] if "patched" in entry
+    } == {
+        "/sandbox/mode",
+        "/edited",
+    }
+
+    sync()
+
+    assert tomllib.loads(path.read_text()) == {"model": "keep", "edited": 2}
+    manifest = json.loads((config_root / ".coding-agents-native.json").read_text())
+    assert manifest["entries"] == []
+
+
 def test_native_patch_is_applied_without_target_schema_validation(
     tmp_path: Path,
 ) -> None:

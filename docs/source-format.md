@@ -319,7 +319,7 @@ Its `tools` decisions still lower, so that session keeps them.
 | Codex | `mcp_servers/<id>/enabled = false` | `codex -c mcp_servers.<id>.enabled=true` |
 | Cursor | unsupported: the on/off state is per project, outside `mcp.json`; needs `enabled` in `targets.cursor.omit`, and the server stays on | the MCP toggle in Cursor, saved for that project |
 | OpenCode | `mcp/servers/<id>/disabled: true` | the MCP servers dialog, space on the server |
-| Pi | `mcpServers/<id>/enabled: false` | `/mcp`, which saves the choice to `mcp.json` |
+| Pi | `mcpServers/<id>/enabled: false` | none per session: `/mcp`, "Enable in this project" in a trusted project, which writes a `.pi/mcp.json` override; a plain enable rewrites the owned `enabled` in `~/.pi/agent/mcp.json`, and the next sync refuses it |
 
 The compiler owns only these leaf pointers, so a patch keeps the settings
 beside them: server default approval modes, enablement, and OAuth. A value a
@@ -443,6 +443,9 @@ Portable manifests preserve unmanifested siblings and refuse to claim or
 replace modified output. Native ownership is recorded per pointer in
 `config_root/.coding-agents-native.json`: a generated list owns its own entries
 and keeps foreign ones ahead of them; any other value is owned whole by
-semantic hash, and a modified or differing existing value is refused. Unnamed
-pointers remain native-tool-owned. A failed preflight
+semantic hash, and a modified or differing existing value is refused. A value a
+patch's `set` or `replace` writes is recorded as `patched` by its hash: the
+patch overwrites it on every sync, and once no patch writes the pointer, the
+next sync deletes the value if it still holds that hash and leaves an edited
+one to the native tool. Unnamed pointers remain native-tool-owned. A failed preflight
 makes no generated writes.

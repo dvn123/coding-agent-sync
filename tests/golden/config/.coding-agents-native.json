@@ -2,6 +2,11 @@
   "entries": [
     {
       "target": "claude",
+      "pointer": "/fixture/claude",
+      "patched": "sha256:<hash>"
+    },
+    {
+      "target": "claude",
       "pointer": "/hooks/PreToolUse",
       "items": [
         "sha256:<hash>"
@@ -66,6 +71,11 @@
     },
     {
       "target": "claude-mcp",
+      "pointer": "/fixture/claude_mcp",
+      "patched": "sha256:<hash>"
+    },
+    {
+      "target": "claude-mcp",
       "pointer": "/mcpServers/fixture-local/args",
       "items": [
         "sha256:<hash>"
@@ -90,6 +100,11 @@
       "target": "codex",
       "pointer": "/default_permissions",
       "hash": "sha256:<hash>"
+    },
+    {
+      "target": "codex",
+      "pointer": "/fixture/codex",
+      "patched": "sha256:<hash>"
     },
     {
       "target": "codex",
@@ -168,9 +183,24 @@
       ]
     },
     {
+      "target": "cursor",
+      "pointer": "/fixture/cursor_settings",
+      "patched": "sha256:<hash>"
+    },
+    {
+      "target": "cursor-cli",
+      "pointer": "/fixture/cursor_cli",
+      "patched": "sha256:<hash>"
+    },
+    {
       "target": "cursor-desktop",
       "pointer": "/approvalMode",
       "hash": "sha256:<hash>"
+    },
+    {
+      "target": "cursor-desktop",
+      "pointer": "/fixture/cursor_desktop",
+      "patched": "sha256:<hash>"
     },
     {
       "target": "cursor-desktop",
@@ -204,6 +234,11 @@
     },
     {
       "target": "cursor-mcp",
+      "pointer": "/fixture/cursor_mcp",
+      "patched": "sha256:<hash>"
+    },
+    {
+      "target": "cursor-mcp",
       "pointer": "/mcpServers/fixture-local/args",
       "items": [
         "sha256:<hash>"
@@ -223,6 +258,11 @@
       "target": "cursor-mcp",
       "pointer": "/mcpServers/fixture-optional/url",
       "hash": "sha256:<hash>"
+    },
+    {
+      "target": "opencode",
+      "pointer": "/fixture/opencode",
+      "patched": "sha256:<hash>"
     },
     {
       "target": "opencode",
