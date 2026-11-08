@@ -68,14 +68,14 @@ is through transparent wrappers (`builtin`, `command`, `env -i`/`-u`, `nice`,
 `nocorrect`, `noglob`, `nohup`, `stdbuf`, `time -p`, `timeout`, `xargs`) for a
 command that fell to the catch-all; `xargs` carries only to a rule that takes
 one more argument. The audit does not model that allow. The peel exists once,
-in shell-unwrap's TypeScript: the Claude target's hook bundles the same code,
-and the audit asks the vendored Claude bundle for its spellings through Bun, so
+in shell-unwrap's TypeScript: the Claude and Cursor hook bundles the same code,
+and the audit asks the vendored hook bundle for its spellings through Bun, so
 the compiler's tests need Bun. The `opencode.unwrap` live scenarios run
 OpenCode on the compiled output; the opt-in oracle scenario checks the audit's
 model against OpenCode on a real policy. To update both bundles, run
 `bun run check` in that repository, then copy
 `dist/opencode/shell-unwrap.js` to `targets/shell-unwrap/opencode.js` and
-`dist/claude/shell-unwrap.js` to `targets/shell-unwrap/claude.js`.
+`dist/hook/shell-unwrap.js` to `targets/shell-unwrap/hook.js`.
 
 File permissions are checked by path relative to the session directory for
 files inside it and by absolute path otherwise, and the matcher's `**/` needs

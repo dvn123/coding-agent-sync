@@ -248,16 +248,16 @@ def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str
 # a deny rule's reason. The bundled PreToolUse hook allows a command when every
 # command inside it matches an allow, and denies one with the reason of the
 # deny it matches; Claude still applies its own deny and ask rules after a hook
-# allow. It is shell-unwrap's Claude bundle, run by Bun with tree-sitter's
-# WASM embedded; failing that, it stays silent, which leaves the command to
-# Claude.
-UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "claude.js"
+# allow. It is shell-unwrap's hook bundle, shared with Cursor and run by Bun
+# with tree-sitter's WASM embedded; failing that, it stays silent, which leaves
+# the command to Claude.
+UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
 UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
 UNWRAP_TIMEOUT_SECONDS = 10
 
 
 def _unwrap_hook(script: Path) -> dict[str, Any]:
-    command = f"bun {shlex.quote(script.as_posix())} 2>/dev/null"
+    command = f"bun {shlex.quote(script.as_posix())} claude 2>/dev/null"
     return {
         "matcher": "Bash",
         "hooks": [

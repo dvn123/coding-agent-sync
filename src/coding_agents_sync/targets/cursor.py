@@ -172,13 +172,13 @@ def _terminal_allowlist(
     return allowlist, diagnostics
 
 
-# Cursor's allowlists cannot ask or deny. shell-unwrap's Cursor bundle, a
+# Cursor's allowlists cannot ask or deny. shell-unwrap's hook bundle, a
 # `beforeShellExecution` hook in the user `hooks.json` that Desktop and the CLI
 # both load, denies or asks for any command inside a call that a guard
 # matches, peeled as on Claude, and leaves the rest to the allowlist. It reads
 # Claude's `Bash(...)` patterns and asks when it cannot run, so the guards
 # fail closed. Desktop can refuse user-local plugins, so it is not one.
-UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "cursor.js"
+UNWRAP_HOOK = Path(__file__).with_name("shell-unwrap") / "hook.js"
 UNWRAP_HOOK_PATH = Path("hooks/shell-unwrap.js")
 UNWRAP_TIMEOUT_SECONDS = 10
 # Desktop starts from the Dock without the login shell's PATH.
@@ -210,7 +210,8 @@ def _unwrap_hook(
         else shlex.quote(script.as_posix())
     )
     fallback = shlex.quote(json.dumps(UNWRAP_UNAVAILABLE))
-    body = f'PATH="{BUN_PATH}:$PATH" bun {located} 2>/dev/null || printf %s {fallback}'
+    run_hook = f'PATH="{BUN_PATH}:$PATH" bun {located} cursor'
+    body = f"{run_hook} 2>/dev/null || printf %s {fallback}"
     hook = {
         "command": f"/bin/sh -c {shlex.quote(body)}",
         "timeout": UNWRAP_TIMEOUT_SECONDS,

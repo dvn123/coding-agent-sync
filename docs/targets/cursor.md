@@ -101,7 +101,8 @@ in a file, and a subagent approves both itself.
   rule is skipped with a warning.
 - The allowlist has no deny channel, so every allow lands as written and a
   `beforeShellExecution` hook carries the asks and denies. It is shell-unwrap's
-  Cursor bundle at `<home>/.cursor/hooks/shell-unwrap.js`, registered in the
+  hook bundle, shared with Claude and run with the `cursor` argument, at
+  `<home>/.cursor/hooks/shell-unwrap.js`, registered in the
   user `hooks.json` that Desktop and the CLI both load, beside
   `shell-unwrap.json`: Claude's `Bash(...)` ask and deny patterns and the deny
   reasons. It is not a local plugin, because Desktop skips user-local plugins

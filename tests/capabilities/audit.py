@@ -170,7 +170,7 @@ def claude_candidates(command: str, *, deny: bool) -> set[str]:
 
 
 # shell-unwrap's peel, which its OpenCode plugin and Claude hook run over every
-# shell command. The Claude bundle exports it; one Bun process answers a batch.
+# shell command. The hook bundle exports it; one Bun process answers a batch.
 UNWRAP_BUNDLE = claude.UNWRAP_HOOK
 _SPELLINGS: dict[str, list[str]] = {}
 

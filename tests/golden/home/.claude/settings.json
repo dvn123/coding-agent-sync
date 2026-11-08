@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun <tmp>/home/.claude/hooks/shell-unwrap.js 2>/dev/null || true",
+            "command": "bun <tmp>/home/.claude/hooks/shell-unwrap.js claude 2>/dev/null || true",
             "timeout": 10
           }
         ]
