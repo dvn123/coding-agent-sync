@@ -59,6 +59,13 @@ type NonEmpty = Annotated[str, StringConstraints(min_length=1)]
 # (`~/.config/tool/run.sh`); tokens are compared literally and the tilde is
 # never expanded by any target.
 type Token = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_./,@%+=~-]+$")]
+# A command is a token or the shell's no-op builtin `:`. A colon stays out of
+# the token alphabet so a drive path such as `C:/` cannot be written, and only
+# a trailing `:*` means anything in a target's rule syntax (Claude's legacy
+# prefix), which `:` alone and `: *` are not.
+type CommandName = Annotated[
+    str, StringConstraints(pattern=r"^(?::|[A-Za-z0-9_./,@%+=~-]+)$")
+]
 type Decision = Literal["allow", "ask", "deny"]
 # An MCP server or tool name every target spells unchanged in its rules.
 MCP_NAME = re.compile(r"[A-Za-z0-9_-]+")
@@ -136,7 +143,7 @@ class CommandPermission(StrictModel):
     not a predicate.
     """
 
-    command: Token
+    command: CommandName
     subcommand: tuple[Token, ...] = ()
     tail: Annotated[
         tuple[Annotated[tuple[Token, ...], Field(min_length=1)], ...], Unique

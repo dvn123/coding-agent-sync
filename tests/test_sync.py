@@ -1861,6 +1861,22 @@ class PermissionProjectionTests(SyncCase):
         claude = claude_settings(home)
         self.assertIn("Bash(tool post '/api/search' *)", claude["permissions"]["allow"])
 
+    def test_the_no_op_builtin_is_a_command_but_a_drive_path_is_not(self) -> None:
+        """`:` may name a command; a colon elsewhere, as in `C:/x`, may not."""
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[[":"]])
+
+        run_sync(config_root=config_root, home=home)
+
+        self.assertIn("Bash(: *)", claude_settings(home)["permissions"]["allow"])
+        bash = opencode_rules(opencode_config(home), "shell")
+        expected = {":": "allow", ": x": "allow", "::": "ask", "C:/x": "ask"}
+        self.assertEqual(opencode_decisions(bash, expected), expected)
+
+        write_permissions(config_root, allow=[["C:/x"]])
+        with self.assertRaisesRegex(ValueError, "should match pattern"):
+            run_sync(config_root=config_root, home=home)
+
     def test_secret_output_formats_are_expressible_in_the_source(self) -> None:
         """`text` covers -o yaml, -oyaml, and --output=yaml alike.
 

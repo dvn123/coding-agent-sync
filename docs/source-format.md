@@ -254,7 +254,9 @@ literal argv tokens. A token may start with `~` to match the
 home-relative command text agents type; every target matches it literally and
 never expands it. Every target also receives a `~/` command under its absolute
 path, and the glob targets under its `$HOME/` spelling and a subcommand token
-holding a `/` single- and double-quoted.
+holding a `/` single- and double-quoted. A token holds no colon, so a drive
+path such as `C:/` cannot be written; the one exception is the command `:`,
+the shell's no-op builtin.
 
 An ask or deny with a subcommand also matches any options between the program
 and the subcommand (`git -C repo push` for `git push`). An allow carries over
