@@ -3255,7 +3255,7 @@ class SourceLoweringTests(SyncCase):
 
         self.assertEqual(stat.S_IMODE(deployed.stat().st_mode), 0o700)
 
-    def test_bundled_skill_scripts_are_allowed_where_each_target_deploys_them(
+    def test_bundled_skill_scripts_are_allowed_wherever_a_copy_lives(
         self,
     ) -> None:
         config_root, home = self.new_roots()
@@ -3272,16 +3272,21 @@ class SourceLoweringTests(SyncCase):
             for rule in opencode["permissions"]
             if rule["action"] == "shell" and rule["effect"] == "allow"
         )
-        for text, root in (
-            (claude_allow, ".claude"),
-            (opencode_allow, ".agents"),
+        # Where the target deploys the skill, the shared skills directory that
+        # holds the same files, and the canonical source.
+        for text, roots in (
+            (claude_allow, (".claude", ".agents")),
+            (opencode_allow, (".agents",)),
         ):
-            with self.subTest(root=root):
-                for base in (f"~/{root}", f"{home.as_posix()}/{root}"):
-                    self.assertIn(f"{base}/skills/runner/scripts/poll.sh", text)
-                # Only executables, and only this target's own path.
-                self.assertNotIn("notes.md", text)
-        self.assertNotIn(".agents/skills", claude_allow)
+            for root in roots:
+                with self.subTest(root=root):
+                    for base in (f"~/{root}", f"{home.as_posix()}/{root}"):
+                        self.assertIn(f"{base}/skills/runner/scripts/poll.sh", text)
+            self.assertIn(
+                f"{config_root.as_posix()}/skills/runner/scripts/poll.sh", text
+            )
+            # Only executables.
+            self.assertNotIn("notes.md", text)
 
     def test_claude_and_opencode_agents_keep_their_native_fields(self) -> None:
         config_root, home = self.new_roots()

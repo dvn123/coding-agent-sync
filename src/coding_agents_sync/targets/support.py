@@ -87,12 +87,15 @@ def bundled_files(source_dir: Path) -> tuple[dict[Path, bytes], frozenset[Path]]
 def with_skill_scripts(
     sources: SourceBundle, target: str, root: Path, home: Path
 ) -> SourceBundle:
-    """Allow each skill's bundled executables where `target` deploys them.
+    """Allow each skill's bundled executables wherever a copy of them lives.
 
     A skill's scripts are canonical source, so the agent that loads the skill
-    may run them. Matchers compare the command as typed, so both the
-    home-relative and the absolute spelling are allowed; a spelling that is not
-    a portable token (a Windows drive, a space in the home path) is left out.
+    may run them: from where `target` deploys the skill, from the shared
+    `~/.agents/skills` and each target's own skills directory, which hold the
+    same files, and from the canonical source. Matchers compare the command as
+    typed, so both the home-relative and the absolute spelling are allowed; a
+    spelling that is not a portable token (a Windows drive, a space in the home
+    path) is left out.
     """
     if not (permissions := sources.permissions):
         return sources
@@ -101,15 +104,19 @@ def with_skill_scripts(
     for skill in sources.skills:
         if not applies_to(skill, target):
             continue
-        skills_root = (
-            shared_skills_root(home)
-            if target in SHARED_SKILL_READERS and shared_skill(skill)
-            else root / "skills"
+        roots = dict.fromkeys(
+            (root / "skills", shared_skills_root(home), skill.source_dir.parent)
         )
-        bases = (
-            f"~/{skills_root.relative_to(home).as_posix()}",
-            skills_root.as_posix(),
-        )
+        bases = [
+            base
+            for skills_root in roots
+            for base in (
+                (f"~/{skills_root.relative_to(home).as_posix()}",)
+                if skills_root.is_relative_to(home)
+                else ()
+            )
+            + (skills_root.as_posix(),)
+        ]
         for relative in sorted(bundled_files(skill.source_dir)[1]):
             for base in bases:
                 path = f"{base}/{skill.source_dir.name}/{relative.as_posix()}"
