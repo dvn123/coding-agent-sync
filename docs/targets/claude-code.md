@@ -54,10 +54,12 @@ put that copy first on `PATH` to probe it. Generated pointers are semantic
 hash-owned; a Claude settings patch may use a different pointer, or contribute
 to a generated one where the contribution does not clash.
 
-Claude matches an allow rule only against a flat command, so a loop, a command
-substitution, a subshell, a `cd` chain, or a wrapper with options (`env -u`,
-`timeout -k`, `/usr/bin/time -p`, `xargs -n1`) prompts even when every program
-in it is allowed, and it never shows the model a deny rule's `reason`. Whenever
+Claude 2.1.319 splits `&&` chains, pipes, and `if` bodies, and peels `timeout`,
+`nice`, and bare `xargs` with their options, but a loop, a command
+substitution, a subshell, or a wrapper it does not peel (`env -i`, `env -u`,
+`time -p`, `xargs -n1`) prompts even when every program in it is allowed. Its
+deny rules already catch peeled spellings except behind `xargs` with options,
+and it never shows the model a deny rule's `reason`. Whenever
 it emits permissions, the compiler installs shell-unwrap's hook bundle
 (source: <https://github.com/dvn123/shell-unwrap>, vendored as
 `targets/shell-unwrap/hook.js` and shared with Cursor) as a `Bash` PreToolUse
