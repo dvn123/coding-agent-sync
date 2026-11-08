@@ -245,14 +245,17 @@ func (r Rules) certain(spelling, template string) (verdict, bool) {
 	return verdict{}, false
 }
 
-// possible is the first guard some value of a template may meet, if any.
+// possible is the first guard some value of a template may meet, if any. A
+// rule that starts with `*` is about the script's text, such as a variable
+// it names, which a run-time value cannot add to it, so Decide judges it on
+// the text alone.
 func (r Rules) possible(template string) (string, bool) {
 	for _, guard := range []struct {
 		kind  string
 		rules bucket
 	}{{"deny", r.Deny}, {"ask", r.Ask}} {
 		for _, rule := range guard.rules.candidates(template) {
-			if MayMatch(rule.Pattern, template) {
+			if !strings.HasPrefix(rule.Pattern, "*") && MayMatch(rule.Pattern, template) {
 				return fmt.Sprintf("%s rule `%s` may match", guard.kind, rule.Pattern), true
 			}
 		}
@@ -352,13 +355,7 @@ func (r Rules) Verdict(script, cwd string) verdict {
 	if err != nil {
 		return undecided(err.Error())
 	}
-	var names []string
-	for _, step := range steps {
-		if step.Words != nil {
-			names = append(names, Basename(step.Words[0].Text))
-		}
-	}
-	if len(names) == 0 && len(steps) == 0 {
+	if len(steps) == 0 {
 		return undecided("no command")
 	}
 	var ask, pending *verdict
@@ -377,11 +374,14 @@ func (r Rules) Verdict(script, cwd string) verdict {
 		case step.Access != nil:
 			result = r.access(*step.Access, place, cwd)
 		case step.Words[0].Text == "cd":
-			result = r.cd(step, names, cwd, &place)
+			result = r.cd(step, cwd, &place)
 		default:
 			result = r.Judge(step.Words)
 			if result.decision == "" {
 				result.message = fmt.Sprintf("`%s`: %s", render(texts(step.Words)), result.message)
+			}
+			if git, ok := gitVerdict(render(texts(step.Words)), place); ok && result.decision != "deny" && result.decision != "ask" {
+				result = git
 			}
 		}
 		if result.decision == "deny" {
@@ -422,7 +422,7 @@ func (r Rules) access(access Access, place directory, cwd string) verdict {
 
 // cd is the verdict for a `cd`: allowed when it moves to a known directory
 // inside the working ones.
-func (r Rules) cd(step Step, names []string, cwd string, place *directory) verdict {
+func (r Rules) cd(step Step, cwd string, place *directory) verdict {
 	list := step.Words
 	moved := *place
 	defer func() {
@@ -431,9 +431,9 @@ func (r Rules) cd(step Step, names []string, cwd string, place *directory) verdi
 		moved.known = moved.known && !step.Conditional
 		*place = moved
 	}()
-	if slices.Contains(names, "git") || len(list) != 2 {
+	if len(list) != 2 {
 		moved.known = false
-		return undecided("cd beside git or with options")
+		return undecided("cd with options")
 	}
 	target := list[1]
 	// `cd -` returns to $OLDPWD, and `cd -2` or `cd +1` reads the directory

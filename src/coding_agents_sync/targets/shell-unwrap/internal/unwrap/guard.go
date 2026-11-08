@@ -31,10 +31,17 @@ func Scan(script string) ([]string, bool) {
 		}
 		parsed = true
 		syntax.Walk(file, func(node syntax.Node) bool {
-			if call, ok := node.(*syntax.CallExpr); ok {
-				if text, ok := callText(call, script); ok && !slices.Contains(found, text) {
-					found = append(found, text)
-				}
+			text, ok := "", false
+			switch node := node.(type) {
+			case *syntax.CallExpr:
+				text, ok = callText(node, script)
+			case *syntax.DeclClause:
+				// `export`, `local` and the like, whose assignments name
+				// variables as a command's words do.
+				text, ok = script[node.Pos().Offset():node.End().Offset()], true
+			}
+			if ok && !slices.Contains(found, text) {
+				found = append(found, text)
 			}
 			return true
 		})
@@ -58,9 +65,11 @@ func Guarded(script string) []string {
 }
 
 // callText is one simple command as its rules see it: its assignments and
-// words as written, without its redirects.
+// words as written, without its redirects. A bare assignment is its own
+// text, which only a rule about the script's text, such as a variable it
+// names, can match.
 func callText(call *syntax.CallExpr, script string) (string, bool) {
-	if len(call.Args) == 0 || dynamicWord(call.Args[0]) {
+	if len(call.Args) > 0 && dynamicWord(call.Args[0]) || len(call.Args) == 0 && len(call.Assigns) == 0 {
 		return "", false
 	}
 	var parts []string
