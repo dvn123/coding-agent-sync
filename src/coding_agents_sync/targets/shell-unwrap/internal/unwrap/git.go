@@ -65,11 +65,13 @@ func gitDirectory(args []string, cwd string) (string, bool) {
 }
 
 // bareRepository is the directory git would use as a bare repository when
-// started in dir, or "". Git takes the first directory up from dir that has a
-// `.git` entry, or that is itself a git directory.
+// started in dir, or "". Git takes the first directory up from dir whose
+// `.git` is a gitfile or a git directory, or that is itself a git directory;
+// it passes over a `.git` directory that is not one.
 func bareRepository(dir string) string {
 	for current := real(dir); ; {
-		if _, err := os.Lstat(filepath.Join(current, ".git")); err == nil {
+		dotGit := filepath.Join(current, ".git")
+		if info, err := os.Stat(dotGit); err == nil && (!info.IsDir() || gitDirectoryShape(dotGit)) {
 			return ""
 		}
 		if gitDirectoryShape(current) {
@@ -84,11 +86,16 @@ func bareRepository(dir string) string {
 }
 
 // gitDirectoryShape is git's own test for a git directory: a HEAD file and
-// objects and refs directories.
+// objects and refs directories, which a `commondir` file may place in another
+// directory, as a linked worktree's does. That other directory's config is
+// the one git reads, so any `commondir` counts, wherever it points.
 func gitDirectoryShape(dir string) bool {
 	head, err := os.Stat(filepath.Join(dir, "HEAD"))
 	if err != nil || !head.Mode().IsRegular() {
 		return false
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "commondir")); err == nil {
+		return true
 	}
 	for _, name := range []string{"objects", "refs"} {
 		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || !info.IsDir() {
