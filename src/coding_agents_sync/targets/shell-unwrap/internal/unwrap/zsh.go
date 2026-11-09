@@ -129,6 +129,9 @@ type analysis struct {
 	// or run it in a subshell, after which an assignment it makes may not
 	// hold.
 	conditional int
+	// guarded is set while the left of an `&&` is judged, for the command
+	// that is that statement; see assign.
+	guarded bool
 }
 
 // inside judges walk one level deeper in conditional.
@@ -242,8 +245,13 @@ func (a *analysis) redirect(redirect *syntax.Redirect) {
 		a.word(redirect.Word, true)
 		return
 	}
-	// zsh globs and tilde-expands a target as it does an argument.
+	// zsh globs and tilde-expands a target as it does an argument. A target
+	// that is only a `$(mktemp …)` is empty when mktemp fails, and zsh then
+	// opens nothing.
 	target := a.word(redirect.Word, false).Text
+	if path, ok := tempPath(redirect.Word); ok {
+		target = path
+	}
 	if (op == ">&" || op == "<&") && dupTarget.MatchString(target) || streams.MatchString(target) {
 		return
 	}
@@ -252,10 +260,12 @@ func (a *analysis) redirect(redirect *syntax.Redirect) {
 }
 
 func (a *analysis) command(node syntax.Command) {
+	guarded := a.guarded
+	a.guarded = false
 	switch node := node.(type) {
 	case *syntax.CallExpr:
 		if len(node.Args) == 0 {
-			a.assign(node.Assigns)
+			a.assign(node.Assigns, guarded)
 			return
 		}
 		a.steps = append(a.steps, Step{Words: a.call(node), Conditional: a.conditional > 0})
@@ -263,7 +273,9 @@ func (a *analysis) command(node syntax.Command) {
 		// The left of `&&` always runs; anything else may be skipped, and a
 		// pipeline runs its parts in subshells.
 		if node.Op.String() == "&&" {
+			a.guarded = true
 			a.stmt(node.X)
+			a.guarded = false
 		} else {
 			a.inside(func() { a.stmt(node.X) })
 		}
@@ -360,7 +372,8 @@ func (a *analysis) loop(node *syntax.ForClause) {
 // assign judges a statement that only sets variables. Each must be one an
 // allowed command may set; it holds a known value afterwards when the
 // statement always runs, its value is literal, and nothing else sets it.
-func (a *analysis) assign(assigns []*syntax.Assign) {
+// guarded is whether the statement is the left of an `&&`.
+func (a *analysis) assign(assigns []*syntax.Assign, guarded bool) {
 	for _, assign := range assigns {
 		if assign.Array != nil || assign.Index != nil || assign.Naked || assign.Append {
 			decline("array or appending assignment")
@@ -370,6 +383,12 @@ func (a *analysis) assign(assigns []*syntax.Assign) {
 		value := ""
 		if assign.Value != nil {
 			value = a.assignedValue(assign.Value)
+			// A failed mktemp leaves the variable empty, but the statement's
+			// status is then its, so nothing after the `&&` runs. A second
+			// assignment's substitution would decide the status instead.
+			if path, ok := tempPath(assign.Value); ok && guarded && len(assigns) == 1 {
+				value = path
+			}
 		}
 		if a.conditional == 0 && a.sites[name] == 1 && !strings.Contains(value, Wild) {
 			a.bound[name] = value
@@ -525,11 +544,6 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 			decline("mksh substitution")
 		}
 		a.inside(func() { a.stmts(part.Stmts) })
-		if path, ok := mktempPath(part.Stmts); ok {
-			out.WriteString(path)
-			out.literal = true
-			return
-		}
 		out.WriteString(Wild)
 		out.dynamic = true
 		out.splits = out.splits || !quoted

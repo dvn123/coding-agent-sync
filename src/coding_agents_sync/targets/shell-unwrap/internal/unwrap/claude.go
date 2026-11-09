@@ -610,12 +610,16 @@ var endsOptions = []string{
 // command of endsOptions, which the program reads as operands, so they hold
 // no option a guard could name. It returns the mark for the input `xargs`
 // appends: Positional when it lands after that `--`, else Wild.
+//
+// A `--` ends the options only when the word before it is a literal that is
+// not an option: in `rg -e -- $f` it is the pattern `-e` takes, and `$f` may
+// still be `--pre=sh`.
 func positional(values []string) ([]string, string) {
 	if len(values) == 0 || !slices.Contains(endsOptions, Basename(values[0])) {
 		return values, Wild
 	}
 	end := slices.Index(values, "--")
-	if end == -1 {
+	if end == -1 || runTime(values[end-1]) || strings.HasPrefix(values[end-1], "-") {
 		return values, Wild
 	}
 	out := slices.Clone(values)
