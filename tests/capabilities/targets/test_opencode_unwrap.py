@@ -34,7 +34,7 @@ REASON = "run unwrap-tool instead"
 POLICY = """\
 description: permissions
 unmatched: allow
-wrappers: [timeout, env, nohup, sudo]
+wrappers: {timeout: [], env: [], nohup: []}
 targets:
   codex: {omit: [unmatched]}
   cursor: {omit: [unmatched]}
@@ -46,7 +46,7 @@ deny:
 """
 ASK_POLICY = """\
 description: permissions
-wrappers: [timeout]
+wrappers: {timeout: []}
 """
 ASK_RULES = f"""\
 allow:
@@ -201,7 +201,7 @@ def test_compiled_rules_carry_no_wrapper_copies(runtime: Runtime) -> None:
         for rule in json.loads(runtime.config.read_text())["permissions"]
         if rule["action"] == "shell"
     ]
-    assert shell == ["*", f"{RECORDER} *", f"{TOOL} push *"]
+    assert shell == ["*", f"{RECORDER} *", f"{TOOL} push *", f"{TOOL} -* push *"]
 
 
 @pytest.mark.capability_case("opencode.unwrap")

@@ -32,7 +32,12 @@ from capabilities.server import RecordedServer
 from capabilities.targets.opencode import config as opencode_config
 from capabilities.targets.opencode import environment
 from coding_agents_sync.targets import opencode
-from coding_agents_sync.targets.permissions import fold_edit_write
+from coding_agents_sync.targets.permissions import (
+    UNWRAP_NAME,
+    fold_edit_write,
+    unwrap_binary,
+    unwrap_reasons_file,
+)
 
 SAMPLE = 60
 DENIALS = ("Permission denied", "is denied by the shell rules")
@@ -107,6 +112,14 @@ def runtime(
     plugins = paths.config / "opencode" / "plugins"
     plugins.mkdir(parents=True)
     shutil.copy(opencode.UNWRAP_PLUGIN, plugins / opencode.UNWRAP_PLUGIN_NAME)
+    # The plugin asks the binary, and reads the policy, one directory above it.
+    binary = plugins.parent / UNWRAP_NAME
+    binary.write_bytes(unwrap_binary())
+    binary.chmod(0o700)
+    for extras in unwrap_reasons_file(
+        plugins.parent, sources.permissions, opencode.shell_entries
+    ):
+        extras.path.write_bytes(extras.content)
     # An empty PATH keeps every allowed probe from finding its program.
     env = environment(paths, config, str(paths.bin))
     value_runtime = Runtime(
