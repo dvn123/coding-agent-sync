@@ -347,8 +347,9 @@ func (a *analysis) loop(node *syntax.ForClause) {
 	Assigned(name)
 	values, literal := a.globItems(loop.Items)
 	// The variable keeps one known value per pass only when nothing else
-	// sets it and zsh, not the user, picks the values (`select` asks).
-	if !literal || node.Select || a.sites[name] != 1 || a.passes+len(values) > maxPasses {
+	// sets it and zsh, not the user, picks the values (`select` asks). A loop
+	// without `in` runs over the positional parameters, known only at run time.
+	if !loop.InPos.IsValid() || !literal || node.Select || a.sites[name] != 1 || a.passes+len(values) > maxPasses {
 		a.stmts(node.Do)
 		return
 	}

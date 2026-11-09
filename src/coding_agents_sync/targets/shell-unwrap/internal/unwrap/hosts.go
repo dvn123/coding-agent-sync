@@ -23,20 +23,20 @@ func (r Rules) CodexDenial(script, cwd string) string {
 // closed.
 func (r Rules) CursorDecision(script, cwd string) *Decision {
 	if len(script) > MaxCommand {
-		return &Decision{"ask", "shell-unwrap: the command is too long to check"}
+		return &Decision{Decision: "ask", Reason: "shell-unwrap: the command is too long to check"}
 	}
 	found, parsed := Scan(script)
 	if !parsed {
-		return &Decision{"ask", "shell-unwrap: the command could not be parsed"}
+		return &Decision{Decision: "ask", Reason: "shell-unwrap: the command could not be parsed"}
 	}
 	for _, command := range found {
 		if message := r.Denied(command); message != "" {
-			return &Decision{"deny", message}
+			return &Decision{Decision: "deny", Reason: message}
 		}
 	}
 	for _, command := range found {
 		if spelling := r.Asked(command); spelling != "" {
-			return &Decision{"ask", "shell-unwrap: `" + spelling + "` needs approval"}
+			return &Decision{Decision: "ask", Reason: "shell-unwrap: `" + spelling + "` needs approval"}
 		}
 	}
 	return r.Certain(script, cwd)

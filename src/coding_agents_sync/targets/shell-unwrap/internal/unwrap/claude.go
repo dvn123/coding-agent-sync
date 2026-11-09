@@ -18,6 +18,9 @@ const Allowed = "shell-unwrap: every command matches an allow rule"
 type Decision struct {
 	Decision string `json:"permissionDecision"`
 	Reason   string `json:"permissionDecisionReason"`
+	// Advice is a deny that only stands in for a prompt, with the advice
+	// that would avoid it; bypass mode drops it as it does an ask.
+	Advice bool `json:"-"`
 }
 
 // Verdict is the zsh analysis's conclusion for script: a certain deny for any
@@ -88,7 +91,7 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 
 // access is the verdict for a file a redirect run in dir reads or writes.
 func (r Rules) access(access Access, dir, cwd string) verdict {
-	if strings.Contains(access.Path, Wild) {
+	if runTime(access.Path) {
 		return undecided("a redirect to a run-time path")
 	}
 	path := access.Path
@@ -154,7 +157,7 @@ func (r Rules) Certain(script, cwd string) *Decision {
 	if result.decision != "deny" && result.decision != "ask" {
 		return nil
 	}
-	return &Decision{result.decision, result.message}
+	return &Decision{Decision: result.decision, Reason: result.message}
 }
 
 // Decide is the Claude Code decision for script, or nil to leave it to
@@ -163,12 +166,12 @@ func (r Rules) Decide(script, cwd string) *Decision {
 	all := Guarded(script)
 	for _, command := range all {
 		if message := r.Denied(command); message != "" {
-			return &Decision{"deny", message}
+			return &Decision{Decision: "deny", Reason: message}
 		}
 	}
 	for _, command := range all {
 		if spelling := r.Asked(command); spelling != "" {
-			return &Decision{"ask", "shell-unwrap: `" + spelling + "` needs approval"}
+			return &Decision{Decision: "ask", Reason: "shell-unwrap: `" + spelling + "` needs approval"}
 		}
 	}
 	result := r.Verdict(script, cwd)
@@ -177,9 +180,9 @@ func (r Rules) Decide(script, cwd string) *Decision {
 		return nil
 	case "advise":
 		// Denied with the advice, since otherwise it would prompt.
-		return &Decision{"deny", result.message}
+		return &Decision{Decision: "deny", Reason: result.message, Advice: true}
 	}
-	return &Decision{result.decision, result.message}
+	return &Decision{Decision: result.decision, Reason: result.message}
 }
 
 // rawTexts are the words' texts with their run-time parts still Wild, for

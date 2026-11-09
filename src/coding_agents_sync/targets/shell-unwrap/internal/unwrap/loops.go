@@ -10,8 +10,8 @@ import (
 )
 
 // moves follows a command that changes the shell's directory: a `cd` to a
-// literal directory that always runs moves it there, and any other leaves it
-// unknown.
+// literal directory that always runs and exists now moves it there, and any
+// other leaves it unknown, since a failed cd stays where it was.
 func (a *analysis) moves(words []ZshWord) {
 	if len(words) == 0 || !slices.Contains([]string{"cd", "chdir", "pushd", "popd"}, words[0].Text) {
 		return
@@ -25,11 +25,15 @@ func (a *analysis) moves(words []ZshWord) {
 	if target.Vanishes || strings.Contains(target.Text, Wild) || strings.HasPrefix(target.Text, "-") || strings.HasPrefix(target.Text, "+") {
 		return
 	}
+	var moved string
 	switch {
 	case filepath.IsAbs(target.Text):
-		a.dir = real(target.Text)
+		moved = real(target.Text)
 	case known != "":
-		a.dir = real(filepath.Join(known, target.Text))
+		moved = real(filepath.Join(known, target.Text))
+	}
+	if info, err := os.Stat(moved); moved != "" && err == nil && info.IsDir() {
+		a.dir = moved
 	}
 }
 

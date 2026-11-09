@@ -78,6 +78,13 @@ func (p *Program) takesValue(option string) bool {
 	return replaces || slices.Contains(p.Values, option) || p.role(option) != ""
 }
 
+// joinsValue is whether a short option takes a value only when joined to it,
+// as xargs -i[R] does.
+func (p *Program) joinsValue(option string) bool {
+	braces := p.Runs != nil && p.Runs.Input != nil && slices.Contains(p.Runs.Input.ReplaceBraces, option)
+	return braces && !strings.HasPrefix(option, "--")
+}
+
 // known is whether a closed program lists the option.
 func (p *Program) known(option string) bool {
 	return p.takesValue(option) || slices.Contains(p.Flags, option)
@@ -134,12 +141,18 @@ func parse(words []string) *Parsed {
 				option.Name, option.Value, option.Takes = name, value, true
 			} else if !strings.HasPrefix(word, "--") && !current.takesValue(word) {
 				// A bundle of short flags (`-ne`): the first that takes a
-				// value takes the rest of the word, or the next word.
+				// value takes the rest of the word, or the next word, and
+				// one with an optional value (xargs -i[R]) the rest of the
+				// word. The flags before it are options of their own.
+				var flags []Option
 				for letter := 1; letter < len(word); letter++ {
-					if short := "-" + word[letter:letter+1]; current.takesValue(short) {
-						option.Name, option.Value, option.Takes = short, word[letter+1:], true
+					short, rest := "-"+word[letter:letter+1], word[letter+1:]
+					if current.takesValue(short) || current.joinsValue(short) {
+						option.Name, option.Value, option.Takes = short, rest, current.takesValue(short) || rest != ""
+						parsed.Options = append(parsed.Options, flags...)
 						break
 					}
+					flags = append(flags, Option{Name: short, At: index, ValueAt: index})
 				}
 			}
 			bundleEnds := option.Takes && option.Value == "" && option.Name != word && !strings.HasPrefix(word, "--")

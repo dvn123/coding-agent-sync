@@ -116,7 +116,8 @@ func claude() error {
 	}()
 	// Bypass mode skips Claude Code's prompts, but not a hook's ask. Its denies
 	// still apply, as Claude Code's own deny rules do.
-	if decision == nil || decision.Decision == "ask" && event.PermissionMode == "bypassPermissions" {
+	prompts := decision != nil && (decision.Decision == "ask" || decision.Advice)
+	if decision == nil || prompts && event.PermissionMode == "bypassPermissions" {
 		return nil
 	}
 	return write(map[string]hookOutput{"hookSpecificOutput": {"PreToolUse", *decision}})
