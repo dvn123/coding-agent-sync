@@ -436,16 +436,17 @@ func (r Rules) Judge(list []ZshWord) verdict {
 // command or file, else a certain ask, else allowed when every step is, else
 // undecided with the first reason.
 func (r Rules) Verdict(script, cwd string) verdict {
-	return r.verdictFrom(script, cwd, directory{path: cwd, known: true})
+	return r.verdictFrom(script, cwd, cwd)
 }
 
-// verdictFrom is Verdict for a script that starts in place, such as one a
-// `hyperfine` after a `cd` runs; cwd stays the session's, which anchors rules.
-func (r Rules) verdictFrom(script, cwd string, place directory) verdict {
+// verdictFrom is Verdict for a script that starts in dir ("" when not known),
+// such as one a `hyperfine` after a `cd` runs; cwd stays the session's, which
+// anchors rules.
+func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 	if len(script) > MaxCommand {
 		return undecided("longer than Claude Code analyses")
 	}
-	steps, err := Steps(script)
+	steps, err := StepsIn(script, dir)
 	if err != nil {
 		return undecided(err.Error())
 	}
@@ -467,18 +468,18 @@ func (r Rules) verdictFrom(script, cwd string, place directory) verdict {
 		var result verdict
 		switch {
 		case step.Access != nil:
-			result = r.access(*step.Access, place, cwd)
+			result = r.access(*step.Access, step.Dir, cwd)
 		case step.Words[0].Text == "cd":
-			result = r.cd(step, &place, cwd)
+			result = r.cd(step, cwd)
 		default:
 			result = r.Judge(step.Words)
 			if result.decision == "" {
 				result.message = fmt.Sprintf("`%s`: %s", render(texts(step.Words)), result.message)
 			}
-			if git, ok := gitVerdict(render(rawTexts(step.Words)), place); ok && result.decision != "deny" && result.decision != "ask" {
+			if git, ok := gitVerdict(render(rawTexts(step.Words)), step.Dir); ok && result.decision != "deny" && result.decision != "ask" {
 				result = git
 			}
-			if bench, ok := r.hyperfine(rawTexts(step.Words), cwd, place); ok && result.decision == "" {
+			if bench, ok := r.hyperfine(rawTexts(step.Words), cwd, step.Dir); ok && result.decision == "" {
 				result = bench
 			}
 		}
@@ -498,64 +499,46 @@ func (r Rules) verdictFrom(script, cwd string, place directory) verdict {
 	return verdict{"allow", Allowed}
 }
 
-// directory is where the script is at a step, if it is known: a `cd` that
-// may be skipped, or that runs in a subshell, leaves it unknown.
-type directory struct {
-	path  string
-	known bool
-}
-
-// access is the verdict for a file a redirect reads or writes.
-func (r Rules) access(access Access, place directory, cwd string) verdict {
+// access is the verdict for a file a redirect run in dir reads or writes.
+func (r Rules) access(access Access, dir, cwd string) verdict {
 	if strings.Contains(access.Path, Wild) {
 		return undecided("a redirect to a run-time path")
 	}
 	path := access.Path
 	if !filepath.IsAbs(path) {
-		if !place.known {
+		if dir == "" {
 			return undecided("a redirect relative to a run-time directory")
 		}
-		path = filepath.Join(place.path, path)
+		path = filepath.Join(dir, path)
 	}
 	return r.fileVerdict(access, path, cwd)
 }
 
 // cd is the verdict for a `cd`: allowed when it moves to a known directory
 // inside the working directories (the session's and `additionalDirectories`)
-// or one the Edit rules allow. What runs there is judged as usual,
-// relative paths against it: commands by their rules, redirects by the Read
-// and Edit rules, git by its repository.
-func (r Rules) cd(step Step, place *directory, cwd string) verdict {
+// or one the Edit rules allow. The analysis follows where it moves, so what
+// runs there is judged as usual, relative paths against it: commands by their
+// rules, redirects by the Read and Edit rules, git by its repository.
+func (r Rules) cd(step Step, cwd string) verdict {
 	list := step.Words
-	moved := *place
-	defer func() {
-		// After a cd that may not run, or runs in a subshell, the directory is
-		// not known.
-		moved.known = moved.known && !step.Conditional
-		*place = moved
-	}()
 	if len(list) != 2 {
-		moved.known = false
 		return undecided("cd with options")
 	}
 	target := list[1]
 	// `cd -` returns to $OLDPWD, and `cd -2` or `cd +1` reads the directory
 	// stack: neither names its directory.
 	if target.Vanishes || strings.Contains(target.Text, Wild) || strings.HasPrefix(target.Text, "-") || strings.HasPrefix(target.Text, "+") {
-		moved.known = false
 		return undecided("cd to a run-time directory")
 	}
 	path := target.Text
 	if !filepath.IsAbs(path) {
-		if !place.known {
-			moved.known = false
+		if step.Dir == "" {
 			return undecided("cd from a run-time directory")
 		}
-		path = filepath.Join(place.path, path)
+		path = filepath.Join(step.Dir, path)
 	}
-	moved.path = real(path)
 	// A directory counts when a file in it may be read without asking.
-	if !r.pathAllowed("Read", filepath.Join(moved.path, "file"), cwd) {
+	if !r.pathAllowed("Read", filepath.Join(real(path), "file"), cwd) {
 		return undecided("cd outside the working directories")
 	}
 	// cd is a builtin that changes the shell, which Judge declines, so its own

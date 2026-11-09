@@ -102,12 +102,13 @@ var shellReads = regexp.MustCompile(`^(?:[!#$*?@0-9-]|ARGC|ARGV0|BAUD|CDPATH|COL
 	`WORDCHARS|ZBEEP|ZDOTDIR|ZLE_[A-Z_]*|ZSH_[A-Z_]*)$`)
 
 // Step is one thing a script does, in order: a simple command, or a file a
-// redirect reads or writes. Conditional marks one that may be skipped or
-// runs in a subshell.
+// redirect reads or writes. Dir is the directory it runs in, with its
+// symlinks resolved, or "" when that is not known: after a `cd` that may be
+// skipped or runs in a subshell, or one to a run-time directory.
 type Step struct {
-	Words       []ZshWord
-	Access      *Access
-	Conditional bool
+	Words  []ZshWord
+	Access *Access
+	Dir    string
 }
 
 // Access is a file a redirect reads or writes.
@@ -132,6 +133,9 @@ type analysis struct {
 	// guarded is set while the left of an `&&` is judged, for the command
 	// that is that statement; see assign.
 	guarded bool
+	// dir is the shell's directory where it is known, for the globs a loop
+	// expands (see globItems), or "".
+	dir string
 }
 
 // inside judges walk one level deeper in conditional.
@@ -191,19 +195,6 @@ func countSites(file *syntax.File) map[string]int {
 	return sites
 }
 
-// literalItems are a loop's items when every one is a single literal word.
-func (a *analysis) literalItems(items []*syntax.Word) ([]string, bool) {
-	var values []string
-	for _, item := range items {
-		word := a.word(item, false)
-		if word.Vanishes || strings.Contains(word.Text, Wild) {
-			return nil, false
-		}
-		values = append(values, word.Text)
-	}
-	return values, true
-}
-
 func (a *analysis) stmts(list []*syntax.Stmt) {
 	for _, stmt := range list {
 		a.stmt(stmt)
@@ -256,7 +247,7 @@ func (a *analysis) redirect(redirect *syntax.Redirect) {
 		return
 	}
 	access := &Access{Path: target, Read: op == "<" || op == "<>" || op == "<&", Write: op != "<" && op != "<&"}
-	a.steps = append(a.steps, Step{Access: access, Conditional: a.conditional > 0})
+	a.steps = append(a.steps, Step{Access: access, Dir: a.dir})
 }
 
 func (a *analysis) command(node syntax.Command) {
@@ -268,7 +259,9 @@ func (a *analysis) command(node syntax.Command) {
 			a.assign(node.Assigns, guarded)
 			return
 		}
-		a.steps = append(a.steps, Step{Words: a.call(node), Conditional: a.conditional > 0})
+		words := a.call(node)
+		a.steps = append(a.steps, Step{Words: words, Dir: a.dir})
+		a.moves(words)
 	case *syntax.BinaryCmd:
 		// The left of `&&` always runs; anything else may be skipped, and a
 		// pipeline runs its parts in subshells.
@@ -352,7 +345,7 @@ func (a *analysis) loop(node *syntax.ForClause) {
 	}
 	name := loop.Name.Value
 	Assigned(name)
-	values, literal := a.literalItems(loop.Items)
+	values, literal := a.globItems(loop.Items)
 	// The variable keeps one known value per pass only when nothing else
 	// sets it and zsh, not the user, picks the values (`select` asks).
 	if !literal || node.Select || a.sites[name] != 1 || a.passes+len(values) > maxPasses {
@@ -525,6 +518,12 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 			out.WriteString(value)
 			out.literal = out.literal || value != ""
 			out.dynamic = out.dynamic || value == ""
+			return
+		}
+		// $PWD is the directory the analysis follows; no command may assign it.
+		if plainName(part) == "PWD" && a.dir != "" {
+			out.WriteString(a.dir)
+			out.literal = true
 			return
 		}
 		if value, ok := constant(part); ok {
@@ -707,7 +706,13 @@ func ansiC(value string) string {
 
 // Steps is every simple command script runs and every file its redirects
 // read or write, in order, or the reason it declines.
-func Steps(script string) (found []Step, err error) {
+func Steps(script string) ([]Step, error) {
+	return StepsIn(script, "")
+}
+
+// StepsIn is Steps for a script that starts in dir, where the globs its
+// loops run over are expanded; "" when the directory is not known.
+func StepsIn(script, dir string) (found []Step, err error) {
 	for _, char := range script {
 		for _, span := range unsafeRanges {
 			if char >= span[0] && char <= span[1] {
@@ -728,7 +733,7 @@ func Steps(script string) (found []Step, err error) {
 			found, err = nil, declined
 		}
 	}()
-	a := &analysis{sites: countSites(file), bound: map[string]string{}}
+	a := &analysis{sites: countSites(file), bound: map[string]string{}, dir: dir}
 	a.stmts(file.Stmts)
 	return a.steps, nil
 }

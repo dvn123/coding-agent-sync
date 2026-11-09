@@ -26,7 +26,7 @@ var (
 // runs, the file `--input` reads and the files it writes, or false when the
 // step is not one. Parameter scans and lists put run-time values in the
 // scripts, so they are left to Claude, as is any option it does not know.
-func (r Rules) hyperfine(words []string, cwd string, place directory) (verdict, bool) {
+func (r Rules) hyperfine(words []string, cwd, dir string) (verdict, bool) {
 	if len(words) == 0 || words[0] != "hyperfine" {
 		return verdict{}, false
 	}
@@ -77,13 +77,13 @@ func (r Rules) hyperfine(words []string, cwd string, place directory) (verdict, 
 	}
 	results := make([]verdict, 0, len(scripts)+len(files))
 	for _, access := range files {
-		results = append(results, r.access(access, place, cwd))
+		results = append(results, r.access(access, dir, cwd))
 	}
 	for _, script := range scripts {
-		if !place.known {
+		if dir == "" {
 			return undecided("hyperfine from a run-time directory"), true
 		}
-		results = append(results, r.verdictFrom(script, cwd, place))
+		results = append(results, r.verdictFrom(script, cwd, dir))
 	}
 	if len(scripts) == 0 {
 		return undecided("hyperfine with no command"), true

@@ -15,20 +15,20 @@ import (
 // `git -C` reaches the same directories. It asks for such a directory and
 // leaves a git whose directory is decided at run time to Claude. ok is false
 // when the command runs no git, or none in such a directory.
-func gitVerdict(spelling string, place directory) (verdict, bool) {
+func gitVerdict(spelling, dir string) (verdict, bool) {
 	for _, candidate := range append([]string{spelling}, Spellings(spelling)...) {
 		values := Values(candidate)
 		if len(values) == 0 || Basename(values[0]) != "git" {
 			continue
 		}
-		if !place.known {
+		if dir == "" {
 			return undecided("git from a run-time directory"), true
 		}
-		dir, known := gitDirectory(values[1:], place.path)
+		repository, known := gitDirectory(values[1:], dir)
 		if !known {
 			return undecided("git with a run-time -C or an explicit --git-dir"), true
 		}
-		if bare := bareRepository(dir); bare != "" {
+		if bare := bareRepository(repository); bare != "" {
 			return verdict{"ask", fmt.Sprintf("shell-unwrap: git would use %s as a bare repository, whose config can run commands", bare)}, true
 		}
 	}
