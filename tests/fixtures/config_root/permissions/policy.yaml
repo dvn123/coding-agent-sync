@@ -1,6 +1,6 @@
 description: Neutral fixture permission policy.
 wrappers:
-  - env
+  env: []
 tools:
   read: allow
   edit: ask

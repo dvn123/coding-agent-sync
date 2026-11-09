@@ -398,15 +398,33 @@ def deny_reasons(
 UNWRAP_REASONS = Path("shell-unwrap.json")
 
 
+def unwrap_policy(permissions: PermissionSource) -> dict[str, Any]:
+    """What shell-unwrap judges beyond the rules: the wrappers that carry an
+    allow with their transparent options, the harmless assignments, and the
+    shell options a script may set; empty parts left out."""
+    policy = {
+        "wrappers": {
+            name: list(options) for name, options in permissions.wrappers.items()
+        },
+        "assignments": list(permissions.assignments),
+        "shell_options": list(permissions.shell_options),
+    }
+    return {key: value for key, value in policy.items() if value}
+
+
 def unwrap_reasons_file(
     root: Path,
     permissions: PermissionSource,
     entries: Callable[[PermissionSource], Iterable[tuple[str, str, str]]],
 ) -> list[OwnedFile]:
-    """The reasons file, or nothing when no deny carries a reason."""
-    if not (reasons := deny_reasons(permissions, entries)):
+    """The reasons and policy file, or nothing when there is neither."""
+    extras = {
+        "reasons": deny_reasons(permissions, entries),
+        "policy": unwrap_policy(permissions),
+    }
+    if not (extras := {key: value for key, value in extras.items() if value}):
         return []
-    text = json.dumps({"reasons": reasons}, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(extras, indent=2, sort_keys=True) + "\n"
     return [OwnedFile(root / UNWRAP_REASONS, text.encode(), root)]
 
 
@@ -537,6 +555,8 @@ def unwrap_rules_file(
         },
         "reasons": deny_reasons(permissions, entries),
     }
+    if policy := unwrap_policy(permissions):
+        rules["policy"] = policy
     text = json.dumps(rules, indent=2, sort_keys=True) + "\n"
     return OwnedFile(path, text.encode(), manifest_root)
 

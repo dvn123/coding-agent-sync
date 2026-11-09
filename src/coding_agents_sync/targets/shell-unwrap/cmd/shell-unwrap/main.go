@@ -6,7 +6,7 @@
 //
 //	shell-unwrap claude|codex|cursor           a hook: event on stdin, decision on stdout
 //	shell-unwrap opencode review|explain|batch the OpenCode plugin's review, JSON in and out
-//	shell-unwrap spellings|transparent         the peel of each argument, or of each command in a JSON array on stdin
+//	shell-unwrap spellings [COMMAND...]        every spelling the guards read in each argument, or each command in a JSON array on stdin
 //	shell-unwrap decide HOST SETTINGS          a host's decision for each {script, cwd} in a JSON array on stdin
 //	shell-unwrap why SETTINGS CWD              each stdin line's decision, its message, and why it is not allowed
 package main
@@ -28,19 +28,18 @@ const (
 )
 
 var hosts = map[string]func() error{
-	"claude":      claude,
-	"codex":       codex,
-	"cursor":      cursor,
-	"opencode":    opencode,
-	"spellings":   spellings,
-	"transparent": transparent,
-	"decide":      decide,
-	"why":         why,
+	"claude":    claude,
+	"codex":     codex,
+	"cursor":    cursor,
+	"opencode":  opencode,
+	"spellings": spellings,
+	"decide":    decide,
+	"why":       why,
 }
 
 func main() {
 	if len(os.Args) < 2 || hosts[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: shell-unwrap claude|codex|cursor|opencode|spellings|transparent|decide|why")
+		fmt.Fprintln(os.Stderr, "usage: shell-unwrap claude|codex|cursor|opencode|spellings|decide|why")
 		os.Exit(2)
 	}
 	if err := hosts[os.Args[1]](); err != nil {
@@ -242,8 +241,10 @@ func opencode() error {
 	return fmt.Errorf("unknown opencode operation %q", os.Args[2])
 }
 
-// spellings prints each argument's peel as a map, or, with no arguments, the
-// peel of each command in the JSON array on stdin as an array in order.
+// spellings prints each argument's peel as a map: every spelling the guards
+// read in it, as text. With no arguments it reads a JSON array of commands on
+// stdin and prints their peels as an array in order, as coding-agent-sync's
+// capability audit asks.
 func spellings() error {
 	if len(os.Args) == 2 {
 		var commands []string
@@ -252,41 +253,13 @@ func spellings() error {
 		}
 		found := make([][]string, len(commands))
 		for i, command := range commands {
-			found[i] = append([]string{}, unwrap.Spellings(command)...)
+			found[i] = append([]string{}, unwrap.Peeled(command)...)
 		}
 		return write(found)
 	}
 	found := map[string][]string{}
 	for _, command := range os.Args[2:] {
-		found[command] = append([]string{}, unwrap.Spellings(command)...)
-	}
-	return write(found)
-}
-
-// transparent prints the layer each argument's transparent wrapper runs, as
-// a map, or, with no arguments, that of each command in the JSON array on
-// stdin as an array in order; null where none.
-func transparent() error {
-	layer := func(command string) *string {
-		if inner, ok := unwrap.Transparent(command); ok {
-			return &inner
-		}
-		return nil
-	}
-	if len(os.Args) == 2 {
-		var commands []string
-		if err := readEvent(&commands); err != nil {
-			return err
-		}
-		found := make([]*string, len(commands))
-		for i, command := range commands {
-			found[i] = layer(command)
-		}
-		return write(found)
-	}
-	found := map[string]*string{}
-	for _, command := range os.Args[2:] {
-		found[command] = layer(command)
+		found[command] = append([]string{}, unwrap.Peeled(command)...)
 	}
 	return write(found)
 }

@@ -58,7 +58,9 @@ func alternatives(rule string) []string {
 		pattern = strings.TrimSuffix(pattern, ":*") + " *"
 	}
 	if strings.ContainsAny(pattern, `'"\`) {
-		pattern = strings.Join(Values(pattern), " ")
+		if words, ok := ShellWords(pattern); ok {
+			pattern = strings.Join(words, " ")
+		}
 	}
 	found := []string{pattern}
 	if strings.HasSuffix(pattern, " *") && strings.Count(pattern, "*") == 1 {

@@ -1,0 +1,186 @@
+# How programs read their arguments: facts about the programs, not decisions.
+# The rules and the policy in shell-unwrap.json decide; this says what an
+# argument does, so the engine can judge it.
+#
+# Fields, all optional:
+#   values       options that take the next word (`-k 5`, `-k5`, `--kill=5`)
+#   options      what an option's value is, which also makes it take one:
+#                  directory   where the program works instead (git -C)
+#                  repository  a repository it uses as given (git --git-dir)
+#                  path        a path it reads as given (git --work-tree)
+#                  setting     configuration it applies (git -c)
+#                  script      a shell script it runs (hyperfine --setup)
+#                  command     a command line it runs (env -S)
+#                  read        a file it reads (hyperfine --input)
+#                  write       a file it writes (hyperfine --export-json)
+#                An option ending in `*` names every option it begins.
+#   except       values for which an option does not do what its role says
+#   choices      the only values an option may take; any other is Claude's
+#   operands     what each operand is, from the roles above
+#   ends_options a literal `--` ends its options; `values` must then be
+#                complete, since an option that takes a value may take `--`
+#   runs         it runs the command its operands spell, after `positionals`
+#                operands of its own; `lookups` report on that command
+#                instead, `assignments` may precede it, `input` is what xargs
+#                adds to it (`replace` options take the string it replaces,
+#                `replace_braces` replace `{}` or take `=R`), and
+#                `keeps_launcher` that rules name the command with the
+#                launcher (`uv run * python - *`), so guards do not peel it
+#   acts         options with which it runs, writes or deletes by itself
+#   closed       an option it does not list is left to Claude; `flags` lists
+#                those that take no value
+#   declines     options left to Claude
+#   subcommands  the grammar after a subcommand
+#   builtins     subcommands no alias can replace (git ignores such an alias)
+#   reads_settings
+#                builtins that read settings or transports from their own
+#                arguments, as `git config` and a URL's `ext::` do
+
+# Wrappers, with the options from the GNU and BSD manuals.
+builtin: {runs: {}}
+command: {runs: {lookups: [-v, -V]}}
+doas: {values: [-a, -C, -u], runs: {}}
+env:
+  values: [-a, -C, -P, -u, --argv0, --chdir, --unset]
+  options: {-S: command, --split-string: command}
+  runs: {assignments: true}
+exec: {values: [-a], runs: {}}
+flock:
+  values: [-E, -w, --conflict-exit-code, --timeout]
+  options: {-c: command, --command: command}
+  runs: {positionals: 1}
+ionice: {values: [-c, -n, -p, -P, -u, --class, --classdata, --pid, --pgid, --uid], runs: {}}
+nice: {values: [-n, --adjustment], runs: {}}
+nocorrect: {runs: {}}
+noglob: {runs: {}}
+nohup: {runs: {}}
+setsid: {runs: {}}
+stdbuf: {values: [-e, -i, -o, --error, --input, --output], runs: {}}
+sudo:
+  values: [
+    -C, -D, -g, -h, -p, -R, -r, -T, -t, -U, -u, --chdir, --chroot, --close-from, --command-timeout, --group,
+    --host, --other-user, --prompt, --role, --type, --user,
+  ]
+  runs: {assignments: true}
+time: {values: [-f, --format], options: {-o: write, --output: write}, runs: {}}
+timeout: {values: [-k, --kill-after, -s, --signal], runs: {positionals: 1}}
+watch: {values: [-n, --interval], runs: {}}
+xargs:
+  values: [
+    -a, -d, -E, -L, -n, -P, -R, -S, -s, --arg-file, --delimiter, --max-args, --max-chars, --max-lines,
+    --max-procs, --process-slot-var,
+  ]
+  runs: {input: {replace: [-I, -J], replace_braces: [-i, --replace]}}
+
+# Programs that act by their own arguments.
+find:
+  acts: [-exec, -execdir, -ok, -okdir, -delete, -fprint, -fprint0, -fprintf, -fls, -files0-from]
+tee: {operands: write}
+
+# Programs that end their options at `--`, which reads every later word as an
+# operand. `values` lists what takes a value, from each program's --help.
+rg:
+  ends_options: true
+  values: [
+    -e, --regexp, -f, --file, --pre, --pre-glob, --dfa-size-limit, -E, --encoding, --engine, -m, --max-count,
+    --regex-size-limit, -j, --threads, -g, --glob, --iglob, --ignore-file, -d, --max-depth, --max-filesize, -t,
+    --type, -T, --type-not, --type-add, --type-clear, -A, --after-context, -B, --before-context, --color, --colors,
+    -C, --context, --context-separator, --field-context-separator, --field-match-separator, --hostname-bin,
+    --hyperlink-format, -M, --max-columns, --path-separator, -r, --replace, --sort, --sortr, --generate,
+  ]
+grep: &grep
+  ends_options: true
+  values: [
+    -A, -B, -C, -D, -d, -e, -f, -m, --exclude, --exclude-dir, --include, --include-dir, --binary-files,
+    --label, --color, --colour, --context, --regexp, --file, --max-count, --after-context, --before-context,
+  ]
+egrep: *grep
+fgrep: *grep
+fd:
+  ends_options: true
+  values: [
+    --and, -d, --max-depth, --min-depth, --exact-depth, -E, --exclude, -t, --type, -e, --extension, -S, --size,
+    --changed-within, --changed-before, -o, --owner, --format, --batch-size, --ignore-file, -c, --color,
+    --ignore-contain, -j, --threads, --max-results, -C, --base-directory, --path-separator, --search-path,
+  ]
+  acts: [-x, --exec, -X, --exec-batch]
+# These end their options at `--` too; their value options are not listed,
+# so any option before `--` may be taking it as its value.
+ls: {ends_options: true}
+cat: {ends_options: true}
+head: {ends_options: true}
+tail: {ends_options: true}
+wc: {ends_options: true}
+sort: {ends_options: true}
+uniq: {ends_options: true}
+cut: {ends_options: true}
+diff: {ends_options: true}
+file: {ends_options: true}
+stat: {ends_options: true}
+du: {ends_options: true}
+sed: {ends_options: true}
+awk: {ends_options: true}
+jq: {ends_options: true}
+yq: {ends_options: true}
+
+git:
+  options:
+    -C: directory
+    --git-dir: repository
+    --work-tree: path
+    --namespace: path
+    -c: setting
+    --config-env: setting
+  builtins: [
+    add, am, annotate, apply, archive, bisect, blame, branch, bundle, cat-file, check-attr, check-ignore,
+    check-mailmap, check-ref-format, checkout, cherry, cherry-pick, clean, clone, commit, commit-graph, commit-tree,
+    config, count-objects, describe, diff, diff-files, diff-index, diff-tree, difftool, fetch, for-each-ref,
+    format-patch, fsck, gc, grep, hash-object, help, init, log, ls-files, ls-remote, ls-tree, merge, merge-base,
+    merge-tree, mv, name-rev, notes, pull, push, range-diff, read-tree, rebase, reflog, remote, repack, replace,
+    reset, restore, rev-list, rev-parse, revert, rm, shortlog, show, show-branch, show-ref, sparse-checkout, stash,
+    status, submodule, switch, symbolic-ref, tag, update-index, update-ref, var, verify-commit, verify-tag,
+    whatchanged, worktree, write-tree,
+  ]
+  reads_settings: [config, clone, fetch, pull, push, ls-remote, remote, submodule, archive]
+
+uv:
+  subcommands:
+    run:
+      values: [
+        --extra, --no-extra, --group, --no-group, --only-group, --no-editable-package, --env-file, -w, --with,
+        --with-editable, --with-requirements, --package, --python-platform, --index, --default-index, -i,
+        --index-url, --extra-index-url, -f, --find-links, --index-strategy, --keyring-provider, -P,
+        --upgrade-package, --upgrade-group, --resolution, --prerelease, --prerelease-package, --fork-strategy,
+        --exclude-newer, --exclude-newer-package, --no-sources-package, --reinstall-package, --link-mode, -C,
+        --config-setting, --config-settings-package, --no-build-isolation-package, --no-build-package,
+        --no-binary-package, --cache-dir, --refresh-package, -p, --python, --color, --allow-insecure-host,
+        --directory, --project, --config-file,
+      ]
+      runs: {keeps_launcher: true}
+
+# hyperfine 1.19: each operand, and each setup, prepare, cleanup and conclude
+# command, is a script its shell runs (with -N, a command it splits itself,
+# which the shell reading covers). Parameter scans put run-time values in the
+# scripts.
+hyperfine:
+  closed: true
+  values: [
+    -w, --warmup, -m, --min-runs, -M, --max-runs, -r, --runs, -u, --time-unit, --style, --sort,
+    --min-benchmarking-time, -n, --command-name, -S, --shell,
+  ]
+  options:
+    -s: script
+    --setup: script
+    -p: script
+    --prepare: script
+    -c: script
+    --cleanup: script
+    --conclude: script
+    --input: read
+    --output: write
+    --export-*: write
+  except: {--input: [null], --output: [null, pipe, inherit]}
+  choices: {-S: [none, sh, bash, zsh, dash], --shell: [none, sh, bash, zsh, dash]}
+  flags: [-N, -i, --ignore-failure, --show-output, -h, --help, -V, --version]
+  declines: [-P, --parameter-scan, -D, --parameter-step-size, -L, --parameter-list]
+  operands: script

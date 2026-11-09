@@ -152,7 +152,7 @@ def permission_policy_doc(
 ) -> str:
     source: dict[str, Any] = {
         "description": "permissions",
-        "wrappers": wrappers or [],
+        "wrappers": {name: [] for name in wrappers or []},
         "secret_paths": secret_paths or [],
         "secret_names": secret_names or [],
         **(extra or {}),

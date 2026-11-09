@@ -75,7 +75,7 @@ empty file is an empty source.
 | Skill | `enabled`, `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `enabled`, `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `enabled`, `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
-| Permission policy | `wrappers`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
+| Permission policy | `wrappers`, `assignments`, `shell_options`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `enabled`, `options`, `allow`, `ask`, `deny`. |
 | MCP server | `enabled`, `only`, `command`, `args`, `env`, `url`, `tools`. |
 
@@ -221,6 +221,19 @@ them as Claude's does. An allowed whole program (`- rg`) also lands behind
 through them: Cursor, and Pi for `command`. Claude strips a program
 path itself, and OpenCode's bundled plugin does, as the OpenCode target
 reference describes.
+
+`wrappers` maps each wrapper to the options that keep it the same command
+(`timeout: [-k, --kill-after, -s, --signal]`; `*` for every option
+shell-unwrap's grammar reads for it, none by default). Through those options,
+and only those, shell-unwrap carries an allow to the command the wrapper runs;
+any other option, a run-time value, or a wrapper outside the map leaves the
+wrapped command to its own rules. `assignments` lists the leading assignments
+that change nothing a rule decides, which shell-unwrap lets a command carry
+and an `export` set: `NAME=value` exactly, or `NAME` for any plain value.
+`shell_options` lists the zsh options a script may set with `setopt` or
+`set -o` (`set -e`, `-u`, `-v` and `-x` name errexit, nounset, verbose and
+xtrace). shell-unwrap reads all three from the `shell-unwrap.json` beside each
+hook; how each program reads its arguments is shell-unwrap's own grammar.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it

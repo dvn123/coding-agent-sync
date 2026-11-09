@@ -6,5 +6,10 @@
       "Bash(*FIXTURE_TOKEN*)"
     ]
   },
+  "policy": {
+    "wrappers": {
+      "env": []
+    }
+  },
   "reasons": {}
 }

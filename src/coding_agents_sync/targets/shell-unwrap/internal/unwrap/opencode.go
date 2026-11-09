@@ -3,6 +3,7 @@ package unwrap
 import (
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -75,6 +76,7 @@ type Evaluation struct {
 	Effect    string         `json:"effect"`
 	Rules     []OpenCodeRule `json:"rules"`
 	Reasons   Reasons        `json:"reasons"`
+	Policy    Policy         `json:"policy"`
 }
 
 // Verdict is the review's answer: the new effect and message, or a request
@@ -100,10 +102,10 @@ func Review(event Evaluation) Verdict {
 	}
 	var peeled []string
 	for _, resource := range event.Resources {
-		peeled = append(peeled, Spellings(resource)...)
-		// zsh's reading, quoting removed, meets the rules too.
-		if text, ok := decoded(resource); ok && text != resource {
-			peeled = append(append(peeled, text), Spellings(text)...)
+		for _, spelling := range Peeled(resource) {
+			if !slices.Contains(peeled, spelling) {
+				peeled = append(peeled, spelling)
+			}
 		}
 	}
 	if len(peeled) == 0 {
@@ -128,7 +130,7 @@ func Review(event Evaluation) Verdict {
 	if event.Effect == "ask" {
 		for _, resource := range event.Resources {
 			// An allow is carried only where zsh fixes every word.
-			if _, static := decoded(resource); !static || !passesOpenCode(event.Rules, resource) {
+			if _, static := decoded(resource); !static || !passesOpenCode(event.Rules, event.Policy, resource) {
 				return Verdict{}
 			}
 		}
@@ -141,12 +143,12 @@ func Review(event Evaluation) Verdict {
 // rule through transparent wrappers alone. Only the catch-all is looked
 // through: a narrower rule that matches a spelling on the way decides it, so
 // an ask written for `timeout * bq cp` still asks.
-func passesOpenCode(rules []OpenCodeRule, command string) bool {
+func passesOpenCode(rules []OpenCodeRule, policy Policy, command string) bool {
 	if evaluate(rules, "shell", command) == "allow" {
 		return true
 	}
-	for spelling, ok := command, true; ok; spelling, ok = Transparent(spelling) {
-		if rule := deciding(rules, "shell", spelling); rule != nil && rule.Resource != "*" {
+	for words, ok := TextWords(command), true; ok; words, ok = policy.Peel(words) {
+		if rule := deciding(rules, "shell", strings.Join(words, " ")); rule != nil && rule.Resource != "*" {
 			return rule.Effect == "allow"
 		}
 	}

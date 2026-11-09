@@ -2,6 +2,6 @@
   "entries": {
     "AGENTS.md": "sha256:8244b931ed4009ef2187616a5d2d6a772580f38eb817a57963ed2ee787c213aa",
     "hooks/shell-unwrap": "sha256:526c8108e8546d52eee21a9af77755d17c6172e84ebb756173d782647b2789e9",
-    "hooks/shell-unwrap.json": "sha256:3f03f98d9da66229bb81ec87571ada6c1df566ed66d34d187816be3e1ccbc661"
+    "hooks/shell-unwrap.json": "sha256:ad72fa5d141ff986e34414403ca830a33b50b19aa3fb2ceb50b490c2ab9cd014"
   }
 }

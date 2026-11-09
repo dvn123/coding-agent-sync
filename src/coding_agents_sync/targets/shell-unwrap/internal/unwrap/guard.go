@@ -19,11 +19,16 @@ var (
 	keywords  = regexp.MustCompile(`^(?:\s*(?:if|then|else|elif|do|while|until|!)\s+)+`)
 )
 
-// Scan is every command either dialect finds in script, and whether either
-// parsed it.
-func Scan(script string) ([]string, bool) {
-	var found []string
+// Scan is the words of every command either dialect finds in script, and
+// whether either parsed it.
+func Scan(script string) ([][]string, bool) {
+	var found [][]string
 	parsed := false
+	add := func(words []string) {
+		if !slices.ContainsFunc(found, func(other []string) bool { return slices.Equal(other, words) }) {
+			found = append(found, words)
+		}
+	}
 	for _, variant := range []syntax.LangVariant{syntax.LangZsh, syntax.LangBash} {
 		file, err := syntax.NewParser(syntax.Variant(variant)).Parse(strings.NewReader(script), "")
 		if err != nil {
@@ -31,17 +36,17 @@ func Scan(script string) ([]string, bool) {
 		}
 		parsed = true
 		syntax.Walk(file, func(node syntax.Node) bool {
-			text, ok := "", false
 			switch node := node.(type) {
 			case *syntax.CallExpr:
-				text, ok = callText(node, script)
+				if len(node.Args) > 0 && !dynamicWord(node.Args[0]) || len(node.Args) == 0 && len(node.Assigns) > 0 {
+					// A bare assignment is its own command, which only a
+					// rule about the script's text can match.
+					add(callWords(node, script))
+				}
 			case *syntax.DeclClause:
 				// `export`, `local` and the like, whose assignments name
 				// variables as a command's words do.
-				text, ok = script[node.Pos().Offset():node.End().Offset()], true
-			}
-			if ok && !slices.Contains(found, text) {
-				found = append(found, text)
+				add(strings.Fields(script[node.Pos().Offset():node.End().Offset()]))
 			}
 			return true
 		})
@@ -49,37 +54,21 @@ func Scan(script string) ([]string, bool) {
 	return found, parsed
 }
 
-// Guarded is every command for the guards to judge: those Scan finds, or,
-// when neither dialect parses the script, each piece between shell operators.
-func Guarded(script string) []string {
+// Guarded is the words of every command for the guards to judge: those Scan
+// finds, or, when neither dialect parses the script, each piece between
+// shell operators.
+func Guarded(script string) [][]string {
 	if found, parsed := Scan(script); parsed {
 		return found
 	}
-	var found []string
+	var found [][]string
 	for _, piece := range operators.Split(script, -1) {
-		if piece = strings.TrimSpace(keywords.ReplaceAllString(piece, "")); piece != "" {
-			found = append(found, piece)
+		if piece = strings.TrimSpace(keywords.ReplaceAllString(piece, "")); piece == "" {
+			continue
 		}
+		found = append(found, TextWords(piece))
 	}
 	return found
-}
-
-// callText is one simple command as its rules see it: its assignments and
-// words as written, without its redirects. A bare assignment is its own
-// text, which only a rule about the script's text, such as a variable it
-// names, can match.
-func callText(call *syntax.CallExpr, script string) (string, bool) {
-	if len(call.Args) > 0 && dynamicWord(call.Args[0]) || len(call.Args) == 0 && len(call.Assigns) == 0 {
-		return "", false
-	}
-	var parts []string
-	for _, assign := range call.Assigns {
-		parts = append(parts, script[assign.Pos().Offset():assign.End().Offset()])
-	}
-	for _, arg := range call.Args {
-		parts = append(parts, script[arg.Pos().Offset():arg.End().Offset()])
-	}
-	return strings.Join(parts, " "), true
 }
 
 func dynamicWord(word *syntax.Word) bool {

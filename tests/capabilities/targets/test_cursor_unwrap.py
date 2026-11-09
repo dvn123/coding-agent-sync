@@ -35,7 +35,7 @@ REASON = "run unwrap-tool status instead"
 MODEL = "unwrap-probe"
 POLICY = """\
 description: permissions
-wrappers: [timeout]
+wrappers: {timeout: []}
 """
 RULES = f"""\
 allow:

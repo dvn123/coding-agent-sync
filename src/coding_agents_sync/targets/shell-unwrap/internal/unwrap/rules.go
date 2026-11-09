@@ -26,6 +26,8 @@ type Rules struct {
 	// directory, which anchors a rule written `/path`.
 	Paths []PathRule
 	Root  string
+	// Policy is what the rules leave to judgement.
+	Policy Policy
 }
 
 // Permissions is the `permissions` object of Claude Code's settings, and of
@@ -86,16 +88,18 @@ func BuildRules(permissions Permissions, reasons Reasons) Rules {
 	}
 }
 
-// ReadReasons reads `{"reasons": {"<rule pattern>": "<reason>"}}`. Reasons
-// are advice, so a missing or unreadable file leaves them out rather than
+// ReadExtras reads what shell-unwrap.json adds to the rules:
+// `{"reasons": {"<rule pattern>": "<reason>"}, "policy": {…}}`. Both are
+// optional, so a missing or unreadable file leaves them out rather than
 // failing the caller, which would drop the wrapped-command denies with it.
-func ReadReasons(path string) Reasons {
+func ReadExtras(path string) (Reasons, Policy) {
 	var file struct {
 		Reasons map[string]any `json:"reasons"`
+		Policy  Policy         `json:"policy"`
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || json.Unmarshal(data, &file) != nil {
-		return Reasons{}
+		return Reasons{}, Policy{}
 	}
 	reasons := Reasons{}
 	for pattern, reason := range file.Reasons {
@@ -103,11 +107,12 @@ func ReadReasons(path string) Reasons {
 			reasons[pattern] = text
 		}
 	}
-	return reasons
+	return reasons, file.Policy
 }
 
-// LoadRules reads the `permissions` of a settings file and the reasons file.
-func LoadRules(settings, reasons string) (Rules, error) {
+// LoadRules reads the `permissions` of a settings file, and the reasons and
+// policy of a shell-unwrap.json.
+func LoadRules(settings, extras string) (Rules, error) {
 	var file struct {
 		Permissions Permissions `json:"permissions"`
 	}
@@ -118,8 +123,9 @@ func LoadRules(settings, reasons string) (Rules, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return Rules{}, err
 	}
-	rules := BuildRules(file.Permissions, ReadReasons(reasons))
-	rules.Root = filepath.Dir(settings)
+	reasons, policy := ReadExtras(extras)
+	rules := BuildRules(file.Permissions, reasons)
+	rules.Root, rules.Policy = filepath.Dir(settings), policy
 	return rules, nil
 }
 
@@ -158,10 +164,19 @@ func Denial(command, reason string) string {
 	return message
 }
 
-// Denied is the denial for the first of command's spellings a deny rule
+// spelled is each spelling of a command's words as the text a rule reads.
+func spelled(words []string) []string {
+	var texts []string
+	for _, spelling := range append([][]string{words}, Spellings(words)...) {
+		texts = append(texts, strings.Join(spelling, " "))
+	}
+	return texts
+}
+
+// Denied is the denial for the first of a command's spellings a deny rule
 // matches, or "".
-func (r Rules) Denied(command string) string {
-	for _, spelling := range append([]string{command}, Spellings(command)...) {
+func (r Rules) Denied(words []string) string {
+	for _, spelling := range spelled(words) {
 		found := r.Deny.matching(spelling)
 		if len(found) == 0 {
 			continue
@@ -176,9 +191,9 @@ func (r Rules) Denied(command string) string {
 	return ""
 }
 
-// Asked is the first of command's spellings an ask rule matches, or "".
-func (r Rules) Asked(command string) string {
-	for _, spelling := range append([]string{command}, Spellings(command)...) {
+// Asked is the first of a command's spellings an ask rule matches, or "".
+func (r Rules) Asked(words []string) string {
+	for _, spelling := range spelled(words) {
 		if len(r.Ask.matching(spelling)) > 0 {
 			return spelling
 		}

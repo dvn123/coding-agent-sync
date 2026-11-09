@@ -12,20 +12,23 @@ async function ask(binary, operation, request) {
     throw new Error(`shell-unwrap exited with ${code}`);
   return JSON.parse(output);
 }
-async function readReasons(path) {
+async function readExtras(path) {
   try {
-    const reasons = (await Bun.file(path).json())?.reasons;
-    if (!reasons || typeof reasons !== "object")
-      return {};
-    return Object.fromEntries(Object.entries(reasons).filter(([, reason]) => typeof reason === "string"));
+    const file = await Bun.file(path).json();
+    const reasons = file?.reasons && typeof file.reasons === "object" ? file.reasons : {};
+    const policy = file?.policy && typeof file.policy === "object" ? file.policy : {};
+    return {
+      reasons: Object.fromEntries(Object.entries(reasons).filter(([, reason]) => typeof reason === "string")),
+      policy
+    };
   } catch {
-    return {};
+    return { reasons: {}, policy: {} };
   }
 }
-async function review(event, rules, reasons = {}, binary = BINARY) {
+async function review(event, rules, { reasons, policy } = { reasons: {}, policy: {} }, binary = BINARY) {
   if (event.action !== "shell" || event.effect === "deny")
     return;
-  const request = { action: event.action, resources: event.resources, effect: event.effect, reasons };
+  const request = { action: event.action, resources: event.resources, effect: event.effect, reasons, policy };
   let verdict;
   try {
     verdict = await ask(binary, "review", request);
@@ -57,7 +60,8 @@ async function explain(resources, rules, reasons, binary = BINARY) {
 var plugin = {
   id: "shell-unwrap",
   async setup(ctx) {
-    const reasons = await readReasons(`${import.meta.dir}/../shell-unwrap.json`);
+    const extras = await readExtras(`${import.meta.dir}/../shell-unwrap.json`);
+    const { reasons } = extras;
     async function rules(sessionID, agent) {
       const session = await ctx.session.get({ sessionID });
       const agentID = agent ?? session.agent;
@@ -66,7 +70,7 @@ var plugin = {
       const loaded = await ctx.agent.get({ agentID });
       return [...loaded.data.permissions, ...session.permissions ?? []];
     }
-    await ctx.permission.hook("evaluate", (event) => review(event, () => rules(event.sessionID, event.agent), reasons));
+    await ctx.permission.hook("evaluate", (event) => review(event, () => rules(event.sessionID, event.agent), extras));
     if (Object.keys(reasons).length === 0)
       return;
     await ctx.tool.hook("execute.after", async (event) => {
@@ -87,6 +91,6 @@ var opencode_default = plugin;
 export {
   opencode_default as default,
   explain,
-  readReasons,
+  readExtras,
   review
 };

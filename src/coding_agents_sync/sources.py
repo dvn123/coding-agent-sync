@@ -360,16 +360,32 @@ class WorkspacePermissions(StrictModel):
 
 # Programs that run their argument as a command, which agents type in front of
 # one; a target that cannot peel them gets ask and deny copies behind them.
-DEFAULT_WRAPPERS = (
-    "command",
-    "env",
-    "nice",
-    "nohup",
-    "stdbuf",
-    "time",
-    "timeout",
-    "xargs",
-)
+# Each lists the options that keep it the same command, through which
+# shell-unwrap carries an allow to what it runs (`*` for every option its
+# grammar reads); none by default.
+DEFAULT_WRAPPERS: dict[str, tuple[str, ...]] = {
+    name: ()
+    for name in (
+        "command",
+        "env",
+        "nice",
+        "nohup",
+        "stdbuf",
+        "time",
+        "timeout",
+        "xargs",
+    )
+}
+type WrapperOption = Annotated[
+    str, StringConstraints(pattern=r"^(?:-[A-Za-z0-9_./,@%+=~-]*|\*)$")
+]
+# An assignment that changes nothing a rule decides, which shell-unwrap lets a
+# command carry: `NAME=value`, or `NAME` for any plain value.
+type HarmlessAssignment = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*(?:=.*)?$")
+]
+# A zsh option a script may set (`setopt`, `set -o`), lower case.
+type ShellOption = Annotated[str, StringConstraints(pattern=r"^[a-z]+$")]
 
 
 # The decision for a shell command no rule matches. `sandbox` runs it in the
@@ -379,7 +395,11 @@ type Unmatched = Literal["ask", "allow", "sandbox"]
 
 class PermissionPolicyDocument(StrictModel):
     description: str = ""
-    wrappers: Annotated[tuple[Token, ...], Unique] = DEFAULT_WRAPPERS
+    wrappers: dict[Token, Annotated[tuple[WrapperOption, ...], Unique]] = Field(
+        default_factory=lambda: dict(DEFAULT_WRAPPERS)
+    )
+    assignments: Annotated[tuple[HarmlessAssignment, ...], Unique] = ()
+    shell_options: Annotated[tuple[ShellOption, ...], Unique] = ()
     unmatched: Unmatched = "ask"
     tools: dict[PermissionTool, Decision] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
@@ -532,7 +552,9 @@ class PermissionSource(BaseModel):
 
     paths: tuple[Path, ...]
     description: str
-    wrappers: tuple[str, ...]
+    wrappers: dict[str, tuple[str, ...]]
+    assignments: tuple[str, ...] = ()
+    shell_options: tuple[str, ...] = ()
     unmatched: Unmatched
     tools: dict[PermissionTool, Decision]
     workspace: WorkspacePermissions
@@ -728,6 +750,8 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         paths=(policy_path, *rule_paths, *local_paths),
         description=policy.description,
         wrappers=policy.wrappers,
+        assignments=policy.assignments,
+        shell_options=policy.shell_options,
         unmatched=policy.unmatched,
         tools=policy.tools,
         workspace=policy.workspace,

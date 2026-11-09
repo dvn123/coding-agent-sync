@@ -318,24 +318,22 @@ func (a *analysis) command(node syntax.Command) {
 	}
 }
 
-// export judges an `export` that only sets harmless variables to literal
-// values (`export GIT_OPTIONAL_LOCKS=0`): every later command inherits them,
-// so each must be one an allowed command may carry, as a leading assignment
-// would. Any other declaration changes what later commands run.
+// export records an `export` of variables to values as a step whose words
+// are `export` and each `NAME=value`: every later command inherits them, so
+// the verdict holds each to what a leading assignment may carry (see
+// Policy.keepsShell). Any other declaration changes what later commands run.
 func (a *analysis) export(node *syntax.DeclClause) {
 	if node.Variant.Value != "export" || len(node.Args) == 0 {
 		decline("%s declaration", node.Variant.Value)
 	}
+	words := []ZshWord{{Text: "export"}}
 	for _, assign := range node.Args {
 		if assign.Name == nil || assign.Naked || assign.Append || assign.Array != nil || assign.Index != nil || assign.Value == nil {
 			decline("export of a run-time or bare name")
 		}
-		value := a.word(assign.Value, true).Text
-		pair := assign.Name.Value + "=" + value
-		if !slices.Contains(harmlessValues, pair) && !(slices.Contains(safeNames, assign.Name.Value) && plainValue.MatchString(value)) {
-			decline("export of %s", assign.Name.Value)
-		}
+		words = append(words, ZshWord{Text: assign.Name.Value + "=" + a.word(assign.Value, true).Text})
 	}
+	a.steps = append(a.steps, Step{Words: words, Dir: a.dir})
 }
 
 // loop judges a for loop's body, once per item when its variable can hold
@@ -496,11 +494,7 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 		}
 		out.literal = out.literal || part.Value != ""
 	case *syntax.SglQuoted:
-		if part.Dollar {
-			out.WriteString(ansiC(part.Value))
-		} else {
-			out.WriteString(part.Value)
-		}
+		out.WriteString(singleQuoted(part))
 		out.literal = true
 	case *syntax.DblQuoted:
 		if part.Dollar {

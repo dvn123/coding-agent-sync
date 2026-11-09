@@ -1,0 +1,7 @@
+{
+  "policy": {
+    "wrappers": {
+      "env": []
+    }
+  }
+}
