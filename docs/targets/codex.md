@@ -157,6 +157,9 @@ selected by `default_permissions`:
   temp directories are writable and the rest of the disk readable.
 - Literal `workspace.allow` directories become absolute `write` entries, or,
   when `workspace.unmatched` is `allow`, one `":root" = "write"` entry.
+- `workspace.edit_ask` directories become `read` entries: Codex cannot ask, so
+  they are read-only in the sandbox, and the more specific entry outranks the
+  writable root around it.
 - `secret_paths` and `workspace.deny` directories become `deny` entries, which
   block reads as well as writes inside the sandbox. A `**/` path becomes the
   absolute glob `/**/…`, which macOS enforces natively; Linux warns that an

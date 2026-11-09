@@ -457,8 +457,11 @@ def _permission_profile(
             for path in literal_directories(permissions.workspace)
         }
     )
+    # Codex cannot ask, so a directory whose edits ask is read-only; a more
+    # specific entry outranks the writable root around it.
     filesystem = {
         **writable,
+        **{absolute(path): "read" for path in permissions.workspace.edit_ask},
         **{
             absolute(path): "deny"
             for path in (*permissions.workspace.deny, *permissions.secret_paths)

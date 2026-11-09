@@ -347,6 +347,7 @@ def _permission_values(
                 for directory in workspace.ask
                 for operation in ("Read", "Edit")
             ]
+            + [f"Edit({claude_path(directory)}/**)" for directory in workspace.edit_ask]
             + mcp["ask"],
         ),
     ]

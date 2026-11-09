@@ -310,6 +310,14 @@ def _permission_policy(
         for tool, surfaces in PI_TOOL_SURFACES.items():
             if decision := permissions.tools.get(tool):
                 policy.update(dict.fromkeys(surfaces, decision))
+        # A per-tool map takes path patterns, where a trailing `*` reaches
+        # every file below the directory.
+        if edit_ask := permissions.workspace.edit_ask:
+            for surface in ("edit", "write"):
+                policy[surface] = {
+                    "*": policy.get(surface, "allow"),
+                    **{f"{directory}/*": "ask" for directory in edit_ask},
+                }
         # `path` gates every file tool and every path a command names.
         if denied := denied_paths(permissions):
             policy["path"] = {"*": "allow", **dict.fromkeys(denied, "deny")}

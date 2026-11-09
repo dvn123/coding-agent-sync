@@ -236,7 +236,10 @@ split decision narrows to the stricter side there with a warning. `workspace.all
 `.ask`, and `.deny` contain `/`-absolute or `~/` roots; `workspace.unmatched`
 (`ask`, the default, or `allow`) decides every other directory outside the
 project, and file tools honour it only where `tools` allows them. A denied
-directory's files are denied like secret paths. `secret_paths` are `**/`
+directory's files are denied like secret paths. `workspace.edit_ask` lists
+directories, usually inside an allowed one, whose files are edited only after
+asking while reads stay as the other lists decide; Codex, which cannot ask,
+makes them read-only. `secret_paths` are `**/`
 patterns, matching at any depth, or `~/` home paths; each target receives
 them in every anchor it checks a file by. `secret_names` deny any command
 that mentions them.

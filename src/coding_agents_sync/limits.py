@@ -63,6 +63,7 @@ def _directories(permissions: PermissionSource) -> bool:
         workspace.allow
         or workspace.ask
         or workspace.deny
+        or workspace.edit_ask
         or workspace.unmatched != "ask"
     )
 

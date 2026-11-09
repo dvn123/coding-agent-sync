@@ -67,7 +67,7 @@ most restrictive decision across surfaces wins:
 | `*` | `allow`, Pi's own default, for every tool no portable field decides |
 | `bash` | `*` with the policy's `unmatched`, then allows, asks, and denies, each deny's `reason` attached, then secret-name denies |
 | `read`, `grep`, `find`, `ls` | the portable `read` decision |
-| `edit`, `write` | the portable `edit` and `write` decisions, each on its own gate |
+| `edit`, `write` | the portable `edit` and `write` decisions, each on its own gate; with `workspace.edit_ask`, a map of that decision as `*` and an ask for each directory's `/*` |
 | `path` | `*: allow`, then every secret path and denied workspace directory as a deny; it gates every file tool and every path a command names |
 | `external_directory` | `*` with `workspace.unmatched`, then each workspace root and its `/*` |
 | `mcp` | `<server>:<tool>` with each MCP tool decision |

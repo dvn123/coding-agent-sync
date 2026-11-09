@@ -256,6 +256,16 @@ def _permissions(
     for tool in ("read", "edit"):
         if decision := tools.get(tool):
             add(tool, decision, ["*"])
+        if tool == "edit":
+            add(
+                tool,
+                "ask",
+                [
+                    variant
+                    for directory in permissions.workspace.edit_ask
+                    for variant in opencode_paths(f"{directory}/**")
+                ],
+            )
         add(tool, "deny", denied)
     for tool in ("webfetch", "websearch"):
         if decision := permissions.tools.get(tool):

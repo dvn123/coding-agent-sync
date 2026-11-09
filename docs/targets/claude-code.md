@@ -34,7 +34,8 @@ allowed, and `workspace.unmatched: allow` becomes `Read(//**)` and
 `Edit(//**)`. Denied workspace directories become Read and Edit denies. An
 ask directory stays out of `additionalDirectories` and becomes `Read(<dir>/**)`
 and `Edit(<dir>/**)` ask rules, which outrank those broader allows (the
-`claude.permissions` probe pins both). A secret name becomes a
+`claude.permissions` probe pins both). An `edit_ask` directory becomes an
+`Edit(<dir>/**)` ask rule alone, so reads there stay as its root decides. A secret name becomes a
 `Bash(*NAME*)` deny and a `sandbox.credentials.envVars` deny, which unsets the
 variable for sandboxed commands so `env` cannot print it; that second half
 binds only while a patch enables `sandbox`. A Read deny also stops a shell

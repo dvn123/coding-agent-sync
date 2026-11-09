@@ -2175,6 +2175,54 @@ class PermissionProjectionTests(SyncCase):
                     codex,
                 )
 
+    def test_edit_ask_directories_ask_for_edits_and_keep_reads(self) -> None:
+        """A directory inside an allowed root asks before an edit on Claude,
+        OpenCode and Pi, and is read-only in Codex's sandbox, which cannot ask;
+        reading it stays allowed."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root,
+            tools={"read": "allow", "edit": "allow", "write": "allow"},
+            workspace={"allow": ["~/.claude"], "edit_ask": ["~/.claude/skills"]},
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        claude = claude_settings(home)["permissions"]
+        self.assertIn("Edit(~/.claude/**)", claude["allow"])
+        self.assertEqual(claude["ask"], ["Edit(~/.claude/skills/**)"])
+        self.assertEqual(claude["additionalDirectories"], ["~/.claude"])
+        opencode = opencode_config(home)
+        self.assertEqual(
+            opencode_rules(opencode, "edit"),
+            {
+                "*": "allow",
+                "~/.claude/skills/**": "ask",
+                "**/.claude/skills/**": "ask",
+                ".claude/skills/**": "ask",
+            },
+        )
+        self.assertEqual(
+            opencode_rules(opencode, "external_directory"),
+            {"~/.claude/**": "allow"},
+        )
+        filesystem = tomllib.loads((home / ".codex/config.toml").read_text())[
+            "permissions"
+        ]["coding-agents"]["filesystem"]
+        self.assertEqual(
+            {
+                path.replace(str(home), "~"): access
+                for path, access in filesystem.items()
+            },
+            {"~/.claude": "write", "~/.claude/skills": "read"},
+        )
+        pi = load_json(home / ".pi/agent/extensions/pi-permission-system/config.json")
+        for surface in ("edit", "write"):
+            self.assertEqual(
+                pi["permission"][surface],
+                {"*": "allow", "~/.claude/skills/*": "ask"},
+            )
+
     def test_tool_decisions_fold_onto_each_targets_gates(self) -> None:
         """Write(**) parses on Claude but never matches, and OpenCode's write
         tool asks for `edit`, so both targets fold `write` onto `edit` and keep

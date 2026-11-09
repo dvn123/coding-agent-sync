@@ -348,6 +348,9 @@ class WorkspacePermissions(StrictModel):
     allow: tuple[Directory, ...] = ()
     ask: tuple[Directory, ...] = ()
     deny: tuple[Directory, ...] = ()
+    # Directories, usually inside an allowed one, whose files are edited only
+    # after asking; reading them stays as the lists above decide.
+    edit_ask: Annotated[tuple[Directory, ...], Unique] = ()
 
     @model_validator(mode="after")
     def _validate_directories(self) -> WorkspacePermissions:

@@ -85,7 +85,8 @@ File permissions are checked by path relative to the session directory for
 files inside it and by absolute path otherwise, and the matcher's `**/` needs
 a `/`, so each denied path also lands in its relative spellings: `**/.env`
 adds `.env`, and `~/.aws/credentials` adds `**/.aws/credentials` and
-`.aws/credentials`. `external_directory` receives `workspace.allow`, `.ask`,
+`.aws/credentials`. Each `workspace.edit_ask` directory lands the same way as
+an `edit` ask between the catch-all and the denies. `external_directory` receives `workspace.allow`, `.ask`,
 and `.deny`, and a `*` entry only for `workspace.unmatched: allow`: OpenCode's
 own `*: ask` default sits before its built-in allows for tool output, tmp,
 and config, and a written `*` would land after them.
