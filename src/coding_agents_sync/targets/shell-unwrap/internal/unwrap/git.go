@@ -121,15 +121,32 @@ var (
 // `git config` sets them, and these take a URL, which may name `ext::`.
 var gitReadsArguments = []string{"config", "clone", "fetch", "pull", "push", "ls-remote", "remote", "submodule", "archive"}
 
+// Built-in subcommands (`git --list-cmds=builtins`, 2.51), which no alias can
+// replace: git ignores an alias that hides one. Any other word may be an alias
+// for anything, so its arguments stay as they are.
+var gitBuiltins = []string{
+	"add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "check-attr",
+	"check-ignore", "check-mailmap", "check-ref-format", "checkout", "cherry", "cherry-pick", "clean", "clone",
+	"commit", "commit-graph", "commit-tree", "config", "count-objects", "describe", "diff", "diff-files", "diff-index",
+	"diff-tree", "difftool", "fetch", "for-each-ref", "format-patch", "fsck", "gc", "grep", "hash-object", "help",
+	"init", "log", "ls-files", "ls-remote", "ls-tree", "merge", "merge-base", "merge-tree", "mv", "name-rev", "notes",
+	"pull", "push", "range-diff", "read-tree", "rebase", "reflog", "remote", "repack", "replace", "reset", "restore",
+	"rev-list", "rev-parse", "revert", "rm", "shortlog", "show", "show-branch", "show-ref", "sparse-checkout", "stash",
+	"status", "submodule", "switch", "symbolic-ref", "tag", "update-index", "update-ref", "var", "verify-commit",
+	"verify-tag", "whatchanged", "worktree", "write-tree",
+}
+
 // gitArguments is a git command's words for the text rules (see textRule):
 // git reads settings only from -c and --config-env before the subcommand, from
 // `git config`, and from a transport URL, so when the subcommand is literal
 // and reads none from its arguments, the run-time parts of those arguments and
 // of the paths git takes before it are marked Opaque. ok is false for any
-// other command, or when -c or --config-env holds a run-time value.
-func gitArguments(values []string) ([]string, bool) {
+// other command, or when -c or --config-env holds a run-time value. The same
+// words serve a rule for another subcommand (see ruleSubcommand), since git
+// reads its subcommand once: after `log`, no argument makes it `credential`.
+func gitArguments(values []string) ([]string, string, bool) {
 	if len(values) == 0 || Basename(values[0]) != "git" {
-		return nil, false
+		return nil, "", false
 	}
 	out := slices.Clone(values)
 	opaque := func(index int) {
@@ -143,7 +160,7 @@ subcommand:
 		arg := out[index]
 		switch {
 		case runTime(arg):
-			return nil, false
+			return nil, "", false
 		case !strings.HasPrefix(arg, "-"):
 			break subcommand
 		case slices.Contains(gitPathOptions, arg) && index+1 < len(out):
@@ -153,18 +170,39 @@ subcommand:
 		case slices.Contains(gitValueOptions, arg):
 			index++
 			if index < len(out) && runTime(out[index]) {
-				return nil, false
+				return nil, "", false
 			}
 			continue
 		}
 	}
-	if index >= len(out) || slices.Contains(gitReadsArguments, out[index]) {
-		return nil, false
+	if index >= len(out) || !slices.Contains(gitBuiltins, out[index]) || slices.Contains(gitReadsArguments, out[index]) {
+		return nil, "", false
 	}
 	for after := index + 1; after < len(out); after++ {
 		opaque(after)
 	}
-	return out, true
+	return out, out[index], true
+}
+
+// ruleSubcommand is the subcommand a rule for program (`git`, `uv run`) names,
+// the first literal word after its options (`credential` in
+// `git -* credential fill *`, `python` in `uv run * python - *`), or "".
+func ruleSubcommand(pattern, program string) string {
+	tokens, prefix := strings.Fields(pattern), strings.Fields(program)
+	if len(prefix) == 0 || len(tokens) < len(prefix) || !slices.Equal(tokens[:len(prefix)], prefix) {
+		return ""
+	}
+	for _, token := range tokens[len(prefix):] {
+		switch {
+		case token == "*" || strings.HasPrefix(token, "-"):
+			continue
+		case strings.ContainsAny(token, "*?["):
+			return ""
+		default:
+			return token
+		}
+	}
+	return ""
 }
 
 // textRule is whether a rule matches text inside a word, as a `text`

@@ -262,16 +262,19 @@ func (r Rules) certain(spelling, template string) (verdict, bool) {
 // possible is the first guard some value of a template may meet, if any. A
 // rule that starts with `*` is about the script's text, such as a variable
 // it names, which a run-time value cannot add to it, so Decide judges it on
-// the text alone. A text rule (`git*core.pager*`) reads text, where git's
-// arguments after a known subcommand are opaque; see gitArguments.
-func (r Rules) possible(template, text string) (string, bool) {
+// the text alone. A git text rule (`git*core.pager*`), and a rule for a
+// subcommand of program other than the command's, read text, where the
+// arguments after a known subcommand are opaque; see gitArguments and
+// uvRunArguments.
+func (r Rules) possible(template, text, program, subcommand string) (string, bool) {
 	for _, guard := range []struct {
 		kind  string
 		rules bucket
 	}{{"deny", r.Deny}, {"ask", r.Ask}} {
 		for _, rule := range guard.rules.candidates(template) {
 			against := template
-			if textRule(rule.Pattern) {
+			named := ruleSubcommand(rule.Pattern, program)
+			if program == "git" && textRule(rule.Pattern) || subcommand != "" && named != "" && named != subcommand {
 				against = text
 			}
 			if !strings.HasPrefix(rule.Pattern, "*") && MayMatch(rule.Pattern, against) {
@@ -280,6 +283,27 @@ func (r Rules) possible(template, text string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// mayMeet is why some value of the guards' shape of a command, or of a
+// spelling of it, may meet a deny or ask rule, or "". read marks the
+// run-time words a program reads as operands; see positional and operands.
+func (r Rules) mayMeet(guards string, read func([]string) ([]string, string)) string {
+	for _, candidate := range append([]string{guards}, Spellings(guards)...) {
+		plain := templatesOf(read(Values(candidate)))
+		text, program, subcommand := plain, "", ""
+		if opaque, named, ok := gitArguments(Values(candidate)); ok {
+			text, program, subcommand = templatesOf(opaque, Opaque), "git", named
+		} else if opaque, target, ok := uvRunArguments(Values(candidate)); ok {
+			text, program, subcommand = templatesOf(opaque, Opaque), "uv run", target
+		}
+		for index, template := range plain {
+			if why, ok := r.possible(template, text[index], program, subcommand); ok {
+				return why
+			}
+		}
+	}
+	return ""
 }
 
 // judge is the verdict for one shape of a command. A guard every value of
@@ -300,7 +324,6 @@ func (r Rules) judge(command, guards string) (result verdict) {
 		}
 	}()
 	var guarded *verdict
-	maybe := ""
 	for _, candidate := range append([]string{command}, Spellings(command)...) {
 		for _, template := range templates(candidate) {
 			if found, ok := r.certain(candidate, template); ok && (guarded == nil || found.decision == "deny" && guarded.decision == "ask") {
@@ -308,21 +331,14 @@ func (r Rules) judge(command, guards string) (result verdict) {
 			}
 		}
 	}
-	for _, candidate := range append([]string{guards}, Spellings(guards)...) {
-		plain := templatesOf(positional(Values(candidate)))
-		text := plain
-		if opaque, ok := gitArguments(Values(candidate)); ok {
-			text = templatesOf(opaque, Opaque)
-		}
-		for index, template := range plain {
-			if why, ok := r.possible(template, text[index]); ok && maybe == "" {
-				maybe = why
-			}
-		}
-	}
+	maybe := r.mayMeet(guards, positional)
 	switch {
 	case guarded != nil:
 		return *guarded
+	case maybe != "" && r.mayMeet(guards, operands) == "":
+		// Only words that may be options keep it from running, and `--`
+		// before them settles that, so the agent is told how.
+		return verdict{"advise", useOperands}
 	case maybe != "":
 		return undecided(maybe)
 	}
@@ -400,9 +416,13 @@ func (r Rules) Judge(list []ZshWord) verdict {
 		results = append(results, result)
 	}
 	allowed := func(result verdict) bool { return result.decision == "allow" }
+	advised := func(result verdict) bool { return result.decision == "advise" }
 	switch {
 	case !slices.ContainsFunc(results, func(result verdict) bool { return !allowed(result) }):
 		return results[0]
+	case !slices.ContainsFunc(results, func(result verdict) bool { return !allowed(result) && !advised(result) }):
+		// `--` settles every shape, as each is the same words or fewer.
+		return results[slices.IndexFunc(results, advised)]
 	case slices.ContainsFunc(results, allowed):
 		return undecided("a deny or ask rule matches only some of the ways zsh may run it")
 	}
@@ -432,11 +452,13 @@ func (r Rules) verdictFrom(script, cwd string, place directory) verdict {
 	if len(steps) == 0 {
 		return undecided("no command")
 	}
-	var ask, pending *verdict
+	var ask, advice, pending *verdict
 	keep := func(result verdict) {
 		switch {
 		case result.decision == "ask" && ask == nil:
 			ask = &result
+		case result.decision == "advise" && advice == nil:
+			advice = &result
 		case result.decision == "" && pending == nil:
 			pending = &result
 		}
@@ -468,6 +490,8 @@ func (r Rules) verdictFrom(script, cwd string, place directory) verdict {
 	switch {
 	case ask != nil:
 		return *ask
+	case advice != nil:
+		return *advice
 	case pending != nil:
 		return *pending
 	}
@@ -563,6 +587,8 @@ func texts(list []ZshWord) []string {
 // the hosts that take no allow from this hook use it beside their guards.
 func (r Rules) Certain(script, cwd string) *Decision {
 	result := r.Verdict(script, cwd)
+	// Advice to use `--` stays with Claude, where the command would prompt;
+	// these hosts' own rules decide it.
 	if result.decision != "deny" && result.decision != "ask" {
 		return nil
 	}
@@ -584,8 +610,12 @@ func (r Rules) Decide(script, cwd string) *Decision {
 		}
 	}
 	result := r.Verdict(script, cwd)
-	if result.decision == "" {
+	switch result.decision {
+	case "":
 		return nil
+	case "advise":
+		// Denied with the advice, since otherwise it would prompt.
+		return &Decision{"deny", result.message}
 	}
 	return &Decision{result.decision, result.message}
 }
@@ -633,4 +663,28 @@ func positional(values []string) ([]string, string) {
 		}
 	}
 	return out, input
+}
+
+// useOperands is the deny for a command that only a run-time word that may be
+// an option keeps from running: `--` before such words settles it.
+const useOperands = "shell-unwrap: a run-time word may be read as an option; put run-time paths and patterns after `--` (`rg -n x -- \"$f\"`, `xargs rg -l x --`)"
+
+// operands is positional as if a `--` stood before the run-time words: each
+// run-time word of a command of endsOptions read as an operand, except one
+// that starts with a literal `-`, an option `--` would not move. It asks
+// whether such a `--` would settle the guards.
+func operands(values []string) ([]string, string) {
+	if len(values) == 0 || !slices.Contains(endsOptions, Basename(values[0])) || slices.Contains(values, "--") {
+		return positional(values)
+	}
+	out := slices.Clone(values)
+	for index := 1; index < len(out); index++ {
+		if strings.HasPrefix(out[index], "-") {
+			continue
+		}
+		for _, mark := range []string{Wild, OneWord} {
+			out[index] = strings.ReplaceAll(out[index], mark, Positional)
+		}
+	}
+	return out, Positional
 }

@@ -91,10 +91,10 @@ func (r Rules) hyperfine(words []string, cwd string, place directory) (verdict, 
 	return worst(results), true
 }
 
-// worst is a deny among results, else an ask, else the first undecided,
+// worst is a deny among results, else an ask, else advice, else the first undecided,
 // else allowed.
 func worst(results []verdict) verdict {
-	for _, decision := range []string{"deny", "ask", ""} {
+	for _, decision := range []string{"deny", "ask", "advise", ""} {
 		if index := slices.IndexFunc(results, func(result verdict) bool { return result.decision == decision }); index != -1 {
 			return results[index]
 		}
