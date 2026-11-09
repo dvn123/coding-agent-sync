@@ -525,6 +525,11 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 			decline("mksh substitution")
 		}
 		a.inside(func() { a.stmts(part.Stmts) })
+		if path, ok := mktempPath(part.Stmts); ok {
+			out.WriteString(path)
+			out.literal = true
+			return
+		}
 		out.WriteString(Wild)
 		out.dynamic = true
 		out.splits = out.splits || !quoted

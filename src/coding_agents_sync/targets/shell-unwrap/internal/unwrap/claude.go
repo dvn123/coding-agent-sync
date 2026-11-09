@@ -416,6 +416,12 @@ func (r Rules) Judge(list []ZshWord) verdict {
 // command or file, else a certain ask, else allowed when every step is, else
 // undecided with the first reason.
 func (r Rules) Verdict(script, cwd string) verdict {
+	return r.verdictFrom(script, cwd, directory{path: cwd, known: true})
+}
+
+// verdictFrom is Verdict for a script that starts in place, such as one a
+// `hyperfine` after a `cd` runs; cwd stays the session's, which anchors rules.
+func (r Rules) verdictFrom(script, cwd string, place directory) verdict {
 	if len(script) > MaxCommand {
 		return undecided("longer than Claude Code analyses")
 	}
@@ -435,14 +441,13 @@ func (r Rules) Verdict(script, cwd string) verdict {
 			pending = &result
 		}
 	}
-	place := directory{path: cwd, known: true}
 	for _, step := range steps {
 		var result verdict
 		switch {
 		case step.Access != nil:
 			result = r.access(*step.Access, place, cwd)
 		case step.Words[0].Text == "cd":
-			result = r.cd(step, &place)
+			result = r.cd(step, &place, cwd)
 		default:
 			result = r.Judge(step.Words)
 			if result.decision == "" {
@@ -450,6 +455,9 @@ func (r Rules) Verdict(script, cwd string) verdict {
 			}
 			if git, ok := gitVerdict(render(rawTexts(step.Words)), place); ok && result.decision != "deny" && result.decision != "ask" {
 				result = git
+			}
+			if bench, ok := r.hyperfine(rawTexts(step.Words), cwd, place); ok && result.decision == "" {
+				result = bench
 			}
 		}
 		if result.decision == "deny" {
@@ -488,10 +496,12 @@ func (r Rules) access(access Access, place directory, cwd string) verdict {
 	return r.fileVerdict(access, path, cwd)
 }
 
-// cd is the verdict for a `cd`: allowed when it moves to a known directory.
-// What runs there is judged as usual, relative paths against it: commands by
-// their rules, redirects by the Read and Edit rules, git by its repository.
-func (r Rules) cd(step Step, place *directory) verdict {
+// cd is the verdict for a `cd`: allowed when it moves to a known directory
+// inside the working directories (the session's and `additionalDirectories`)
+// or one the Edit rules allow. What runs there is judged as usual,
+// relative paths against it: commands by their rules, redirects by the Read
+// and Edit rules, git by its repository.
+func (r Rules) cd(step Step, place *directory, cwd string) verdict {
 	list := step.Words
 	moved := *place
 	defer func() {
@@ -520,6 +530,10 @@ func (r Rules) cd(step Step, place *directory) verdict {
 		path = filepath.Join(place.path, path)
 	}
 	moved.path = real(path)
+	// A directory counts when a file in it may be read without asking.
+	if !r.pathAllowed("Read", filepath.Join(moved.path, "file"), cwd) {
+		return undecided("cd outside the working directories")
+	}
 	// cd is a builtin that changes the shell, which Judge declines, so its own
 	// allow rule is checked here.
 	command := strings.Join(rawTexts(list), " ")

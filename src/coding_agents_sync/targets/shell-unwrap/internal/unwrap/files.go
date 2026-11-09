@@ -144,9 +144,11 @@ func (r Rules) fileVerdict(access Access, path, cwd string) verdict {
 }
 
 // pathAllowed is whether an allow rule for tool matches the resolved path,
-// or, for a read, it lies in a working directory.
+// or, for a read, it lies in a working directory or may be edited: a policy's
+// glob directories (`/var/folders/*/*/T`) reach Claude only as Edit rules,
+// since `additionalDirectories` takes literal paths.
 func (r Rules) pathAllowed(tool, path, cwd string) bool {
-	if tool == "Read" && inside(path, append([]string{real(cwd)}, r.Directories...)) {
+	if tool == "Read" && (inside(path, append([]string{real(cwd)}, r.Directories...)) || r.pathAllowed("Edit", path, cwd)) {
 		return true
 	}
 	for _, rule := range r.Paths {
