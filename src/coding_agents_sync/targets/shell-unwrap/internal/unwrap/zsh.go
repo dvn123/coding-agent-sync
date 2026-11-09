@@ -145,9 +145,11 @@ func (a *analysis) inside(walk func()) {
 	a.conditional--
 }
 
-// A loop over literal words is judged once per word; past this many bodies
-// its variable reads as Wild instead.
-const maxPasses = 64
+// A loop over literal words or a glob's names is judged once per word; past
+// this many bodies its variable reads as Wild instead. A glob over a
+// directory of worktrees reaches a hundred; 84 passes of a three-command body
+// take the hook about 47 ms, against 5 ms for one command.
+const maxPasses = 256
 
 // countSites records every place in file that may set a variable.
 func countSites(file *syntax.File) map[string]int {
