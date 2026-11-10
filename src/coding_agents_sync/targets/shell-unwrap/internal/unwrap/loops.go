@@ -16,8 +16,8 @@ func (a *analysis) moves(words []ZshWord) {
 	if len(words) == 0 || !slices.Contains([]string{"cd", "chdir", "pushd", "popd"}, words[0].Text) {
 		return
 	}
-	known := a.dir
-	a.dir = ""
+	known := a.pwd
+	a.dir, a.pwd = "", ""
 	if words[0].Text != "cd" || len(words) != 2 || a.conditional > 0 {
 		return
 	}
@@ -25,15 +25,17 @@ func (a *analysis) moves(words []ZshWord) {
 	if target.Vanishes || strings.Contains(target.Text, Wild) || strings.HasPrefix(target.Text, "-") || strings.HasPrefix(target.Text, "+") {
 		return
 	}
+	// zsh resolves `..` against $PWD by name, then the kernel follows the
+	// symlinks in what is left.
 	var moved string
 	switch {
 	case filepath.IsAbs(target.Text):
-		moved = real(target.Text)
+		moved = filepath.Clean(target.Text)
 	case known != "":
-		moved = real(filepath.Join(known, target.Text))
+		moved = filepath.Join(known, target.Text)
 	}
 	if info, err := os.Stat(moved); moved != "" && err == nil && info.IsDir() {
-		a.dir = moved
+		a.dir, a.pwd = real(moved), moved
 	}
 }
 

@@ -3,6 +3,7 @@ package unwrap
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // What a command's arguments do by themselves, as programs.yaml gives each a
@@ -46,11 +47,12 @@ func rolesOf(words []string) roles {
 			found.files = append(found.files, Access{Path: value, Read: role == "read", Write: role == "write"})
 		}
 	}
+	acting := fmt.Sprintf("`%s` runs, writes or deletes by its arguments", name)
 	for _, option := range parsed.Options {
 		choices, limited := program.Choices[option.Name]
 		switch {
-		case slices.Contains(program.Acts, option.Name):
-			found.acts = fmt.Sprintf("`%s` runs, writes or deletes by its arguments", name)
+		case acts(program, option.Name):
+			found.acts = acting
 		case slices.Contains(program.Declines, option.Name), program.Closed && !program.known(option.Name),
 			limited && !slices.Contains(choices, option.Value):
 			decline(fmt.Sprintf("`%s` with the option %s", name, option.Name))
@@ -59,9 +61,31 @@ func rolesOf(words []string) roles {
 		}
 	}
 	for _, index := range parsed.Operands {
+		// find reads its expression after `--` too, which ends only its own
+		// options (-H, -L, -P).
+		if !program.EndsOptions && slices.Contains(program.Acts, words[index]) {
+			found.acts = acting
+		}
 		add(program.Operands, words[index])
 	}
 	return found
+}
+
+// acts is whether an option acts by its arguments, alone or as a letter of
+// a bundle of short flags (`fd -Hx`).
+func acts(program *Program, option string) bool {
+	if slices.Contains(program.Acts, option) {
+		return true
+	}
+	if strings.HasPrefix(option, "--") {
+		return false
+	}
+	for _, letter := range option[1:] {
+		if slices.Contains(program.Acts, "-"+string(letter)) {
+			return true
+		}
+	}
+	return false
 }
 
 // arguments is the verdict for a command whose rules came to ruled, once its

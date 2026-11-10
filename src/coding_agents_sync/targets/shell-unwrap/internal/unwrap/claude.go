@@ -68,7 +68,20 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 			if result.decision == "" {
 				result.message = fmt.Sprintf("`%s`: %s", shown(words), result.message)
 			}
-			result = r.arguments(words, result, cwd, step.Dir)
+			// A word zsh may drop moves what each argument reads as.
+			forms, ok := shapes(step.Words)
+			if !ok {
+				forms = [][]string{words}
+			}
+			var read []verdict
+			for _, form := range forms {
+				read = append(read, r.arguments(form, result, cwd, step.Dir))
+			}
+			result = worst(read)
+			someAllowed := slices.ContainsFunc(read, func(form verdict) bool { return form.decision == "allow" })
+			if someAllowed && (result.decision == "deny" || result.decision == "ask") {
+				result = undecided("a deny or ask rule matches only some of the ways zsh may run it")
+			}
 			if git, ok := gitVerdict(words, step.Dir); ok && result.decision != "deny" && result.decision != "ask" {
 				result = git
 			}
@@ -122,10 +135,10 @@ func (r Rules) cd(step Step, cwd string) verdict {
 	}
 	path := target.Text
 	if !filepath.IsAbs(path) {
-		if step.Dir == "" {
+		if step.Pwd == "" {
 			return undecided("cd from a run-time directory")
 		}
-		path = filepath.Join(step.Dir, path)
+		path = filepath.Join(step.Pwd, path)
 	}
 	// A directory counts when a file in it may be read without asking.
 	if !r.pathAllowed("Read", filepath.Join(real(path), "file"), cwd) {

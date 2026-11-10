@@ -109,6 +109,7 @@ type Step struct {
 	Words  []ZshWord
 	Access *Access
 	Dir    string
+	Pwd    string // Dir as $PWD spells it, which `cd ..` leaves by name
 }
 
 // Access is a file a redirect reads or writes.
@@ -133,9 +134,11 @@ type analysis struct {
 	// guarded is set while the left of an `&&` is judged, for the command
 	// that is that statement; see assign.
 	guarded bool
-	// dir is the shell's directory where it is known, for the globs a loop
-	// expands (see globItems), or "".
-	dir string
+	// dir is the shell's directory where it is known, with every symlink
+	// resolved, for the paths each step reads and the globs a loop expands
+	// (see globItems), or "". pwd is the same directory as zsh spells it in
+	// $PWD, which a later `cd ..` leaves by name rather than by its target.
+	dir, pwd string
 }
 
 // inside judges walk one level deeper in conditional.
@@ -249,7 +252,7 @@ func (a *analysis) redirect(redirect *syntax.Redirect) {
 		return
 	}
 	access := &Access{Path: target, Read: op == "<" || op == "<>" || op == "<&", Write: op != "<" && op != "<&"}
-	a.steps = append(a.steps, Step{Access: access, Dir: a.dir})
+	a.steps = append(a.steps, Step{Access: access, Dir: a.dir, Pwd: a.pwd})
 }
 
 func (a *analysis) command(node syntax.Command) {
@@ -262,7 +265,7 @@ func (a *analysis) command(node syntax.Command) {
 			return
 		}
 		words := a.call(node)
-		a.steps = append(a.steps, Step{Words: words, Dir: a.dir})
+		a.steps = append(a.steps, Step{Words: words, Dir: a.dir, Pwd: a.pwd})
 		a.moves(words)
 	case *syntax.BinaryCmd:
 		// The left of `&&` always runs; anything else may be skipped, and a
@@ -333,7 +336,7 @@ func (a *analysis) export(node *syntax.DeclClause) {
 		}
 		words = append(words, ZshWord{Text: assign.Name.Value + "=" + a.word(assign.Value, true).Text})
 	}
-	a.steps = append(a.steps, Step{Words: words, Dir: a.dir})
+	a.steps = append(a.steps, Step{Words: words, Dir: a.dir, Pwd: a.pwd})
 }
 
 // loop judges a for loop's body, once per item when its variable can hold
@@ -518,8 +521,8 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 			return
 		}
 		// $PWD is the directory the analysis follows; no command may assign it.
-		if plainName(part) == "PWD" && a.dir != "" {
-			out.WriteString(a.dir)
+		if plainName(part) == "PWD" && a.pwd != "" {
+			out.WriteString(a.pwd)
 			out.literal = true
 			return
 		}
@@ -730,7 +733,7 @@ func StepsIn(script, dir string) (found []Step, err error) {
 			found, err = nil, declined
 		}
 	}()
-	a := &analysis{sites: countSites(file), bound: map[string]string{}, dir: dir}
+	a := &analysis{sites: countSites(file), bound: map[string]string{}, dir: dir, pwd: dir}
 	a.stmts(file.Stmts)
 	return a.steps, nil
 }
