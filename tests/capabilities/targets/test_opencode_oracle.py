@@ -40,7 +40,11 @@ from coding_agents_sync.targets.permissions import (
 )
 
 SAMPLE = 60
+# OpenCode's own deny reads "Permission denied: shell", or "`<command>`: <reason>"
+# once the plugin names its rule's reason; the plugin's deny reads "is denied by
+# the shell rules". An ask fails a non-interactive run with ASKED.
 DENIALS = ("Permission denied", "is denied by the shell rules")
+ASKED = "cannot ask the user for permission"
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,10 +158,13 @@ def observed(runtime: Runtime, command: str) -> str:
         for item in OpenCodeEvent.decode_lines(process.stdout)
         if (value := item.tool_use()) is not None and value.tool == "shell"
     )
-    denied = observation.status == "error" and any(
-        text in (observation.error or "") for text in DENIALS
-    )
-    return "deny" if denied else "allow"
+    error = observation.error or "" if observation.status == "error" else ""
+    if ASKED in error:
+        return "ask"
+    explained = error.startswith(f"`{command}`: ")
+    if explained or any(text in error for text in DENIALS):
+        return "deny"
+    return "allow"
 
 
 @pytest.mark.capability_case("opencode.unwrap")
