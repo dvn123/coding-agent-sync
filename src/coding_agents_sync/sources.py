@@ -391,6 +391,9 @@ type ShellOption = Annotated[str, StringConstraints(pattern=r"^[a-z]+$")]
 # The decision for a shell command no rule matches. `sandbox` runs it in the
 # target's own sandbox without asking, and asks where the target has none.
 type Unmatched = Literal["ask", "allow", "sandbox"]
+# What shell-unwrap's Claude hook does with a command it cannot judge only
+# because of how it is written: deny or ask with how to rewrite it.
+type Restructure = Literal["deny", "ask"]
 
 
 class PermissionPolicyDocument(StrictModel):
@@ -400,6 +403,7 @@ class PermissionPolicyDocument(StrictModel):
     )
     assignments: Annotated[tuple[HarmlessAssignment, ...], Unique] = ()
     shell_options: Annotated[tuple[ShellOption, ...], Unique] = ()
+    restructure: Restructure | None = None
     unmatched: Unmatched = "ask"
     tools: dict[PermissionTool, Decision] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
@@ -555,6 +559,7 @@ class PermissionSource(BaseModel):
     wrappers: dict[str, tuple[str, ...]]
     assignments: tuple[str, ...] = ()
     shell_options: tuple[str, ...] = ()
+    restructure: Restructure | None = None
     unmatched: Unmatched
     tools: dict[PermissionTool, Decision]
     workspace: WorkspacePermissions
@@ -752,6 +757,7 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         wrappers=policy.wrappers,
         assignments=policy.assignments,
         shell_options=policy.shell_options,
+        restructure=policy.restructure,
         unmatched=policy.unmatched,
         tools=policy.tools,
         workspace=policy.workspace,

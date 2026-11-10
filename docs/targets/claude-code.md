@@ -67,8 +67,9 @@ and it never shows the model a deny rule's `reason`. Whenever
 it emits permissions, the compiler installs shell-unwrap's hook (source:
 <https://github.com/dvn123/shell-unwrap>, its Go source and dependencies
 vendored in `targets/shell-unwrap/` and built at sync time, shared with Codex,
-Cursor, Pi and OpenCode) at `hooks/shell-unwrap` as a `Bash` PreToolUse hook
-with the `claude` argument. The hook reads the deployed `permissions` and the
+Cursor, Pi and OpenCode) at `hooks/shell-unwrap` as a `Bash|Monitor` PreToolUse hook
+with the `claude` argument; Monitor runs its `command` in the Bash tool's
+shell under the Bash rules, and its WebSocket form is left to Claude. The hook reads the deployed `permissions` and the
 reasons file, which maps every pattern a reasoned deny emits to its reason.
 It denies the command when any peeled spelling of a command in it matches a
 deny, in the OpenCode plugin's words and with the rule's reason, and asks

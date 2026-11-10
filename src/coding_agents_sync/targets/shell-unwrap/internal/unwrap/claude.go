@@ -39,12 +39,12 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 	}
 	steps, err := StepsIn(script, dir)
 	if err != nil {
-		return undecided(err.Error())
+		return withHint(undecided(err.Error()))
 	}
 	if len(steps) == 0 {
 		return undecided("no command")
 	}
-	var ask, advice, pending *verdict
+	var ask, advice, pending, rewrite *verdict
 	keep := func(result verdict) {
 		switch {
 		case result.decision == "ask" && ask == nil:
@@ -53,6 +53,8 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 			advice = &result
 		case result.decision == "" && pending == nil:
 			pending = &result
+		case result.decision == "restructure" && rewrite == nil:
+			rewrite = &result
 		}
 	}
 	for _, step := range steps {
@@ -63,6 +65,7 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 		case step.Words[0].Text == "cd":
 			result = r.cd(step, cwd)
 		default:
+			step.Words = asTest(step.Words)
 			words := rawTexts(step.Words)
 			result = r.Judge(step.Words)
 			if result.decision == "" {
@@ -89,8 +92,9 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 		if result.decision == "deny" {
 			return result
 		}
-		keep(result)
+		keep(withHint(result))
 	}
+	// A step no rewrite settles keeps the whole command with the host.
 	switch {
 	case ask != nil:
 		return *ask
@@ -98,8 +102,38 @@ func (r Rules) verdictFrom(script, cwd, dir string) verdict {
 		return *advice
 	case pending != nil:
 		return *pending
+	case rewrite != nil:
+		return *rewrite
 	}
 	return verdict{"allow", Allowed}
+}
+
+// rewrites are the reasons an undecided command is undecided only because of
+// how it is written, each with how to write it so the rules can read it. A
+// reason may follow the command it is about, as "`cmd`: reason".
+var rewrites = map[string]string{
+	"dynamic program":                                 "name the program literally, as `uv run x` rather than `$tool x`",
+	"git from a run-time directory":                   "give git a literal directory, as `git -C ~/repo status`",
+	"git with a run-time -C or an explicit --git-dir": "give git a literal directory, as `git -C ~/repo status`",
+	"cd to a run-time directory":                      "cd to a literal path",
+	"cd from a run-time directory":                    "cd to a literal path",
+	"a redirect to a run-time path":                   "redirect to a literal path",
+	"a redirect relative to a run-time directory":     "redirect to an absolute literal path",
+	runTimeValue: "spell the values out, as `for f in a.txt b.txt`, or run one command per value",
+}
+
+// withHint is an undecided result whose reason a rewrite settles marked
+// "restructure", its message followed by the rewrite; any other result as is.
+func withHint(result verdict) verdict {
+	if result.decision != "" {
+		return result
+	}
+	for reason, rewrite := range rewrites {
+		if result.message == reason || strings.HasSuffix(result.message, "`: "+reason) {
+			return verdict{"restructure", result.message + "; " + rewrite}
+		}
+	}
+	return result
 }
 
 // access is the verdict for a file a redirect run in dir reads or writes.
@@ -155,7 +189,7 @@ func (r Rules) cd(step Step, cwd string) verdict {
 
 // Why is the reason script is not decided by the zsh analysis, or "".
 func (r Rules) Why(script, cwd string) string {
-	if result := r.Verdict(script, cwd); result.decision == "" {
+	if result := r.Verdict(script, cwd); result.decision == "" || result.decision == "restructure" {
 		return result.message
 	}
 	return ""
@@ -194,8 +228,25 @@ func (r Rules) Decide(script, cwd string) *Decision {
 	case "advise":
 		// Denied with the advice, since otherwise it would prompt.
 		return &Decision{Decision: "deny", Reason: result.message, Advice: true}
+	case "restructure":
+		// Left to Claude unless the policy asks for the rewrite; either way it
+		// would prompt, so bypass mode drops it as it does the advice.
+		if r.Policy.Restructure != "deny" && r.Policy.Restructure != "ask" {
+			return nil
+		}
+		return &Decision{Decision: r.Policy.Restructure, Reason: "shell-unwrap: " + result.message, Advice: true}
 	}
 	return &Decision{Decision: result.decision, Reason: result.message}
+}
+
+// asTest is `[ … ]` spelled as the `test …` it is, so the rules for `test`
+// judge it; any other command is returned as is.
+func asTest(list []ZshWord) []ZshWord {
+	last := len(list) - 1
+	if last < 1 || list[0].Text != "[" || list[last].Text != "]" {
+		return list
+	}
+	return append([]ZshWord{{Text: "test"}}, list[1:last]...)
 }
 
 // rawTexts are the words' texts with their run-time parts still Wild, for

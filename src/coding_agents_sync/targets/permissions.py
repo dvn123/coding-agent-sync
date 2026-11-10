@@ -400,14 +400,16 @@ UNWRAP_REASONS = Path("shell-unwrap.json")
 
 def unwrap_policy(permissions: PermissionSource) -> dict[str, Any]:
     """What shell-unwrap judges beyond the rules: the wrappers that carry an
-    allow with their transparent options, the harmless assignments, and the
-    shell options a script may set; empty parts left out."""
+    allow with their transparent options, the harmless assignments, the shell
+    options a script may set, and what to do with a command it cannot judge
+    only because of how it is written; empty parts left out."""
     policy = {
         "wrappers": {
             name: list(options) for name, options in permissions.wrappers.items()
         },
         "assignments": list(permissions.assignments),
         "shell_options": list(permissions.shell_options),
+        "restructure": permissions.restructure,
     }
     return {key: value for key, value in policy.items() if value}
 

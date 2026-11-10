@@ -9,11 +9,15 @@ import (
 // the wrappers that carry an allow to what they run, each with the options
 // that keep it the same command ("*" for every option its grammar reads);
 // the assignments that change nothing a rule decides, as `NAME=value`, or
-// `NAME` for any plain value; and the shell options a script may set.
+// `NAME` for any plain value; the shell options a script may set; and what
+// the Claude hook does with a command it cannot judge only because of how it
+// is written: "deny" or "ask" with how to rewrite it, or "" to leave it to
+// Claude.
 type Policy struct {
 	Wrappers     map[string][]string `json:"wrappers"`
 	Assignments  []string            `json:"assignments"`
 	ShellOptions []string            `json:"shell_options"`
+	Restructure  string              `json:"restructure"`
 }
 
 // A wrapper named by path runs only from a system directory: `/tmp/timeout`

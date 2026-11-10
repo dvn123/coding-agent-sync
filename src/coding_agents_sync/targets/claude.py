@@ -279,8 +279,9 @@ def _unwrap_hook(script: Path) -> dict[str, Any]:
         UNWRAP_UNAVAILABLE,
         silent_in_bypass=True,
     )
+    # Monitor runs its command in the Bash tool's shell under the Bash rules.
     return {
-        "matcher": "Bash",
+        "matcher": "Bash|Monitor",
         "hooks": [
             {
                 "type": "command",

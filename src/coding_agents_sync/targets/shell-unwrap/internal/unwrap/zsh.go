@@ -621,6 +621,11 @@ func (a *analysis) parameter(node *syntax.ParamExp) {
 // EQUALS expansion, which reads as Wild: zsh replaces the word with a
 // command's path, or stops the command when there is none.
 func unquoted(value string, first bool) string {
+	// A lone bracket opens or closes no pattern, so zsh passes it as is: the
+	// `[` builtin and its closing `]`.
+	if value == "[" || value == "]" {
+		return value
+	}
 	var out strings.Builder
 	index := 0
 	if first && strings.HasPrefix(value, "=") && len(value) > 1 {

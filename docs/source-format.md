@@ -75,7 +75,7 @@ empty file is an empty source.
 | Skill | `enabled`, `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `enabled`, `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `enabled`, `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
-| Permission policy | `wrappers`, `assignments`, `shell_options`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
+| Permission policy | `wrappers`, `assignments`, `shell_options`, `restructure`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `enabled`, `options`, `allow`, `ask`, `deny`. |
 | MCP server | `enabled`, `only`, `command`, `args`, `env`, `url`, `tools`. |
 
@@ -232,8 +232,12 @@ that change nothing a rule decides, which shell-unwrap lets a command carry
 and an `export` set: `NAME=value` exactly, or `NAME` for any plain value.
 `shell_options` lists the zsh options a script may set with `setopt` or
 `set -o` (`set -e`, `-u`, `-v` and `-x` name errexit, nounset, verbose and
-xtrace). shell-unwrap reads all three from the `shell-unwrap.json` beside each
-hook; how each program reads its arguments is shell-unwrap's own grammar.
+xtrace). `restructure` (`deny` or `ask`, absent by default) is what Claude's
+shell-unwrap hook does with a command it cannot judge only because of how it is
+written, such as a program named at run time or `git -C "$dir"`: it denies or
+asks with how to rewrite the command, where otherwise Claude would prompt.
+shell-unwrap reads all four from the `shell-unwrap.json` beside each hook; how
+each program reads its arguments is shell-unwrap's own grammar.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
 `ask`, or `deny`. Only Cursor gates writing separately from editing, and it

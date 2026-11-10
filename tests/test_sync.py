@@ -204,9 +204,12 @@ def permission_files(
     tools: dict[str, str] | None = None,
     workspace: dict[str, Any] | None = None,
     unmatched: str | None = None,
+    restructure: str | None = None,
     targets: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     policy_extra: dict[str, Any] = {}
+    if restructure is not None:
+        policy_extra["restructure"] = restructure
     if targets is not None:
         policy_extra["targets"] = targets
     if tools is not None:
@@ -2656,25 +2659,30 @@ class PermissionProjectionTests(SyncCase):
         self.assertTrue(os.access(script, os.X_OK))
         hooks = claude_settings(home)["hooks"]["PreToolUse"]
         self.assertEqual(hooks[0], foreign)
-        self.assertEqual(hooks[1]["matcher"], "Bash")
-        # The deployed hook, run as Claude runs it, names the reason.
-        event = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "timeout 5 find . -delete"},
-            "cwd": str(home),
-        }
-        output = subprocess.run(
-            hooks[1]["hooks"][0]["command"],
-            shell=True,
-            input=json.dumps(event),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        self.assertEqual(
-            json.loads(output)["hookSpecificOutput"]["permissionDecisionReason"],
-            "`find . -delete` is denied by the shell rules: use fd",
-        )
+        self.assertEqual(hooks[1]["matcher"], "Bash|Monitor")
+        # The deployed hook, run as Claude runs it, names the reason for
+        # either tool that runs a shell command.
+        for tool in ("Bash", "Monitor"):
+            event = {
+                "tool_name": tool,
+                "tool_input": {"command": "timeout 5 find . -delete"},
+                "cwd": str(home),
+            }
+            output = subprocess.run(
+                hooks[1]["hooks"][0]["command"],
+                shell=True,
+                input=json.dumps(event),
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            with self.subTest(tool=tool):
+                self.assertEqual(
+                    json.loads(output)["hookSpecificOutput"][
+                        "permissionDecisionReason"
+                    ],
+                    "`find . -delete` is denied by the shell rules: use fd",
+                )
         sidecar = home / ".claude/shell-unwrap.json"
         reasons = json.loads(sidecar.read_text())["reasons"]
         denies = {
@@ -2691,6 +2699,39 @@ class PermissionProjectionTests(SyncCase):
         run_sync(config_root=config_root, home=home)
         self.assertFalse(sidecar.exists())
         self.assertEqual(len(claude_settings(home)["hooks"]["PreToolUse"]), 2)
+
+    def test_restructure_reaches_the_claude_hook(self) -> None:
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[["git", "status"]])
+        run_sync(config_root=config_root, home=home)
+        sidecar = home / ".claude/shell-unwrap.json"
+        # Unset, it is left out, and with it the file when nothing else is in it.
+        self.assertFalse(sidecar.exists())
+
+        write_permissions(config_root, allow=[["git", "status"]], restructure="deny")
+        run_sync(config_root=config_root, home=home)
+        self.assertEqual(
+            json.loads(sidecar.read_text())["policy"]["restructure"], "deny"
+        )
+        (hook,) = claude_settings(home)["hooks"]["PreToolUse"]
+        event = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "$tool status"},
+            "cwd": str(home),
+        }
+        output = subprocess.run(
+            hook["hooks"][0]["command"],
+            shell=True,
+            input=json.dumps(event),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        decision = json.loads(output)["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        self.assertIn(
+            "name the program literally", decision["permissionDecisionReason"]
+        )
 
     def test_cursor_hook_denies_and_asks_beside_foreign_hooks(self) -> None:
         config_root, home = self.new_roots()

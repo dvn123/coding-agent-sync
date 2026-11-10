@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/dvn123/shell-unwrap/internal/unwrap"
 )
@@ -88,6 +89,11 @@ func readEvent(event any) error {
 	return json.Unmarshal(data, event)
 }
 
+// claudeShellTools are the Claude Code tools whose `command` runs in the Bash
+// tool's shell under its permission rules. Monitor streams a command's stdout
+// as events; its WebSocket form carries no command and is left to Claude.
+var claudeShellTools = []string{"Bash", "Monitor"}
+
 // claude is the Claude Code PreToolUse hook. It reads the rules from the
 // Claude root, the parent of the `hooks/` directory it sits in.
 func claude() error {
@@ -96,7 +102,7 @@ func claude() error {
 		if err := readEvent(&event); err != nil {
 			return &unwrap.Decision{Decision: "ask", Reason: failed}
 		}
-		if event.ToolName != "Bash" || event.ToolInput.Command == nil {
+		if !slices.Contains(claudeShellTools, event.ToolName) || event.ToolInput.Command == nil {
 			return nil
 		}
 		dir, err := here()

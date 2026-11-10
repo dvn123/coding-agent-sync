@@ -168,6 +168,7 @@ func (r Rules) judge(command, guards []string) (result verdict) {
 	case maybe != "":
 		return undecided(maybe)
 	}
+	mayBeAllowed := false
 	for spelling, ok := command, true; ok; spelling, ok = r.Policy.Peel(spelling) {
 		r.Policy.keepsShell(spelling)
 		if spelling[0] == "export" {
@@ -182,9 +183,21 @@ func (r Rules) judge(command, guards []string) (result verdict) {
 		if allowed {
 			return verdict{"allow", Allowed}
 		}
+		for _, template := range templatesOf(spelling, Wild) {
+			if slices.ContainsFunc(r.Allow.candidates(template), func(rule Rule) bool { return MayMatch(rule.Pattern, template) }) {
+				mayBeAllowed = true
+			}
+		}
+	}
+	if mayBeAllowed {
+		return undecided(runTimeValue)
 	}
 	return undecided("no allow rule covers every value")
 }
+
+// runTimeValue is why a command an allow rule covers for some of its
+// run-time values, but not all, is left undecided.
+const runTimeValue = "no allow rule covers every run-time value"
 
 // insideWords marks OneWord the run-time parts that zsh keeps inside one
 // argument which cannot be an option, so they can only stand for text within
