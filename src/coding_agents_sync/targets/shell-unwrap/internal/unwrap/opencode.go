@@ -95,8 +95,18 @@ type Verdict struct {
 // harmless assignments only (`timeout 30 git status`); program paths, other
 // assignments, and wrappers that change the command, its arguments, or its
 // user never carry an allow, so `./gradlew` does not inherit anything from
-// `gradlew`.
+// `gradlew`. With the policy's `prompts: deny`, a command that would still
+// ask is denied, with the resources that need approval.
 func Review(event Evaluation) Verdict {
+	verdict := review(event)
+	asks := verdict.Effect == "ask" || verdict.Effect == "" && event.Effect == "ask"
+	if event.Policy.Prompts != "deny" || event.Action != "shell" || verdict.NeedsRules || !asks {
+		return verdict
+	}
+	return Verdict{Effect: "deny", Message: "shell-unwrap: `" + strings.Join(event.Resources, "`, `") + "` needs approval; " + unprompted}
+}
+
+func review(event Evaluation) Verdict {
 	if event.Action != "shell" || event.Effect == "deny" {
 		return Verdict{}
 	}

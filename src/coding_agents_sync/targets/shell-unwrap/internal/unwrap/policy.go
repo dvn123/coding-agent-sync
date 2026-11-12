@@ -12,12 +12,14 @@ import (
 // `NAME` for any plain value; the shell options a script may set; and what
 // the Claude hook does with a command it cannot judge only because of how it
 // is written: "deny" or "ask" with how to rewrite it, or "" to leave it to
-// Claude.
+// Claude; and what it does with any other command that would prompt: "deny"
+// with the reason, or "" to ask or leave it to Claude.
 type Policy struct {
 	Wrappers     map[string][]string `json:"wrappers"`
 	Assignments  []string            `json:"assignments"`
 	ShellOptions []string            `json:"shell_options"`
 	Restructure  string              `json:"restructure"`
+	Prompts      string              `json:"prompts"`
 }
 
 // A wrapper named by path runs only from a system directory: `/tmp/timeout`

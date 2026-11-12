@@ -394,6 +394,9 @@ type Unmatched = Literal["ask", "allow", "sandbox"]
 # What shell-unwrap's Claude hook does with a command it cannot judge only
 # because of how it is written: deny or ask with how to rewrite it.
 type Restructure = Literal["deny", "ask"]
+# What shell-unwrap does with any other command that would prompt: deny it
+# with the reason, for an agent nobody is watching.
+type Prompts = Literal["deny"]
 
 
 class PermissionPolicyDocument(StrictModel):
@@ -404,6 +407,7 @@ class PermissionPolicyDocument(StrictModel):
     assignments: Annotated[tuple[HarmlessAssignment, ...], Unique] = ()
     shell_options: Annotated[tuple[ShellOption, ...], Unique] = ()
     restructure: Restructure | None = None
+    prompts: Prompts | None = None
     unmatched: Unmatched = "ask"
     tools: dict[PermissionTool, Decision] = Field(default_factory=dict)
     workspace: WorkspacePermissions = Field(default_factory=WorkspacePermissions)
@@ -560,6 +564,7 @@ class PermissionSource(BaseModel):
     assignments: tuple[str, ...] = ()
     shell_options: tuple[str, ...] = ()
     restructure: Restructure | None = None
+    prompts: Prompts | None = None
     unmatched: Unmatched
     tools: dict[PermissionTool, Decision]
     workspace: WorkspacePermissions
@@ -758,6 +763,7 @@ def load_permissions(root: Path, local_root: Path | None = None) -> PermissionSo
         assignments=policy.assignments,
         shell_options=policy.shell_options,
         restructure=policy.restructure,
+        prompts=policy.prompts,
         unmatched=policy.unmatched,
         tools=policy.tools,
         workspace=policy.workspace,

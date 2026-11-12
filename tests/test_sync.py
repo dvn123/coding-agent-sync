@@ -205,11 +205,14 @@ def permission_files(
     workspace: dict[str, Any] | None = None,
     unmatched: str | None = None,
     restructure: str | None = None,
+    prompts: str | None = None,
     targets: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     policy_extra: dict[str, Any] = {}
     if restructure is not None:
         policy_extra["restructure"] = restructure
+    if prompts is not None:
+        policy_extra["prompts"] = prompts
     if targets is not None:
         policy_extra["targets"] = targets
     if tools is not None:
@@ -2732,6 +2735,36 @@ class PermissionProjectionTests(SyncCase):
         self.assertIn(
             "name the program literally", decision["permissionDecisionReason"]
         )
+
+    def test_prompts_deny_reaches_the_claude_hook_and_opencode_plugin(self) -> None:
+        config_root, home = self.new_roots()
+        write_permissions(config_root, allow=[["git", "status"]], prompts="deny")
+        run_sync(config_root=config_root, home=home)
+        for sidecar in (
+            home / ".claude/shell-unwrap.json",
+            home / ".config/opencode/shell-unwrap.json",
+        ):
+            self.assertEqual(
+                json.loads(sidecar.read_text())["policy"]["prompts"], "deny"
+            )
+        (hook,) = claude_settings(home)["hooks"]["PreToolUse"]
+        event = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "curl x"},
+            "cwd": str(home),
+        }
+        output = subprocess.run(
+            hook["hooks"][0]["command"],
+            shell=True,
+            input=json.dumps(event),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        decision = json.loads(output)["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        self.assertIn("no allow rule covers", decision["permissionDecisionReason"])
+        self.assertIn("prompts are off", decision["permissionDecisionReason"])
 
     def test_cursor_hook_denies_and_asks_beside_foreign_hooks(self) -> None:
         config_root, home = self.new_roots()

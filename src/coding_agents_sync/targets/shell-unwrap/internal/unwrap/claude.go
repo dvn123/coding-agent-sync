@@ -207,9 +207,34 @@ func (r Rules) Certain(script, cwd string) *Decision {
 	return &Decision{Decision: result.decision, Reason: result.message}
 }
 
+// unprompted is what a deny that stands in for a prompt tells the agent.
+const unprompted = "prompts are off, so rewrite the command for the allow rules, or give the user the command to run"
+
 // Decide is the Claude Code decision for script, or nil to leave it to
-// Claude: the guards on every command as written, then the zsh analysis.
+// Claude. With the policy's `prompts: deny`, every ask, and every command left
+// to Claude, which would prompt unless Claude's own rules allow it, is denied
+// with its reason instead.
 func (r Rules) Decide(script, cwd string) *Decision {
+	decision := r.decide(script, cwd)
+	if r.Policy.Prompts != "deny" {
+		return decision
+	}
+	switch {
+	case decision == nil:
+		reason := r.Why(script, cwd)
+		if reason == "" {
+			reason = "no allow rule covers the command"
+		}
+		return &Decision{Decision: "deny", Reason: "shell-unwrap: " + reason + "; " + unprompted, Advice: true}
+	case decision.Decision == "ask":
+		return &Decision{Decision: "deny", Reason: decision.Reason + "; " + unprompted, Advice: true}
+	}
+	return decision
+}
+
+// decide is Decide before the policy's `prompts`: the guards on every command
+// as written, then the zsh analysis.
+func (r Rules) decide(script, cwd string) *Decision {
 	all := Guarded(script)
 	for _, command := range all {
 		if message := r.Denied(command); message != "" {

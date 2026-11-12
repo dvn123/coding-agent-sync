@@ -75,7 +75,7 @@ empty file is an empty source.
 | Skill | `enabled`, `only`, `paths`, `disable_model_invocation`, `license`, `metadata`. |
 | Command | `enabled`, `only`, `execution.agent`, `execution.subtask`. |
 | Agent | `enabled`, `only`, `model_policy`, `effort`, `background`, `color`, `deny`. |
-| Permission policy | `wrappers`, `assignments`, `shell_options`, `restructure`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
+| Permission policy | `wrappers`, `assignments`, `shell_options`, `restructure`, `prompts`, `unmatched`, `tools`, `workspace`, `secret_paths`, `secret_names`. |
 | Permission rules | `enabled`, `options`, `allow`, `ask`, `deny`. |
 | MCP server | `enabled`, `only`, `command`, `args`, `env`, `url`, `tools`. |
 
@@ -236,7 +236,12 @@ xtrace). `restructure` (`deny` or `ask`, absent by default) is what Claude's
 shell-unwrap hook does with a command it cannot judge only because of how it is
 written, such as a program named at run time or `git -C "$dir"`: it denies or
 asks with how to rewrite the command, where otherwise Claude would prompt.
-shell-unwrap reads all four from the `shell-unwrap.json` beside each hook; how
+`prompts` (`deny`, absent by default) turns every other shell prompt into a
+deny carrying its reason, for an agent nobody is watching: Claude's hook
+denies each ask and each command it would leave to Claude, the one Claude's
+own rules would allow included, and OpenCode's plugin denies a command that
+would still ask. Bypass mode drops these denies as it drops an ask.
+shell-unwrap reads all five from the `shell-unwrap.json` beside each hook; how
 each program reads its arguments is shell-unwrap's own grammar.
 
 `tools` maps `read`, `edit`, `write`, `webfetch`, or `websearch` to `allow`,
