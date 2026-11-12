@@ -33,6 +33,27 @@ func (d Decline) Error() string { return d.Why }
 
 func decline(format string, args ...any) { panic(Decline{fmt.Sprintf(format, args...)}) }
 
+// unmodelled are the shell constructs the analysis does not follow, each
+// named with how to write the command without it.
+var unmodelled = map[string]string{
+	"*syntax.FuncDecl":     "a shell function definition; run its commands directly",
+	"*syntax.CoprocClause": "a coprocess; run the command directly",
+	"*syntax.LetClause":    "`let`; compute the value with `expr` or spell it out",
+	"*syntax.TestDecl":     "a test declaration; run the command directly",
+	"*syntax.ProcSubst":    "a process substitution; write the output to a literal file first",
+	"*syntax.ExtGlob":      "an extended glob; name the files literally",
+	"*syntax.BraceExp":     "a brace expansion; spell the words out",
+}
+
+// declineConstruct declines a construct the analysis does not follow.
+func declineConstruct(node any) {
+	name := fmt.Sprintf("%T", node)
+	if reason, ok := unmodelled[name]; ok {
+		decline("%s", reason)
+	}
+	decline("unsupported shell syntax (%s); split the command into simple commands", strings.TrimPrefix(name, "*syntax."))
+}
+
 // ZshWord is one word of a command; Vanishes when zsh may drop it, as it
 // does an empty unquoted `$x`, Splits when it may become several words not
 // all sharing its literal start, as an unquoted `$(…)` does, and Globs when
@@ -317,7 +338,7 @@ func (a *analysis) command(node syntax.Command) {
 			a.stmt(node.Stmt)
 		}
 	default:
-		decline("%T", node)
+		declineConstruct(node)
 	}
 }
 
@@ -560,7 +581,7 @@ func (a *analysis) part(part syntax.WordPart, first, quoted bool, out *text) {
 		out.WriteString(Wild)
 		out.literal = true
 	default:
-		decline("%T", part)
+		declineConstruct(part)
 	}
 }
 
@@ -755,23 +776,23 @@ func (a *analysis) arithmetic(expr syntax.ArithmExpr) {
 	case *syntax.Word:
 		value, ok := a.numeric(expr)
 		if !ok || !numberLiteral.MatchString(value) {
-			decline("arithmetic over a value not known to be a number")
+			decline("arithmetic over a value not known to be a number; compute it with `expr`, or spell the number out")
 		}
 	case *syntax.BinaryArithm:
 		if op := expr.Op.String(); strings.HasSuffix(op, "=") && !slices.Contains([]string{"==", "!=", "<=", ">="}, op) {
-			decline("arithmetic assignment")
+			decline("arithmetic assignment; compute the value with `expr` and spell it out")
 		}
 		a.arithmetic(expr.X)
 		a.arithmetic(expr.Y)
 	case *syntax.UnaryArithm:
 		if op := expr.Op.String(); op == "++" || op == "--" {
-			decline("arithmetic assignment")
+			decline("arithmetic assignment; compute the value with `expr` and spell it out")
 		}
 		a.arithmetic(expr.X)
 	case *syntax.ParenArithm:
 		a.arithmetic(expr.X)
 	default:
-		decline("arithmetic %T", expr)
+		decline("arithmetic %T; compute the value with `expr`", expr)
 	}
 }
 
