@@ -25,10 +25,13 @@
 #                adds to it (`replace` options take the string it replaces,
 #                `replace_braces` replace `{}` or take `=R`), and
 #                `keeps_launcher` that rules name the command with the
-#                launcher (`uv run * python - *`), so guards do not peel it
+#                launcher (`uv run * python - *`), so guards do not peel it,
+#                and `after_end` that the command starts after a literal
+#                `--`: the program reads its own options among the command's
+#                words until then, so an operand before it runs nothing known
 #   acts         options with which it runs, writes or deletes by itself
 #   closed       an option it does not list is left to Claude; `flags` lists
-#                those that take no value
+#                those that take no value, each a whole word (`-quiet`)
 #   declines     options left to Claude
 #   subcommands  the grammar after a subcommand
 #   builtins     subcommands no alias can replace (git ignores such an alias)
@@ -71,6 +74,120 @@ xargs:
     --max-procs, --process-slot-var,
   ]
   runs: {input: {replace: [-I, -J], replace_braces: [-i, --replace]}}
+
+# Profilers that launch the command they profile, from each one's source or
+# manual. Options that attach to a running process, which no rule can judge,
+# or reach the network are left to Claude, as is any option not listed.
+# samply 0.13 reads every word from the first operand on as the command.
+samply:
+  subcommands:
+    record:
+      closed: true
+      values: [
+        -r, --rate, -d, --duration, --iteration-count, --profile-name, -P, --port, -p, --pid, --address,
+        --windows-symbol-server, --breakpad-symbol-server,
+      ]
+      options:
+        -o: write
+        --output: write
+        --symbol-dir: read
+        --breakpad-symbol-dir: read
+        --simpleperf-binary-cache: read
+        --windows-symbol-cache: write
+        --breakpad-symbol-cache: write
+      flags: [
+        -s, --save-only, -n, --no-open, -v, --verbose, --main-thread-only, --reuse-threads, --fold-recursive-prefix,
+        --unlink-aux-files, --per-cpu-threads, --jit-markers, --cswitch-markers, --unstable-presymbolicate, --gfx,
+        --browsers, -h, --help,
+        # These take a value only joined: `--include-args=5`.
+        --include-args, --coreclr,
+      ]
+      declines: [
+        -p, --pid, -a, --all, --address, --windows-symbol-server, --breakpad-symbol-server,
+      ]
+      runs: {}
+# py-spy 0.4 reads its own options among the command's words until `--`.
+py-spy:
+  subcommands:
+    record: &py-spy
+      closed: true
+      values: [-f, --format, -d, --duration, -r, --rate, --delay, -p, --pid]
+      options: {-o: write, --output: write}
+      flags: [
+        -s, --subprocesses, -F, --function, --nolineno, -t, --threads, -g, --gil, -i, --idle, -n, --native,
+        --nonblocking, --full-filenames, --type-check, --capture, --hideprogress, -h, --help,
+      ]
+      declines: [-p, --pid]
+      runs: {after_end: true}
+    top: *py-spy
+# macOS leaks: `-atExit -- command`; without -atExit an operand is a process.
+leaks:
+  closed: true
+  values: [-exclude, -traceTree]
+  options: {-outputGraph: write}
+  flags: [
+    -atExit, -list, -groupByType, -nostacks, -nosources, -quiet, -fullContent, -readonlyContent, -noContent,
+    -fullStackHistory, -referenceTree, -autoreleasePools, -conservative,
+  ]
+  runs: {after_end: true}
+# dotnet-trace and dotnet-counters 10 (System.CommandLine): the command
+# follows `--`. A diagnostic port or dsrouter connects to another runtime.
+dotnet-trace:
+  subcommands:
+    collect:
+      closed: true
+      values: [
+        --providers, --clreventlevel, --clrevents, --profile, --format, --duration, --buffersize,
+        --stopping-event-provider-name, --stopping-event-event-name, --stopping-event-payload-filter,
+        --buffering-mode,
+      ]
+      options: {-o: write, --output: write}
+      flags: [--show-child-io, --resume-runtime, --rundown, -h, --help]
+      declines: [-p, --process-id, -n, --name, --diagnostic-port, --dport, --dsrouter]
+      runs: {after_end: true}
+dotnet-counters:
+  subcommands:
+    monitor: &dotnet-counters
+      closed: true
+      values: [
+        --counters, --refresh-interval, --format, --maxHistograms, --maxTimeSeries, --duration, -p, --process-id, -n,
+        --name, --diagnostic-port, --dport, --dsrouter,
+      ]
+      options: {-o: write, --output: write}
+      flags: [--resume-runtime, --showDeltas, --abbreviateLargeNumbers, -h, --help]
+      declines: [-p, --process-id, -n, --name, --diagnostic-port, --dport, --dsrouter]
+      runs: {after_end: true}
+    collect: *dotnet-counters
+
+# memray 1.20's reports read a capture and write a report, nothing more.
+memray:
+  subcommands:
+    flamegraph: &memray-report
+      closed: true
+      values: [--temporary-allocation-threshold, --max-memory-records]
+      options: {-o: write, --output: write}
+      flags: [
+        -f, --force, --temporal, --leaks, --temporary-allocations, --split-threads, --inverted, --no-web, -h,
+        --help,
+      ]
+      operands: read
+    table: *memray-report
+    tree:
+      closed: true
+      values: [-b, --biggest-allocs, --temporary-allocation-threshold]
+      flags: [--temporary-allocations, -h, --help]
+      operands: read
+    summary:
+      closed: true
+      values: [-s, --sort-column, -r, --max-rows, --temporary-allocation-threshold]
+      flags: [--temporary-allocations, -h, --help]
+      operands: read
+    stats:
+      closed: true
+      values: [-n, --num-largest]
+      options: {-o: write, --output: write}
+      flags: [--json, -f, --force, -h, --help]
+      operands: read
 
 # Programs that act by their own arguments.
 find:

@@ -10,6 +10,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ..output.plan import OwnedFile
 from ..sources import (
     WINDOWS_DRIVE,
@@ -441,6 +443,31 @@ UNWRAP_SOURCE = Path(__file__).with_name("shell-unwrap")
 UNWRAP_NAME = "shell-unwrap.exe" if os.name == "nt" else "shell-unwrap"
 UNWRAP_HOOK_PATH = Path("hooks") / UNWRAP_NAME
 UNWRAP_TIMEOUT_SECONDS = 10
+
+
+@functools.cache
+def unwrap_peeled_prefixes() -> frozenset[str]:
+    """The prefixes of every wrapper shell-unwrap's hook sees through: its
+    grammar names the command the program, or one of its subcommands, runs, or
+    the scripts it runs. The hook peels those for its guards whatever the
+    policy, and judges a policy wrapper's scripts, so guard copies behind them
+    are dead where the hook runs and asks when it cannot."""
+    grammar = yaml.safe_load(
+        (UNWRAP_SOURCE / "internal/unwrap/programs.yaml").read_text()
+    )
+
+    def sees_through(program: Mapping[str, Any]) -> bool:
+        return "runs" in program or program.get("operands") == "script"
+
+    return frozenset(
+        prefix
+        for name, program in grammar.items()
+        if sees_through(program)
+        or any(map(sees_through, program.get("subcommands", {}).values()))
+        for prefix in wrapper_prefixes(name)
+    )
+
+
 # Claude Code and Codex send hook input as compact JSON, and a quote inside a
 # string value is escaped, so only the field itself matches.
 UNWRAP_BYPASS = '"permission_mode":"bypassPermissions"'

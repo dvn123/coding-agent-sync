@@ -2314,6 +2314,31 @@ class PermissionProjectionTests(SyncCase):
             ["tool status"],
         )
 
+    def test_claude_needs_no_guard_copies_behind_wrappers_the_hook_sees_through(
+        self,
+    ) -> None:
+        """shell-unwrap's grammar names the command a profiler runs and the
+        scripts hyperfine runs, so its hook judges those for Claude; a wrapper
+        it does not know keeps its copies. OpenCode keeps them all."""
+        config_root, home = self.new_roots()
+        write_permissions(
+            config_root, ask=[["rmdir"]], wrappers=["samply", "hyperfine", "mywrap"]
+        )
+
+        run_sync(config_root=config_root, home=home)
+
+        self.assertEqual(
+            claude_settings(home)["permissions"]["ask"],
+            [
+                "Bash(rmdir *)",
+                "Bash(mywrap rmdir *)",
+                "Bash(mywrap * rmdir *)",
+                "Bash(mywrap * rmdir)",
+            ],
+        )
+        bash = opencode_rules(opencode_config(home), "shell")
+        self.assertIn("samply * rmdir *", bash)
+
     def test_codex_receives_asks_as_prompt_and_denies_as_forbidden(self) -> None:
         """Asks and denies land as native prefixes beside the hand-authored
         Starlark.

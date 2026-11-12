@@ -45,8 +45,10 @@ program path, then peels leading assignments, `env` in every form, `sudo`,
 and `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, and
 `noglob` before it matches a deny or ask rule, and retries the rule behind a
 bare `xargs`. So `/usr/bin/git push -f` and `/usr/bin/env rm -rf x` need no
-copies, and neither do those wrappers. `xargs` with options gets none either:
-the shell-unwrap hook peels it, and asks when it cannot run. An allow strips
+copies, and neither do those wrappers. `xargs` with options gets none either,
+nor does any wrapper whose vendored shell-unwrap grammar names the command or
+scripts it runs (`samply record`, `py-spy record`, `hyperfine`): the hook
+peels those for its guards, and asks when it cannot run. An allow strips
 only the assignments Claude lists as safe; the hook carries an allow over the
 other harmless ones (`GIT_EDITOR=true`). Claude also
 looks past a leading redirect (`2>&1 rm -rf x`), so that shape needs no

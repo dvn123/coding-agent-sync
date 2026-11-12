@@ -60,6 +60,7 @@ from .permissions import (
     tool_patterns,
     unwrap_binary,
     unwrap_command,
+    unwrap_peeled_prefixes,
     unwrap_reasons_file,
 )
 from .support import (
@@ -245,7 +246,11 @@ def _agent_meta(
 
 
 def shell_entries(permissions: PermissionSource) -> Iterator[tuple[str, str, str]]:
-    return bucket_entries(permissions, glob_variants, CLAUDE_PEELED_PREFIXES)
+    """Claude's hook is shell-unwrap's, so a guard needs no copy behind a
+    wrapper either Claude or the hook sees through."""
+    return bucket_entries(
+        permissions, glob_variants, CLAUDE_PEELED_PREFIXES | unwrap_peeled_prefixes()
+    )
 
 
 # Claude matches an allow only against a flat command, peels `xargs` only bare,

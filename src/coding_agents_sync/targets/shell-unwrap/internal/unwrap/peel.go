@@ -150,7 +150,7 @@ func peelOnce(words []string) [][]string {
 	if parsed != nil && parsed.Command != -1 && parsed.Grammar.Runs.KeepsLauncher {
 		parsed = nil
 	}
-	if parsed == nil || parsed.Command == -1 && !parsed.runsOption() {
+	if parsed == nil || parsed.Command == -1 && parsed.Stray == -1 && !parsed.runsOption() {
 		if Basename(head) == head {
 			// Rules name the bare program, so only its own spelling needs the
 			// flags read.
@@ -162,6 +162,13 @@ func peelOnce(words []string) [][]string {
 		found = append(found, words[parsed.Command:])
 		if parsed.Grammar.Runs.Input != nil {
 			found = append(found, runsWith(parsed, words))
+		}
+	}
+	// `py-spy record rm -rf x` runs rm without the `--` an allow needs.
+	if parsed.Stray != -1 {
+		found = append(found, words[parsed.Stray:])
+		if parsed.End > parsed.Stray {
+			found = append(found, words[parsed.End+1:])
 		}
 	}
 	// `env -S 'rm -rf x'` runs its split string as the command.

@@ -106,13 +106,15 @@ func (r Rules) arguments(words []string, ruled verdict, cwd, dir string) verdict
 		for _, access := range found.files {
 			results = append(results, r.access(access, dir, cwd))
 		}
+		// An option the grammar declines leaves even an allowed command to
+		// Claude, though a file it reads or writes may still deny it.
+		if found.declined != "" {
+			return worst(append([]verdict{undecided(found.declined)}, results...))
+		}
 		if _, transparent := r.Policy.wrapper(layer[0]); ruled.decision != "" || !transparent || found.scripts == nil {
 			continue
 		}
-		switch {
-		case found.declined != "":
-			return undecided(found.declined)
-		case dir == "":
+		if dir == "" {
 			return undecided(fmt.Sprintf("`%s` from a run-time directory", Basename(layer[0])))
 		}
 		// Its scripts stand in for the rule that did not decide it.

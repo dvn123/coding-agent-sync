@@ -36,6 +36,9 @@ type Runs struct {
 	// KeepsLauncher: rules name the command with the launcher, so the guards
 	// do not peel it away.
 	KeepsLauncher bool `yaml:"keeps_launcher"`
+	// AfterEnd: the command starts after a literal `--`, because the program
+	// reads its own options among the command's words until then.
+	AfterEnd bool `yaml:"after_end"`
 }
 
 // Input is how xargs adds its input to the command it runs.
@@ -110,6 +113,9 @@ type Parsed struct {
 	Command    int   // where the command it runs starts, or -1
 	Lookup     bool  // an option reports on the command instead of running it
 	End        int   // a literal `--` that ends its options, or -1
+	// Stray is the first operand before the `--` of a program whose command
+	// follows one (after_end), which may start the command it runs, or -1.
+	Stray int
 }
 
 // parse reads words, a command whose first word is the program, with the
@@ -124,7 +130,7 @@ func parse(words []string) *Parsed {
 	if program == nil {
 		return nil
 	}
-	parsed := &Parsed{Grammar: program, Subcommand: -1, Command: -1, End: -1}
+	parsed := &Parsed{Grammar: program, Subcommand: -1, Command: -1, End: -1, Stray: -1}
 	positionals := 0
 	if program.Runs != nil {
 		positionals = program.Runs.Positionals
@@ -139,7 +145,7 @@ func parse(words []string) *Parsed {
 			option := Option{Name: word, At: index, ValueAt: index}
 			if name, value, joined := strings.Cut(word, "="); joined && strings.HasPrefix(word, "--") {
 				option.Name, option.Value, option.Takes = name, value, true
-			} else if !strings.HasPrefix(word, "--") && !current.takesValue(word) {
+			} else if !strings.HasPrefix(word, "--") && !current.takesValue(word) && !slices.Contains(current.Flags, word) {
 				// A bundle of short flags (`-ne`): the first that takes a
 				// value takes the rest of the word, or the next word, and
 				// one with an optional value (xargs -i[R]) the rest of the
@@ -185,6 +191,13 @@ func parse(words []string) *Parsed {
 			}
 		case current.Runs != nil && positionals > 0:
 			positionals--
+			parsed.Operands = append(parsed.Operands, index)
+		case current.Runs != nil && current.Runs.AfterEnd && (parsed.End == -1 || parsed.Stray != -1):
+			// An operand before the `--` may be the command's start, so
+			// nothing after it is known to be the whole command.
+			if parsed.Stray == -1 {
+				parsed.Stray = index
+			}
 			parsed.Operands = append(parsed.Operands, index)
 		case current.Runs != nil:
 			parsed.Command = index

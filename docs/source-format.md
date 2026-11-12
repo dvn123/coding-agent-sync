@@ -216,7 +216,8 @@ value: a blanket command denial is not a policy any target can run under.
 get wrapped copies of every ask and deny rule, never a
 blanket allow, so a wrapped allowed command falls to `unmatched`; a target
 that peels a wrapper itself gets no copies for it, and Cursor's hook peels
-them as Claude's does. An allowed whole program (`- rg`) also lands behind
+them as Claude's does. Claude's hook also peels every wrapper shell-unwrap's
+grammar knows, profilers included, so Claude gets no copies for those. An allowed whole program (`- rg`) also lands behind
 `command` and `xargs`, which run it as given, where the target cannot see
 through them: Cursor, and Pi for `command`. Claude strips a program
 path itself, and OpenCode's bundled plugin does, as the OpenCode target
